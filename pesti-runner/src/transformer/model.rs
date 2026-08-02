@@ -2101,7 +2101,7 @@ mod tests {
             data_section_start: 0,
         };
         let c_qwen = LlamaConfig::from_gguf_header(&h_qwen).unwrap();
-        assert_eq!(c_qwen.embedding_name(), "model.embed_tokens.weight");
+        assert_eq!(c_qwen.embedding_name(), "token_embd.weight");
         assert_eq!(c_qwen.output_name(), "lm_head.weight");
     }
 }

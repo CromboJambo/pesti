@@ -269,6 +269,7 @@ fn test_dispatch_vs_cpu_output() {
 }
 
 #[test]
+#[ignore = "Requires conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"]
 fn test_dispatch_conformance_real_model() {
     // Use conformance corpus model (Q4_K_M quantization)
     let model_path = std::path::Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
@@ -351,6 +352,7 @@ fn test_dispatch_cpu_fallback() {
 }
 
 #[test]
+#[ignore = "Requires conformance-corpus/qwen2.5-0.5b-instruct-f16.gguf"]
 fn test_dispatch_conformance_f16_model() {
     use pesti_runner::model::CpuModel;
     
