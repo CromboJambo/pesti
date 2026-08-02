@@ -3,7 +3,6 @@
 //! This module provides dequantization functions for GGUF tensor formats
 //! using the `ggml-quants` crate, avoiding C dependencies where possible.
 
-use ggml_quants::Quantize;
 
 use crate::error::{Result, RunnerError};
 
