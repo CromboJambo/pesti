@@ -1,0 +1,56 @@
+// Minimal WGMMA GEMM for sm_89 (Ada Lovelace - RTX 4070)
+.version 8.5
+.target sm_89
+
+.visible .entry gemm_sm89_kernel(
+    .param .f32 alpha,
+    .param .u64 a,
+    .param .u64 b,
+    .param .f32 beta,
+    .param .u64 c,
+    .param .s32 m,
+    .param .s32 n,
+    .param .s32 k
+)
+{
+    // Shared memory: double-buffered 64x16 tiles
+    .shared .align 8 .b8 A_stage0[2048];
+    .shared .align 8 .b8 A_stage1[2048];
+    .shared .align 8 .b8 B_stage0[2048];
+    .shared .align 8 .b8 B_stage1[2048];
+    
+    // Registers for fragments
+    .local .align 8 .b32 frag_a[16];
+    .local .align 8 .b32 frag_b[16];
+    .local .align 8 .b32 frag_c[16];
+    
+    .reg .f32 f_alpha;
+    .reg .f32 f_beta;
+    .reg .s32 r_m;
+    .reg .s32 r_n;
+    .reg .s32 r_k;
+    
+    ld.param.f32 f_alpha, [alpha];
+    ld.param.u64 a_ptr, [a];
+    ld.param.u64 b_ptr, [b];
+    ld.param.f32 f_beta, [beta];
+    ld.param.u64 c_ptr, [c];
+    ld.param.s32 r_m, [m];
+    ld.param.s32 r_n, [n];
+    ld.param.s32 r_k, [k];
+    
+    // Simplified kernel - just verify it compiles and launches
+    // Full implementation would use cp.async + wgmma here
+    
+    // Block ID
+    .reg .s32 block_x;
+    .reg .s32 block_y;
+    
+    cvta.u64 to.a32 block_x, %ctaid.x;
+    cvta.u64 to.a32 block_y, %ctaid.y;
+    
+    // Simple sync - actual kernel would do more work here
+    bar.sync 0;
+    
+    ret;
+}
