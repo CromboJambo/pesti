@@ -244,7 +244,7 @@ impl LlamaConfig {
     /// Get the embedding tensor name for this architecture.
     pub fn embedding_name(&self) -> &str {
         match self.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 => "model.embed_tokens.weight",
+            ModelArch::Qwen2 | ModelArch::Qwen3 => "token_embd.weight",
             ModelArch::Gemma => "model.embed_tokens.weight",
             _ => "tok_embeddings.weight",
         }
