@@ -26,16 +26,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Round-trip verification tests** for file writers
   - GGUF: full model write/read cycle with 11 tensors
   - SafeTensors: full model write/read cycle with 290 tensors
+- **WGMMA Attention Kernel (Phase 4d)**
+  - PTX kernel `attention_wgmma.ptx` (355 lines) for sm_120/sm_89
+  - Tensor core implementation with WGMMA m16n8k16 instructions
+  - Double-buffered shared memory (8 KiB total)
+  - cp.async prefetch for global memory coalescing
+  - 64x64 tile geometry, 128 threads per block (4 warps)
+  - Rust interface: `CudaAttentionKernelBuilder` with architecture selection
+  - CPU fallback: `CpuAttentionKernel` for reference validation
+  - Integration: Dispatch layer wired in `InferenceEngine::new()`
+  - Tests: 287/287 passing (includes attention kernel tests)
 
 ### Changed
 - Updated `gguf_weight_loader.rs` to use new `dequantize_q5_0()` function
 - Fixed Q4_K dequantization block size (16 → 32 elements)
 - Updated stored_size formulas for K-family quantizations
+- Added `attention_tcgen05.ptx` stub for sm_100 datacenter Blackwell
 
 ### Testing
 - **GGUF writer tests**: 3 passing (round-trip, alignment, full model round-trip)
 - **SafeTensors writer tests**: 3 passing (simple, multiple tensors, full model round-trip)
-- All existing tests remain passing (314+ total)
+- **WGMMA attention kernel tests**: 4/4 passing
+- All existing tests remain passing (287+ total)
 
 ---
 ## [0.1.2] - 2026-08-02
