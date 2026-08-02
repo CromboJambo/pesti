@@ -483,14 +483,85 @@ impl ModelDiscovery {
             .unwrap_or("unknown")
             .to_string();
 
+        // Extract metadata for SafeTensors models
+        let (model_type, parameter_count) = if format == ModelFormat::SafeTensors {
+            ModelDiscovery::extract_safetensors_metadata(path)
+        } else {
+            (None, None)
+        };
+
         Ok(DiscoveredModel {
             name,
             path: path.to_path_buf(),
             format,
             size_bytes,
-            model_type: None,
-            parameter_count: None,
+            model_type,
+            parameter_count,
         })
+    }
+
+    /// Extract model metadata from a SafeTensors file.
+    fn extract_safetensors_metadata(path: &std::path::Path) -> (Option<String>, Option<String>) {
+        use std::collections::HashMap;
+
+        let file_data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(_) => return (None, None),
+        };
+
+        let handle = match safetensors::SafeTensors::read_metadata(&file_data) {
+            Ok((_header_size, metadata)) => metadata,
+            Err(_) => return (None, None),
+        };
+
+        let meta_map = match handle.metadata() {
+            Some(map) => map,
+            None => return (None, None),
+        };
+
+        // Extract architecture/model type
+        let model_type = meta_map
+            .get("general.architecture")
+            .or_else(|| meta_map.get("model_type"))
+            .or_else(|| meta_map.get("architectures"))
+            .map(|s| s.to_string());
+
+        // Estimate parameter count from tensor sizes
+        let param_count = meta_map
+            .iter()
+            .filter(|(k, _)| {
+                // Look for weight tensors (not metadata)
+                k.starts_with("model.") || 
+                k.starts_with("layers.") ||
+                k.contains(".weight") ||
+                k.contains(".bias")
+            })
+            .map(|(_, v)| {
+                if let Ok(map) = serde_json::from_str::<HashMap<String, serde_json::Value>>(v) {
+                    if let Some(shape) = map.get("shape").and_then(|s| s.as_array()) {
+                        shape.iter().filter_map(|v| v.as_u64()).product::<u64>()
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            })
+            .sum::<u64>();
+
+        let parameter_count = if param_count > 0 {
+            // Format as human-readable (e.g., "7B", "8B")
+            let billions = param_count as f64 / 1_000_000_000.0;
+            if billions >= 1.0 {
+                Some(format!("{:.1}B", billions))
+            } else {
+                Some(format!("{}M", (param_count / 1_000_000) as u64))
+            }
+        } else {
+            None
+        };
+
+        (model_type, parameter_count)
     }
 }
 

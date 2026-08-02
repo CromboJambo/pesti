@@ -20,6 +20,7 @@ pub mod remote_discovery;
 pub mod runtime;
 pub mod runner;
 pub mod safetensors_weight_loader;
+pub mod safetensors_tokenizer;
 pub mod tier;
 pub mod tokenizer;
 pub mod transformer;
@@ -35,6 +36,9 @@ pub use gguf_weight_loader::{GgufWeights, load_gguf_tensor, load_gguf_weights};
 pub use safetensors_weight_loader::{
     extract_safetensors_config, get_safetensors_tensor_count, get_safetensors_total_size,
     load_safetensors_tensor, load_safetensors_weights, SafetensorsWeights,
+};
+pub use safetensors_tokenizer::{
+    load_tokenizer_for_model, load_tokenizer_from_safetensors, SafetensorsTokenizerConfig,
 };
 pub use inference_engine::InferenceEngine;
 pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
