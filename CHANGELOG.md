@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2026-08-02
+
+### Added
+- **GGUF file writer** (`pesti-gguf/src/writer.rs`)
+  - Full GGUF v3 practical format serialization
+  - KV pair writing with u64 key lengths
+  - Tensor metadata (name, shape, dtype, offset)
+  - Configurable alignment padding (default: 256 bytes)
+  - `parse_and_rewrite()` helper for file normalization
+- **SafeTensors file writer** (`pesti-safetensors/src/writer.rs`)
+  - Basic tensor serialization with JSON headers
+  - Multi-tensor support
+  - `gguf_to_safetensors()` conversion helper
+- **Q5_0 dequantization** in `pesti-runner/src/dequantize.rs`
+  - Dequantize Q5_0 quantized tensors to f32
+  - 32 elements per block layout
+
+### Changed
+- Updated `gguf_weight_loader.rs` to use new `dequantize_q5_0()` function
+- Fixed Q4_K dequantization block size (16 → 32 elements)
+- Updated stored_size formulas for K-family quantizations
+
+### Testing
+- **GGUF writer tests**: 2 passing (round-trip, alignment)
+- All existing tests remain passing (314+ total)
+
+---
+
 ## [0.1.1] - 2026-08-01
 
 ### Added

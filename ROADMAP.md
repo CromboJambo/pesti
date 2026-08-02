@@ -16,6 +16,7 @@
 | **Phase 5.1: Validation & Polish** | ✅ Complete | GGUF v3 test data regression fixed |
 | **Phase 5.2: Pure Rust Dequantization** | ✅ Complete | ggml-quants integration, C FFI removed |
 | **Phase 6: CI/CD & Versioning** | ✅ Complete | Strict clippy, automated versioning, changelog |
+| **Phase 7: File Writers** | 🚧 In Progress | GGUF writer complete, SafeTensors writer in progress |
 
 ---
 
@@ -289,6 +290,35 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
 - **Patch bump** (0.1.0 → 0.1.1): Bug fixes, internal improvements
 - **Minor bump** (0.x.0 → 0.x+1.0): New features, backwards-compatible additions
 - **Major bump** (0.x.y → 1.0.0): Breaking API changes
+
+---
+
+## Phase 7: File Writers (🚧 In Progress) — v0.1.2
+
+**Goal:** Add file writers for both GGUF and SafeTensors formats to enable serialization and round-trip testing.
+
+### Completed
+
+- [x] **GGUF writer** (`pesti-gguf/src/writer.rs`)
+  - Full GGUF v3 practical format support
+  - Serialization of KV pairs with u64 key lengths
+  - Tensor metadata (name, shape, dtype, offset)
+  - Alignment padding (configurable, default 256 bytes)
+  - `parse_and_rewrite()` helper for normalization/conversion
+  - 2 passing tests (round-trip + alignment)
+
+- [x] **SafeTensors writer** (`pesti-safetensors/src/writer.rs`)
+  - Basic tensor serialization
+  - JSON header generation
+  - Multi-tensor support
+  - Helper function: `gguf_to_safetensors()` for conversion
+
+### Upcoming
+
+- [ ] SafeTensors format wire specification compliance
+- [ ] Round-trip verification tests (parse → write → parse)
+- [ ] Integration with existing GGUF parser
+- [ ] Support for quantized tensor storage (Q4_0, Q8_0, etc.)
 
 ---
 
