@@ -214,9 +214,8 @@ impl LlamaConfig {
     /// Get the layer prefix for this architecture.
     pub fn layer_prefix(&self, layer_idx: usize) -> String {
         match self.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => {
-                format!("model.layers.{layer_idx}.")
-            }
+            ModelArch::Gemma => format!("model.layers.{layer_idx}."),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("blk.{layer_idx}."),
             _ => format!("layers.{layer_idx}."),
         }
     }
@@ -263,7 +262,7 @@ impl LlamaConfig {
     /// Get the final norm tensor name for this architecture (if any).
     pub fn final_norm_name(&self) -> Option<&str> {
         match self.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 => Some("model.norm.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => Some("output_norm.weight"),
             _ => None,
         }
     }
@@ -437,16 +436,23 @@ impl LlamaModel {
     ) -> Result<TransformerLayer> {
         let prefix = config.layer_prefix(layer_idx);
 
-        // RMSNorm weights — architecture-dependent names
+        // RMSNorm weights — architecture-dependent names (with fallbacks)
         let attention_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}input_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}norm_1.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_norm.weight"),
             _ => format!("{prefix}attention_norm.weight"),
         };
-        let attention_norm_data = weights
-            .tensors
-            .get(&attention_norm_name)
-            .ok_or_else(|| RunnerError::ModelLoad(format!("missing {attention_norm_name}")))?;
+        
+        // Try primary name first, then fallback for Qwen (which uses attn_norm)
+        let attention_norm_data = weights.tensors.get(&attention_norm_name)
+            .or_else(|| {
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    weights.tensors.get(&format!("{prefix}attn_norm.weight"))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| RunnerError::ModelLoad(format!("missing attention norm (tried: {})", attention_norm_name)))?;
         // Data is already f32 (gguf_weight_loader dequantized F16→f32)
         let norm_weight: Vec<f32> = attention_norm_data
             .chunks_exact(4)
@@ -456,7 +462,7 @@ impl LlamaModel {
 
         let ffn_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}post_attention_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}norm_2.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_norm.weight"),
             _ => format!("{prefix}ffn_norm.weight"),
         };
         let ffn_norm_data = weights
@@ -472,10 +478,14 @@ impl LlamaModel {
         // Attention weights — architecture-dependent naming
         let suffix = config.attn_weight_suffix();
         let wq_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}q_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing q_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing q_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_q.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_q.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wq.weight"))
@@ -484,10 +494,14 @@ impl LlamaModel {
                 }),
         }?;
         let wk_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}k_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing k_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing k_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_k.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_k.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wk.weight"))
@@ -496,10 +510,14 @@ impl LlamaModel {
                 }),
         }?;
         let wv_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}v_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing v_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing v_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_v.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_v.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wv.weight"))
@@ -508,10 +526,14 @@ impl LlamaModel {
                 }),
         }?;
         let wo_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}o_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing o_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing o_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_output.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_output.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wo.weight"))
@@ -540,16 +562,16 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => {
                 let w1 = weights
                     .tensors
-                    .get(&format!("{prefix}gate.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing gate weight".into()))?;
+                    .get(&format!("{prefix}ffn_gate.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_gate.weight".to_string()))?;
                 let w2 = weights
                     .tensors
-                    .get(&format!("{prefix}down_proj.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing down_proj weight".into()))?;
+                    .get(&format!("{prefix}ffn_down.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_down.weight".to_string()))?;
                 let w3 = weights
                     .tensors
-                    .get(&format!("{prefix}up.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing up weight".into()))?;
+                    .get(&format!("{prefix}ffn_up.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_up.weight".to_string()))?;
                 (w1, w2, w3)
             }
             _ => {
@@ -601,22 +623,29 @@ impl LlamaModel {
     ) -> Result<TransformerLayer> {
         let prefix = config.layer_prefix(layer_idx);
 
-        // RMSNorm weights — architecture-dependent names
+        // RMSNorm weights — architecture-dependent names (with fallbacks)
         let attention_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}input_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}norm_1.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_norm.weight"),
             _ => format!("{prefix}attention_norm.weight"),
         };
-        let attention_norm_data = weights
-            .tensors
-            .get(&attention_norm_name)
-            .ok_or_else(|| RunnerError::ModelLoad(format!("missing {attention_norm_name}")))?;
+        
+        // Try primary name first, then fallback for Qwen (which uses attn_norm)
+        let attention_norm_data = weights.tensors.get(&attention_norm_name)
+            .or_else(|| {
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    weights.tensors.get(&format!("{prefix}attn_norm.weight"))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| RunnerError::ModelLoad(format!("missing attention norm (tried: {})", attention_norm_name)))?;
         let attention_norm =
             RmsNorm::new(f32_bytes_to_f32(attention_norm_data), config.rms_norm_eps);
 
         let ffn_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}post_attention_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}norm_2.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_norm.weight"),
             _ => format!("{prefix}ffn_norm.weight"),
         };
         let ffn_norm_data = weights
@@ -628,10 +657,14 @@ impl LlamaModel {
         // Attention weights — architecture-dependent naming
         let suffix = config.attn_weight_suffix();
         let wq_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}q_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing q_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing q_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_q.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_q.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wq.weight"))
@@ -640,10 +673,14 @@ impl LlamaModel {
                 }),
         }?;
         let wk_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}k_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing k_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing k_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_k.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_k.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wk.weight"))
@@ -652,10 +689,14 @@ impl LlamaModel {
                 }),
         }?;
         let wv_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}v_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing v_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing v_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_v.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_v.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wv.weight"))
@@ -664,10 +705,14 @@ impl LlamaModel {
                 }),
         }?;
         let wo_data = match config.arch {
-            ModelArch::Gemma | ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+            ModelArch::Gemma => weights
                 .tensors
                 .get(&format!("{prefix}o_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad(format!("missing o_proj weight"))),
+                .ok_or_else(|| RunnerError::ModelLoad("missing o_proj weight".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => weights
+                .tensors
+                .get(&format!("{prefix}attn_output.weight"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing attn_output.weight".to_string())),
             _ => weights
                 .tensors
                 .get(&format!("{prefix}attention.wo.weight"))
@@ -696,16 +741,16 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => {
                 let w1 = weights
                     .tensors
-                    .get(&format!("{prefix}gate.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing gate weight".into()))?;
+                    .get(&format!("{prefix}ffn_gate.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_gate.weight".to_string()))?;
                 let w2 = weights
                     .tensors
-                    .get(&format!("{prefix}down_proj.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing down_proj weight".into()))?;
+                    .get(&format!("{prefix}ffn_down.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_down.weight".to_string()))?;
                 let w3 = weights
                     .tensors
-                    .get(&format!("{prefix}up.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing up weight".into()))?;
+                    .get(&format!("{prefix}ffn_up.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_up.weight".to_string()))?;
                 (w1, w2, w3)
             }
             _ => {
@@ -1983,7 +2028,7 @@ mod tests {
         };
         assert_eq!(
             LlamaConfig::from_gguf_header(&h_qwen).unwrap().layer_prefix(5),
-            "model.layers.5."
+            "blk.5."
         );
 
         // Test phi3 prefix (llama-style)
