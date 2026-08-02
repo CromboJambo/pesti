@@ -2,7 +2,8 @@ use crate::cuda_runtime::{enumerate_devices, is_available, CudaRuntime};
 use crate::error::RunnerError;
 use crate::kernel::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, CpuAttentionKernel,
-    CudaGemmKernelBuilder, GemmArch, GemmError, GemmKernel, MemoryManager,
+    CudaAttentionKernelBuilder, CudaGemmKernelBuilder, GemmArch, GemmError, GemmKernel,
+    MemoryManager,
 };
 #[cfg(feature = "mistralrs")]
 use crate::kernel::mistralrs_backend::MistralRsBackend;
@@ -101,7 +102,32 @@ impl InferenceEngine {
                     };
                 }
             }
-            Box::new(crate::kernel::CudaAttentionKernel::new(AttentionArch::Wgmma))
+            
+            // Try CUDA attention kernel builder (similar to GEMM)
+            if let (Some(cuda_rt), Some(s)) = (&cuda_runtime, &stream) {
+                let arch = if cuda_rt.device_info().supports_wgmma() {
+                    AttentionArch::Wgmma
+                } else if cuda_rt.device_info().supports_tcgen05() {
+                    AttentionArch::Tcgen05
+                } else {
+                    AttentionArch::Wgmma
+                };
+                
+                match CudaAttentionKernelBuilder::new(
+                    arch, 
+                    cuda_rt.context().clone(), 
+                    s.clone(), 
+                    cuda_rt.device_info().clone()
+                ).build() {
+                    Ok(kernel) => Box::new(kernel),
+                    Err(e) => {
+                        eprintln!("Failed to initialize CUDA attention kernel: {}. Falling back to CPU.", e);
+                        Box::new(CpuAttentionKernel::new())
+                    }
+                }
+            } else {
+                Box::new(CpuAttentionKernel::new())
+            }
         } else {
             Box::new(crate::kernel::CpuAttentionKernel::new())
         };

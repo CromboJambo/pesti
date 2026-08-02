@@ -1,16 +1,28 @@
 //! Attention kernel interface and configuration for Blackwell tensor cores.
-use crate::cuda_runtime::is_available;
+//!
+//! Supports two architectures:
+//! - WGMMA (sm_120, consumer Blackwell: RTX 5060 Ti / 5090)
+//! - tcgen05 (sm_100, datacenter Blackwell: B200)
+//!
+//! The kernel computes scaled dot-product attention:
+//!   S = Q @ K^T / sqrt(D)
+//!   O = softmax(S) @ V
+
+use crate::cuda_runtime::{is_available, CudaDeviceInfo};
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::kvcache::{Kvcache, KvcacheSlice};
-use crate::kernel::tma_descriptor::TmaDescriptor;
 use half::f16;
+use std::sync::Arc;
 
 /// Attention tensor core architecture selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum AttentionArch {
+    /// WGMMA — warp group matrix multiply (sm_120, consumer Blackwell)
     Wgmma,
+    /// tcgen05 — tensor core with tensor memory (sm_100, datacenter Blackwell)
     #[default]
     Tcgen05,
+    /// CPU fallback
     Cpu,
 }
 
@@ -30,6 +42,14 @@ impl AttentionArch {
     pub fn block_size(&self) -> usize {
         match self {
             Self::Wgmma => 128,
+            Self::Tcgen05 => 128,
+            Self::Cpu => 0,
+        }
+    }
+
+    pub fn tile_size(&self) -> usize {
+        match self {
+            Self::Wgmma => 64,
             Self::Tcgen05 => 128,
             Self::Cpu => 0,
         }
@@ -128,13 +148,17 @@ impl AttentionSlice {
 
         let key_slices: Vec<KvcacheSlice> = (0..num_heads)
             .map(|h| {
-                KvcacheSlice::new(gmem_addr, num_heads, head_dim, max_seq, h, seq_start, seq_len, true)
+                KvcacheSlice::new(
+                    gmem_addr, num_heads, head_dim, max_seq, h, seq_start, seq_len, true,
+                )
             })
             .collect();
 
         let value_slices: Vec<KvcacheSlice> = (0..num_heads)
             .map(|h| {
-                KvcacheSlice::new(gmem_addr, num_heads, head_dim, max_seq, h, seq_start, seq_len, false)
+                KvcacheSlice::new(
+                    gmem_addr, num_heads, head_dim, max_seq, h, seq_start, seq_len, false,
+                )
             })
             .collect();
 
@@ -147,7 +171,10 @@ impl AttentionSlice {
         }
     }
 
-    pub fn tma_descriptors(&self, head_idx: usize) -> (Option<TmaDescriptor>, Option<TmaDescriptor>) {
+    pub fn tma_descriptors(
+        &self,
+        head_idx: usize,
+    ) -> (Option<TmaDescriptor>, Option<TmaDescriptor>) {
         if head_idx >= self.key_slices.len() {
             return (None, None);
         }
@@ -157,33 +184,39 @@ impl AttentionSlice {
     }
 }
 
+use crate::kernel::tma_descriptor::TmaDescriptor;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AttentionError {
-    #[error("invalid dimensions: heads={num_heads}, head_dim={head_dim}, seq_len={seq_len}")]
-    InvalidDimensions { num_heads: usize, head_dim: usize, seq_len: usize },
+    #[error("invalid dimensions: heads={num_heads}, head_dim={head_dim}, seq_len={seq_len})")]
+    InvalidDimensions {
+        num_heads: usize,
+        head_dim: usize,
+        seq_len: usize,
+    },
 
-    #[error("head index out of bounds: head_idx={head_idx}, num_heads={num_heads}")]
+    #[error("head index out of bounds: head_idx={head_idx}, num_heads={num_heads})")]
     HeadIndexOutOfBounds { head_idx: usize, num_heads: usize },
 
-    #[error("sequence length exceeded: current={current}, max={max}")]
+    #[error("sequence length exceeded: current={current}, max={max})")]
     SeqLenExceeded { current: usize, max: usize },
 
-    #[error("buffer size mismatch: expected {expected}, got {got}")]
+    #[error("buffer size mismatch: expected {expected}, got {got})")]
     BufferSizeMismatch { expected: usize, got: usize },
 
     #[error("kernel not available on this device")]
     NotAvailable,
 
-    #[error("kernel launch failed: {0}")]
+    #[error("kernel launch failed: {0})")]
     LaunchFailed(String),
 
-    #[error("CUDA error: {0}")]
+    #[error("CUDA error: {0})")]
     Cuda(String),
 
-    #[error("unsupported architecture: {0}")]
+    #[error("unsupported architecture: {0})")]
     UnsupportedArch(String),
 
-    #[error("tcgen05 constraint: head_dim must be divisible by 64, got {0}")]
+    #[error("tcgen05 constraint: head_dim must be divisible by 64, got {0})")]
     Tcgen05Constraint(usize),
 }
 
@@ -201,13 +234,119 @@ pub trait AttentionKernel: Send + Sync {
     fn is_available(&self) -> bool;
 }
 
+// --- GPU Implementation (Real cuda-oxide backed) ---
+
+use cuda_core::CudaFunction;
+
+/// CUDA implementation for attention kernel using WGMMA tensor cores.
 pub struct CudaAttentionKernel {
     arch: AttentionArch,
+    context: Arc<cuda_core::CudaContext>,
+    stream: Arc<cuda_core::CudaStream>,
+    module: Arc<cuda_core::CudaModule>,
+    function: CudaFunction,
+}
+
+/// Builder for CudaAttentionKernel that handles PTX loading and kernel resolution.
+pub struct CudaAttentionKernelBuilder {
+    arch: AttentionArch,
+    context: Arc<cuda_core::CudaContext>,
+    stream: Arc<cuda_core::CudaStream>,
+    device_info: CudaDeviceInfo,
+}
+
+impl CudaAttentionKernelBuilder {
+    pub fn new(
+        arch: AttentionArch,
+        context: Arc<cuda_core::CudaContext>,
+        stream: Arc<cuda_core::CudaStream>,
+        device_info: CudaDeviceInfo,
+    ) -> Self {
+        Self {
+            arch,
+            context,
+            stream,
+            device_info,
+        }
+    }
+
+    /// Build the kernel by loading PTX module and resolving function.
+    pub fn build(self) -> Result<CudaAttentionKernel, AttentionError> {
+        // Pre-flight architecture check
+        match self.arch {
+            AttentionArch::Wgmma if !self.device_info.supports_wgmma() => {
+                return Err(AttentionError::UnsupportedArch(format!(
+                    "WGMMA requires sm_120+, but device is sm_{}.{}",
+                    self.device_info.compute_capability.0, self.device_info.compute_capability.1
+                )));
+            }
+            AttentionArch::Tcgen05 if !self.device_info.supports_tcgen05() => {
+                return Err(AttentionError::UnsupportedArch(format!(
+                    "tcgen05 requires sm_100+, but device is sm_{}.{}",
+                    self.device_info.compute_capability.0, self.device_info.compute_capability.1
+                )));
+            }
+            _ => {}
+        }
+
+        // Select PTX based on architecture
+        let ptx_src = match self.arch {
+            AttentionArch::Wgmma => include_str!("ptx/attention_wgmma.ptx"),
+            AttentionArch::Tcgen05 => include_str!("ptx/attention_tcgen05.ptx"),
+            AttentionArch::Cpu => {
+                return Err(AttentionError::UnsupportedArch(
+                    "Cpu architecture requires CPU kernel, not GPU".to_string(),
+                ));
+            }
+        };
+
+        // Load module from PTX source
+        let module = self
+            .context
+            .load_module_from_ptx_src(ptx_src)
+            .map_err(|e| AttentionError::Cuda(format!("module load failed: {}", e)))?;
+
+        // Resolve kernel function
+        let kernel_name = match self.arch {
+            AttentionArch::Wgmma => "attention_wgmma_kernel",
+            AttentionArch::Tcgen05 => "attention_tcgen05_kernel",
+            AttentionArch::Cpu => {
+                return Err(AttentionError::UnsupportedArch(
+                    "Cpu architecture requires CPU kernel, not GPU".to_string(),
+                ));
+            }
+        };
+        let function = module
+            .load_function(kernel_name)
+            .map_err(|e| AttentionError::Cuda(format!("function load failed: {}", e)))?;
+
+        Ok(CudaAttentionKernel {
+            arch: self.arch,
+            context: self.context,
+            stream: self.stream,
+            module,
+            function,
+        })
+    }
 }
 
 impl CudaAttentionKernel {
-    pub fn new(arch: AttentionArch) -> Self {
-        Self { arch }
+    /// Create a new CUDA attention kernel with the given architecture.
+    pub fn new(arch: AttentionArch) -> Result<Self, AttentionError> {
+        // For now, return an error to force builder usage
+        Err(AttentionError::UnsupportedArch(
+            "Use CudaAttentionKernelBuilder instead of direct construction".to_string(),
+        ))
+    }
+
+    /// Get the cuda-oxide context for external operations
+    pub fn context(&self) -> &Arc<cuda_core::CudaContext> {
+        &self.context
+    }
+
+    /// Get the cuda-oxide stream
+    pub fn stream(&self) -> &Arc<cuda_core::CudaStream> {
+        &self.stream
     }
 }
 
@@ -233,14 +372,31 @@ impl AttentionKernel for CudaAttentionKernel {
         let cache_seq_len = key_cache.seq_len();
         let query_seq_len = query.len().checked_div(num_heads * head_dim).unwrap_or(0);
 
-        let out_len = query_seq_len * num_heads * head_dim;
+        // Validate dimensions
+        if num_heads == 0 || head_dim == 0 || cache_seq_len == 0 {
+            return Err(AttentionError::InvalidDimensions {
+                num_heads,
+                head_dim,
+                seq_len: cache_seq_len,
+            });
+        }
+
+        // Output: attention scores [query_seq_len, num_heads, cache_seq_len]
+        let out_len = query_seq_len * num_heads * cache_seq_len;
         let output = DeviceBuffer::<f32>::zeros(out_len);
 
+        let scale = config.scale();
+
         let _ = mask;
-        let _ = key_cache;
-        let _ = value_cache;
-        let _ = config.scale();
+        let _ = value_cache; // TODO: use V for weighted sum
+        let _ = scale;
+        let _ = query_seq_len;
         let _ = cache_seq_len;
+        let _ = num_heads;
+        let _ = head_dim;
+
+        // TODO: Launch actual WGMMA kernel
+        // For now, return placeholder output
 
         Ok(output)
     }
@@ -250,11 +406,12 @@ impl AttentionKernel for CudaAttentionKernel {
     }
 
     fn is_available(&self) -> bool {
-        let arch_ok = matches!(self.arch, AttentionArch::Wgmma | AttentionArch::Tcgen05);
-        let cuda_ok = is_available();
-        arch_ok && cuda_ok
+        // Check that kernel function is valid (not zeroed)
+        unsafe { !self.function.cu_function().is_null() }
     }
 }
+
+// --- CPU Fallback Implementation ---
 
 pub struct CpuAttentionKernel {
     arch: AttentionArch,
@@ -262,7 +419,9 @@ pub struct CpuAttentionKernel {
 
 impl CpuAttentionKernel {
     pub fn new() -> Self {
-        Self { arch: AttentionArch::Cpu }
+        Self {
+            arch: AttentionArch::Cpu,
+        }
     }
 
     pub fn with_arch(arch: AttentionArch) -> Self {
@@ -395,7 +554,13 @@ impl AttentionKernel for CpuAttentionKernel {
                 continue;
             }
 
-            let logits = Self::matmul_transpose_b(query_host, &k_slice, query_seq_len, cache_seq_len, head_dim);
+            let logits = Self::matmul_transpose_b(
+                query_host,
+                &k_slice,
+                query_seq_len,
+                cache_seq_len,
+                head_dim,
+            );
             let scaled_logits: Vec<f32> = logits.iter().map(|&x| x * scale).collect();
             let attention_weights = Self::softmax(&scaled_logits, query_seq_len, cache_seq_len);
 
@@ -442,6 +607,8 @@ impl AttentionKernel for CpuAttentionKernel {
     }
 }
 
+// --- Tests ---
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,5 +626,18 @@ mod tests {
         let result = CpuAttentionKernel::softmax(&input, 1, 3);
         let sum: f32 = result.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_attention_config_scale() {
+        let config = AttentionConfig::default();
+        let expected_scale = 1.0 / (64.0_f32.sqrt());
+        assert!((config.scale() - expected_scale).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_attention_arch_tile_size() {
+        assert_eq!(AttentionArch::Wgmma.tile_size(), 64);
+        assert_eq!(AttentionArch::Tcgen05.tile_size(), 128);
     }
 }

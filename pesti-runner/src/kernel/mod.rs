@@ -78,7 +78,7 @@ pub mod tma_descriptor;
 
 pub use attention::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
-    CpuAttentionKernel, CudaAttentionKernel,
+    CpuAttentionKernel, CudaAttentionKernel, CudaAttentionKernelBuilder,
 };
 pub use builder::{GemmBuilder, KernelFromPtx, PtxSource};
 pub use device_buf::{DeviceBuffer, DeviceBufferError, HostBuffer};
