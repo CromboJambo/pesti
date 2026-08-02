@@ -22,7 +22,7 @@ pedantic = "allow"
 nursery = "warn"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.3"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["PESTI Contributors"]

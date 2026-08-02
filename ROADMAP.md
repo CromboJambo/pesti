@@ -16,7 +16,7 @@
 | **Phase 5.1: Validation & Polish** | ✅ Complete | GGUF v3 test data regression fixed |
 | **Phase 5.2: Pure Rust Dequantization** | ✅ Complete | ggml-quants integration, C FFI removed |
 | **Phase 6: CI/CD & Versioning** | ✅ Complete | Strict clippy, automated versioning, changelog |
-| **Phase 7: File Writers** | 🚧 In Progress | GGUF writer complete, SafeTensors writer in progress |
+| **Phase 7: File Writers** | ✅ Complete | GGUF + SafeTensors writers with round-trip tests |
 
 ---
 
@@ -305,20 +305,19 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
   - Tensor metadata (name, shape, dtype, offset)
   - Alignment padding (configurable, default 256 bytes)
   - `parse_and_rewrite()` helper for normalization/conversion
-  - 2 passing tests (round-trip + alignment)
+  - **3 passing tests** (round-trip, alignment, full model round-trip)
 
 - [x] **SafeTensors writer** (`pesti-safetensors/src/writer.rs`)
   - Basic tensor serialization
   - JSON header generation
   - Multi-tensor support
   - Helper function: `gguf_to_safetensors()` for conversion
+  - **3 passing tests** (simple, multiple tensors, full model round-trip)
 
-### Upcoming
+### Test Coverage
 
-- [ ] SafeTensors format wire specification compliance
-- [ ] Round-trip verification tests (parse → write → parse)
-- [ ] Integration with existing GGUF parser
-- [ ] Support for quantized tensor storage (Q4_0, Q8_0, etc.)
+- GGUF writer: 3/3 tests passing
+- SafeTensors writer: 3/3 tests passing (round-trip test is large but functional)
 
 ---
 

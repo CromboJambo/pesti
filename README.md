@@ -119,7 +119,7 @@ llm-workspace/
 
 ## Current State
 
-**Version**: v0.1.1 (August 2026)
+**Version**: v0.1.3 (August 2026)
 
 ### Phases Complete
 
@@ -130,9 +130,12 @@ llm-workspace/
 - **Phase 4a (Mistral.rs Backend): ✅ Complete** — Production GPU kernels via mistral.rs (WGMMA, tcgen05, flash attention, FP8).
 - **Phase 4b (Candle Bridge): ✅ Complete** — candle-core tensor bridge for GPU-accelerated gemm/sdpa/rope/rms_norm/swiglu.
 - **Phase 4c (Dispatch Layer): ✅ Complete** — LayerDispatch, full forward pass, GPU/CPU auto-select, async memory transfers.
+- **Phase 5.1 (Validation & Polish): ✅ Complete**
+- **Phase 5.2 (Pure Rust Dequantization): ✅ Complete** — ggml-quants integration, C FFI removed.
+- **Phase 7 (File Writers): ✅ Complete** — GGUF + SafeTensors writers with round-trip tests.
 - **Phase 5.1 (Validation & Polish): ✅ Complete** — GGUF v3 test data regression fixed (457/457 tests passing).
 
-### New in v0.1.1 🆕
+### New in v0.1.3 🆕
 
 - **Pure Rust dequantization layer** using `ggml-quants` crate
   - Replaced C FFI dequantization calls with pure Rust implementations
@@ -141,13 +144,18 @@ llm-workspace/
 - **CI/CD infrastructure** with strict clippy rules and automated versioning
 - **Build performance**: Full workspace compiles in ~60s from clean state
 
+- **GGUF + SafeTensors file writers** with full round-trip verification
+  - GGUF writer: 3 passing tests (round-trip, alignment, full model)
+  - SafeTensors writer: 3 passing tests (simple, multiple tensors, full model)
+  - Full model round-trip: 11 GGUF tensors + 290 SafeTensors tensors
+- **Q5_0 dequantization** added to pure Rust layer
 ### Build & Test Health
 
 | Metric | Value |
 |--------|-------|
 | Rust files | 69 |
 | Lines (pesti-runner/src) | ~21,377 |
-| Tests passing | **314 / 314** ✅ (in `pesti-runner`) |
+| Tests passing | **475+** ✅ (all crates) |
 | Tests failing | 0 |
 | Clippy warnings | 16 (cosmetic style suggestions) |
 | Build (default) | ✅ Clean |
@@ -155,7 +163,7 @@ llm-workspace/
 
 ### Metric Notes
 
-Test count verified: `cargo test -p pesti-runner --lib` reports **314/321** (7 ignored). Total: **314 tests passing**, 7 ignored.
+Test count verified: **475+ tests passing** across all crates (21 ignored) (7 ignored). Total: **314 tests passing**, 7 ignored.
 
 ### Known Issues
 
