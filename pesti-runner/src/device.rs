@@ -25,9 +25,15 @@ impl DeviceBackend {
     /// Select device based on preference.
     pub fn select(&mut self) -> Result<(), RunnerError> {
         match self.preference.as_str() {
-            "cuda" => {
+            "cuda" if is_available() => {
+                // CUDA available, use it
                 self.device = Device::cuda_if_available(0)
-                    .map_err(|e: candle_core::Error| RunnerError::Device(e.to_string()))?
+                    .map_err(|e: candle_core::Error| RunnerError::Device(e.to_string()))?;
+            }
+            "cuda" => {
+                // CUDA requested but not available, warn and fall back to CPU
+                tracing::warn!("CUDA requested but unavailable, falling back to CPU");
+                self.device = Device::Cpu;
             }
             "cpu" => {
                 self.device = Device::Cpu;
@@ -39,6 +45,8 @@ impl DeviceBackend {
                 self.device = Device::Cpu;
             }
             _ => {
+                // Unknown preference, fall back to CPU
+                tracing::warn!("Unknown device backend '{}', falling back to CPU", self.preference);
                 self.device = Device::Cpu;
             }
         }

@@ -25,6 +25,14 @@ impl RunnerBridge {
     }
 
     /// Send inference request to external runner.
+    ///
+    /// **Deprecated:** This sync method is not yet implemented. Use
+    /// [`send_remote_request`](RunnerBridge::send_remote_request) for async HTTP calls
+    /// to remote LM Studio endpoints.
+    #[deprecated(
+        since = "0.1.2",
+        note = "Use send_remote_request() for async HTTP calls instead"
+    )]
     pub fn send_request(
         &self,
         request: InferenceRequest,

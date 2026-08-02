@@ -367,12 +367,24 @@ impl DispatchContext {
         // Use candle_bridge::gemm when GPU is available, CPU fallback otherwise
         let mut result = if self.prefer_gpu && self.gpu_available() {
             debug!(m, n, k, "Linear: using candle_bridge::gemm (GPU)");
+
+            // Validate weight shape before transpose
+            assert_eq!(
+                weights.len(),
+                n * k,
+                "Weight shape mismatch: expected {} elements ({}×{}), got {}",
+                n * k,
+                n,
+                k,
+                weights.len()
+            );
+
             candle_bridge::gemm(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)
-                .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))?
+                .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
         } else {
             debug!(m, n, k, "Linear: using CPU GEMM");
-            self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?
-        };
+            Ok(self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?)
+        }?;
 
         // Add bias if present
         if let Some(b) = bias {
