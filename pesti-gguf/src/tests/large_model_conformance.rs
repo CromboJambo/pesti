@@ -4,18 +4,16 @@
 //! ensuring correctness across a wider range of model architectures and tensor configurations.
 
 use crate::*;
+use crate::tests::conformance_corpus_path;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Test parsing a larger model (3B parameters) — verifies basic structure works
 #[test]
 fn test_parse_qwen2_5_3b_conformance() {
-    let path = Path::new(
-        "/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf",
-    );
+    let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
     // Parse the file — if this succeeds, parser handles larger files correctly
-    let header = parse_gguf(path).expect("Failed to parse Qwen2.5 3B GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse Qwen2.5 3B GGUF file");
 
     eprintln!("✓ Header parsed: version={}", header.version);
     assert_eq!(header.version, 3, "Should be GGUF v3 format");
@@ -46,11 +44,9 @@ fn test_parse_qwen2_5_3b_conformance() {
 /// Test that validates tensor count and structure for larger models
 #[test]
 fn test_large_model_tensor_structure() {
-    let path = Path::new(
-        "/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf",
-    );
+    let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
-    let header = parse_gguf(path).expect("Failed to parse GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse GGUF file");
 
     // Larger models have many more tensors
     assert!(
@@ -91,11 +87,9 @@ fn test_large_model_tensor_structure() {
 /// Test that validates data section alignment and offsets for larger models
 #[test]
 fn test_large_model_data_section() {
-    let path = Path::new(
-        "/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf",
-    );
+    let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
-    let header = parse_gguf(path).expect("Failed to parse GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse GGUF file");
 
     // Validate data section start exists and is positive
     assert!(header.data_section_start > 0, "Data section start should be positive");
@@ -113,11 +107,9 @@ fn test_large_model_data_section() {
 /// Test that validates KV pair value types are consistent in larger files
 #[test]
 fn test_large_model_kv_type_consistency() {
-    let path = Path::new(
-        "/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf",
-    );
+    let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
-    let header = parse_gguf(path).expect("Failed to parse GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse GGUF file");
 
     // Count different value types present
     let string_count: usize = header.kv_pairs.iter().filter(|p| matches!(p.value, GgufKvValue::String(_))).count();

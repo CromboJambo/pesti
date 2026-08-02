@@ -564,15 +564,14 @@ pub fn tensor_bytes_for_dtype(dtype: u32, element_count: u64) -> usize {
 #[cfg(test)]
 mod tests_real_file {
     use super::*;
+    use crate::tests::conformance_corpus_path;
 
     #[test]
     fn test_parse_conformance_corpus_qwen2_5() {
-        let path = Path::new(
-            "/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-        );
+        let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
         // Should parse without error
-        let header = parse_gguf(path).expect("Failed to parse real GGUF file");
+        let header = parse_gguf(&path).expect("Failed to parse real GGUF file");
 
         eprintln!("Header version: {}", header.version);
         assert_eq!(header.version, 3);

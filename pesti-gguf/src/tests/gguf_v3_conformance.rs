@@ -4,15 +4,15 @@
 //! based on analysis of llama.cpp's implementation and hex dump inspection.
 
 use crate::*;
-use std::path::Path;
+use crate::tests::conformance_corpus_path;
 
 /// Test parsing a known GGUF v3 file and validates specific KV pairs
 #[test]
 fn test_parse_qwen2_5_conformance() {
-    let path = Path::new("/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
     // Parse the file
-    let header = parse_gguf(path).expect("Failed to parse Qwen2.5 GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse Qwen2.5 GGUF file");
 
     eprintln!("✓ Header parsed: version={}", header.version);
     assert_eq!(header.version, 3, "Should be GGUF v3 format");
@@ -56,9 +56,9 @@ fn test_parse_qwen2_5_conformance() {
 /// Test that validates the wire format structure of KV pairs
 #[test]
 fn test_kv_pair_wire_format() {
-    let path = Path::new("/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
-    let header = parse_gguf(path).expect("Failed to parse GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse GGUF file");
 
     // Validate that all string KV pairs have string values
     for kv in &header.kv_pairs {
@@ -101,9 +101,9 @@ fn test_kv_pair_wire_format() {
 /// Test that validates tensor count matches header
 #[test]
 fn test_tensor_count_consistency() {
-    let path = Path::new("/home/crombo/projects/llm-workspace/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
-    let header = parse_gguf(path).expect("Failed to parse GGUF file");
+    let header = parse_gguf(&path).expect("Failed to parse GGUF file");
 
     eprintln!("✓ Tensor count: {}", header.tensors.len());
     assert!(
@@ -114,10 +114,7 @@ fn test_tensor_count_consistency() {
 
     // Validate tensor shapes are reasonable
     for tensor in &header.tensors {
-        assert!(
-            !tensor.name.is_empty(),
-            "Empty tensor name"
-        );
+        assert!(!tensor.name.is_empty(), "Empty tensor name");
         assert!(
             !tensor.shape.is_empty(),
             "Empty shape for tensor: {}",

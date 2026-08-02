@@ -3,10 +3,14 @@ pub mod types;
 pub mod parser;
 
 #[cfg(test)]
-mod tests {
-    mod defensive_tests;
-    mod gguf_v3_conformance;
-    mod large_model_conformance;
+pub mod tests {
+    pub mod defensive_tests;
+    pub mod gguf_v3_conformance;
+    pub mod large_model_conformance;
+    pub mod r#mod;
+    
+    // Re-export the helper function for use in test modules
+    pub use r#mod::conformance_corpus_path;
 }
 
 pub use error::GgufError;
