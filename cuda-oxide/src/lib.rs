@@ -1,0 +1,24 @@
+//! CUDA acceleration crate for PESTI.
+//!
+//! This crate provides GPU-accelerated operations using the `cudarc` backend.
+//! It's designed to be a drop-in replacement for CPU operations when GPU is available.
+
+pub mod kernels;
+
+/// CUDA acceleration features (stub implementations)
+pub mod features {
+    /// Check if CUDA is available
+    pub fn cuda_available() -> bool {
+        true // TODO: Implement with cudarc
+    }
+
+    /// Get the number of available CUDA devices
+    pub fn device_count() -> usize {
+        0 // TODO: Implement with cudarc
+    }
+
+    /// Get compute capability for a device
+    pub fn compute_capability(device_id: usize) -> Option<(u32, u32)> {
+        None // TODO: Implement with cudarc
+    }
+}
