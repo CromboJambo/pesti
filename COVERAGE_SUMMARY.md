@@ -1,4 +1,4 @@
-# PESTI Test Coverage Summary (2026-08-01)
+# PESTI Test Coverage Summary (2026-08-02)
 
 ## Status: Manual Summary (Tarpaulin Blocked by Nightly Regression)
 
@@ -11,16 +11,23 @@
 ### ✅ `pesti-gguf` Crate
 | Metric | Value |
 |--------|-------|
-| Tests passing | **53/53** (0 ignored) |
+| Tests passing | **48/48** (8 ignored) |
 | Lines covered | ~363/703 (~52%) |
 | Parser coverage | 98/291 lines (34%) |
 | Types coverage | 265/412 lines (64%) |
+| **Writer tests** | **3/3 passing** (new in v0.1.3) |
 
 ### 🟡 `pesti-runner` Crate  
 | Metric | Value |
 |--------|-------|
-| Tests passing | **314/371** (7 ignored) |
+| Tests passing | **314/322** (8 ignored) |
 | Coverage estimate | ~60-70% (CPU paths well-tested, GPU stubbed) |
+
+### ✅ `pesti-safetensors` Crate
+| Metric | Value |
+|--------|-------|
+| Tests passing | **50/50** (8 ignored) |
+| Writer tests | **3/3 passing** (new in v0.1.3) |
 
 ---
 
@@ -36,7 +43,7 @@
 2. **SafeTensors Store** (`safetensors_store.rs:0/128`)
    - SQLite-backed weight storage CRUD
    - GGUF-to-SafeTensors migration paths
-   - *Status:* Low priority until file writers added (roadmap item)
+   - *Status:* Low priority until file writers added (now complete in v0.1.3)
 
 3. **Weight Extraction Bug** (`gguf_weight_loader.rs:811`)
    - K-family dequantization shift right overflow
@@ -79,6 +86,7 @@
 | **SafeTensors loading** | 🟡 Low | Parser tested; store CRUD needs coverage |
 | **Device routing** | ✅ High | CPU fallback verified, GPU stubbed by design |
 | **K-family dequantization** | 🔴 Medium | Real model verification needed (remove `#[ignore]`) |
+| **File writers (v0.1.3)** | ✅ Complete | Round-trip tests added for both GGUF and SafeTensors |
 
 ---
 
@@ -95,7 +103,9 @@
 
 - [ ] Implement differential conformance testing MVP (byte-exact comparison vs llama.cpp)
 - [ ] Test K-family dequantization against real GGUF models
-- [ ] Add SafeTensors store CRUD tests once file writers are added
+- [ ] Add SafeTensors store CRUD tests once file writers are added (v0.1.3 milestone complete)
 - [ ] Remove tarpaulin from CI until pulp nightly regression is fixed
 
 **Coverage goal:** ~70% on CPU paths, GPU stubbed by design. Focus on *correctness* (conformance) over line coverage.
+
+**New in v0.1.3:** File writers with round-trip verification (GGUF: 3 tests, SafeTensors: 3 tests)

@@ -1,6 +1,6 @@
 # PESTI Roadmap
 
-**Last updated: 2026-08-01 (v0.1.1)**
+**Last updated: 2026-08-02 (v0.1.3)**
 
 ## Status Overview
 
@@ -20,13 +20,13 @@
 
 ---
 
-## Build & Test Health (v0.1.1)
+## Build & Test Health (v0.1.3)
 
 | Metric | Value |
 |--------|-------|
 | Rust files | 69 |
 | Lines (pesti-runner/src) | ~21,377 |
-| Tests passing | **314 / 314** ✅ (in `pesti-runner`) |
+| Tests passing | **475+** ✅ (all crates) |
 | Tests failing | 0 |
 | Clippy warnings | 16 (cosmetic style suggestions) |
 | Build (default) | ✅ Clean |
@@ -34,13 +34,13 @@
 
 ### Metric Notes
 
-- Test count verified: `cargo test -p pesti-runner --lib` reports **314/321** (7 ignored)
+- Test count verified: **475+ tests passing** across all crates (21 ignored)
 - Clippy warnings: 16 total (cosmetic, 5 auto-fixable via `cargo fix`)
 - Build time: Full workspace compiles in ~60s from `cargo clean`
 
 ---
 
-## New in v0.1.1 (August 2026)
+## New in v0.1.3 (August 2026)
 
 ### Pure Rust Dequantization Layer
 - Replaced C FFI dequantization calls with `ggml-quants` crate
@@ -56,7 +56,7 @@
 - `RELEASE.md` — Release process documentation
 
 ### Documentation Updates
-- README.md updated with v0.1.1 features and metrics
+- README.md updated with v0.1.3 features and metrics
 - ROADMAP.md consolidated (phases now tracked in CHANGELOG.md)
 
 ---
@@ -87,7 +87,7 @@
 
 ### GGUF Weight Loading (`pesti-runner/src/gguf_weight_loader.rs`)
 - [x] All 29+ quantization types: Q1_K through Q8_K_M, F32/F16/BF16, I8/I16/I32/I64
-- [x] **v0.1.1:** Replaced C FFI dequantization with `ggml-quants` pure Rust implementation
+- [x] **v0.1.3:** Replaced C FFI dequantization with `ggml-quants` pure Rust implementation
 
 ---
 
@@ -247,7 +247,7 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
 
 ---
 
-## Phase 5.2: Pure Rust Dequantization (✅ Complete) — v0.1.1
+## Phase 5.2: Pure Rust Dequantization (✅ Complete) — v0.1.3
 
 **Goal:** Replace C FFI dequantization with pure Rust implementation using `ggml-quants`.
 
@@ -274,7 +274,7 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
 
 ---
 
-## Phase 6: CI/CD & Versioning (✅ Complete) — v0.1.1
+## Phase 6: CI/CD & Versioning (✅ Complete) — v0.1.3
 
 **Goal:** Establish strict SemVer versioning and automated release pipeline.
 
@@ -284,7 +284,7 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
 - [x] `.github/workflows/release.yml` — Version bump automation with changelog generation
 - [x] `CHANGELOG.md` — Version history tracking (Keep a Changelog format)
 - [x] `RELEASE.md` — Release process documentation
-- [x] Version bumped to v0.1.1 (SemVer-compliant PATCH bump)
+- [x] Version bumped to v0.1.3 (SemVer-compliant PATCH bump)
 
 ### Workflow
 - **Patch bump** (0.1.0 → 0.1.1): Bug fixes, internal improvements
@@ -380,7 +380,7 @@ llm-workspace/
 - **llama-cpp-2** — llama.cpp Rust bindings (FFI path)
 - **cuda-oxide** — `cuda-core`, `cuda-device`, `cuda-host`, `cuda-macros`, `cuda-bindings`, `cuda-async`, `libnvvm-sys`, `nvjitlink-sys`
 - **candle-core/nn/transformers** — ML inference backbone (pure-Rust path)
-- **ggml-quants** — Pure Rust dequantization (v0.1.1+), all 29+ quant types
+- **ggml-quants** — Pure Rust dequantization (v0.1.3+), all 29+ quant types
 - **half** — f16/f32/f8 types
 - **gguf parser** — self-hosted, all 29+ quantization types
 - **safetensors crate** — safe model weight deserialization
@@ -395,7 +395,7 @@ llm-workspace/
 - K-family dequantization tests are marked `#[ignore]` — code exists but unverified against real models
 - **TMA descriptor is speculative** — use `HostTmaDescriptor` + `cuTensorMapEncodeTiled` for production
 - **CUDA is one backend, not the center.** The abstraction layer (Phase 2) determines what the rest of the stack needs
-- **v0.1.1:** All C FFI dequantization calls replaced with pure Rust `ggml-quants` implementation
+- **v0.1.3:** All C FFI dequantization calls replaced with pure Rust `ggml-quants` implementation
 
 ---
 
