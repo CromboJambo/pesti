@@ -7,7 +7,9 @@ use crate::*;
 use crate::tests::conformance_corpus_path;
 
 /// Test parsing a known GGUF v3 file and validates specific KV pairs
+/// Requires conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_parse_qwen2_5_conformance() {
     let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
@@ -55,6 +57,7 @@ fn test_parse_qwen2_5_conformance() {
 
 /// Test that validates the wire format structure of KV pairs
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_kv_pair_wire_format() {
     let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
@@ -100,6 +103,7 @@ fn test_kv_pair_wire_format() {
 
 /// Test that validates tensor count matches header
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_tensor_count_consistency() {
     let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 

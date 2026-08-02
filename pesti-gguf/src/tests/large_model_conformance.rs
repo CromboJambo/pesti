@@ -8,7 +8,9 @@ use crate::tests::conformance_corpus_path;
 use std::collections::HashMap;
 
 /// Test parsing a larger model (3B parameters) — verifies basic structure works
+/// Requires conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_parse_qwen2_5_3b_conformance() {
     let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
@@ -43,6 +45,7 @@ fn test_parse_qwen2_5_3b_conformance() {
 
 /// Test that validates tensor count and structure for larger models
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_large_model_tensor_structure() {
     let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
@@ -86,6 +89,7 @@ fn test_large_model_tensor_structure() {
 
 /// Test that validates data section alignment and offsets for larger models
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_large_model_data_section() {
     let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
@@ -106,6 +110,7 @@ fn test_large_model_data_section() {
 
 /// Test that validates KV pair value types are consistent in larger files
 #[test]
+#[ignore = "Requires conformance corpus files"]
 fn test_large_model_kv_type_consistency() {
     let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
