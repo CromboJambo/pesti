@@ -8,7 +8,7 @@
 //!   S = Q @ K^T / sqrt(D)
 //!   O = softmax(S) @ V
 
-use crate::cuda_runtime::{is_available, CudaDeviceInfo};
+use crate::cuda_runtime::CudaDeviceInfo;
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::kvcache::{Kvcache, KvcacheSlice};
 use half::f16;
@@ -332,7 +332,7 @@ impl CudaAttentionKernelBuilder {
 
 impl CudaAttentionKernel {
     /// Create a new CUDA attention kernel with the given architecture.
-    pub fn new(arch: AttentionArch) -> Result<Self, AttentionError> {
+    pub fn new(_arch: AttentionArch) -> Result<Self, AttentionError> {
         // For now, return an error to force builder usage
         Err(AttentionError::UnsupportedArch(
             "Use CudaAttentionKernelBuilder instead of direct construction".to_string(),
