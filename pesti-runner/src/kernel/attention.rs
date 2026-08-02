@@ -387,16 +387,76 @@ impl AttentionKernel for CudaAttentionKernel {
 
         let scale = config.scale();
 
-        let _ = mask;
-        let _ = value_cache; // TODO: use V for weighted sum
-        let _ = scale;
-        let _ = query_seq_len;
-        let _ = cache_seq_len;
-        let _ = num_heads;
-        let _ = head_dim;
+        let _ = mask; // TODO: apply causal mask in GPU post-processing
+        let _ = value_cache; // TODO: use V for weighted sum after softmax
 
-        // TODO: Launch actual WGMMA kernel
-        // For now, return placeholder output
+        // Extract kernel parameters from config and inputs
+        let seq_q = query_seq_len;
+        let seq_k = cache_seq_len;
+        let head_dim = config.head_dim;
+        let scale = config.scale();
+
+        // Launch WGMMA attention kernel (compute Q @ K^T / sqrt(D))
+        // PTX expects: (scale, q_ptr, k_ptr, s_ptr, seq_q, seq_k, head_dim)
+        match self.arch {
+            AttentionArch::Wgmma => {
+                unsafe {
+                    // Get device pointers (unwrap because we validated earlier)
+                    let q_ptr = query.device_ptr();
+                    let k_ptr = key_cache.device_ptr()
+                        .ok_or(AttentionError::LaunchFailed("Key cache not on device".into()))?;
+                    let s_ptr = output.device_ptr();
+
+                    // Calculate grid dimensions (64x64 tiles)
+                    let grid_x = (seq_k as u32).div_ceil(64);
+                    let grid_y = (seq_q as u32).div_ceil(64);
+                    let block_size = 128; // (32, 4) = 128 threads
+
+                    // Build kernel parameters
+                    // Note: cuda_core::launch_kernel expects *mut c_void pointers
+                    let scale_val = scale.to_bits();
+                    let seq_q_val = seq_q as u32;
+                    let seq_k_val = seq_k as u32;
+                    let head_dim_val = head_dim as u32;
+
+                    let mut kernel_params: Vec<*mut std::ffi::c_void> = vec![
+                        &scale_val as *const u32 as *mut std::ffi::c_void,
+                        &q_ptr as *const u64 as *mut std::ffi::c_void,
+                        &k_ptr as *const u64 as *mut std::ffi::c_void,
+                        &s_ptr as *const u64 as *mut std::ffi::c_void,
+                        &seq_q_val as *const u32 as *mut std::ffi::c_void,
+                        &seq_k_val as *const u32 as *mut std::ffi::c_void,
+                        &head_dim_val as *const u32 as *mut std::ffi::c_void,
+                    ];
+
+                    // Launch WGMMA tensor core kernel
+                    cuda_core::launch_kernel(
+                        self.function.cu_function(),
+                        (grid_x, grid_y, 1),
+                        (block_size, 1, 1),
+                        0, // dynamic shared memory (8 KiB configured in PTX)
+                        self.stream.cu_stream(),
+                        &mut kernel_params,
+                    )
+                    .map_err(|e| AttentionError::LaunchFailed(format!("WGMMA launch failed: {e}")))?;
+
+                    // Synchronize stream to ensure completion
+                    self.stream
+                        .synchronize()
+                        .map_err(|e| AttentionError::LaunchFailed(format!("Stream sync failed: {e}")))?;
+                }
+            },
+            AttentionArch::Tcgen05 => {
+                // TODO: Implement tcgen05 path with TMA descriptors for async prefetching
+                // Datacenter Blackwell (sm_100) uses cuTensorMapEncodeTiled()
+                // Similar launch but with different thread config and TMA bindings
+                return Err(AttentionError::NotAvailable);
+            },
+            _ => {
+                // CPU fallback handled by caller
+                return Err(AttentionError::NotAvailable);
+            }
+        }
 
         Ok(output)
     }
