@@ -20,7 +20,7 @@ use std::path::Path;
 use pesti_gguf::parser::{extract_tensor_bytes_from_path, parse_gguf};
 use pesti_gguf::types::{GgufDtype, GgufHeader, GgufTensorInfo};
 
-use crate::dequantize::{dequantize_q4_0_ggml, dequantize_q4_1_ggml, dequantize_q8_0_ggml};
+use crate::dequantize::{dequantize_q4_0_ggml, dequantize_q4_1_ggml, dequantize_q5_0, dequantize_q8_0_ggml};
 use crate::error::{Result, RunnerError};
 
 /// A loaded GGUF model's tensors in memory.
@@ -120,6 +120,14 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
         }
         GgufDtype::Q4_1 => {
             let dequantized = dequantize_q4_1_ggml(raw_data, element_count)
+                .map_err(|e| RunnerError::Dequant(tensor.name.clone(), e.to_string()))?;
+            Ok(dequantized
+                .into_iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect())
+        }
+        GgufDtype::Q5_0 => {
+            let dequantized = dequantize_q5_0(raw_data, element_count)
                 .map_err(|e| RunnerError::Dequant(tensor.name.clone(), e.to_string()))?;
             Ok(dequantized
                 .into_iter()
@@ -422,11 +430,12 @@ fn dequantize_q3_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 
 /// Dequantize Q4_K data to f32.
 fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
-    let num_full_blocks = element_count / 16;
-    let remaining = element_count % 16;
+    let num_full_blocks = element_count / 32;
+    let remaining = element_count % 32;
 
-    // Q4_K layout: d(f16,2B)+min(f16,2B)+scale(u8,1B)+q4_0(12B)+q4_h(u8x2,2B)=19B per block
-    let expected_size = num_full_blocks * 19 + if remaining > 0 { 3 } else { 0 };
+    // Q4_K layout: d(f16,2B)+min(f16,2B)+scales(10B)+qs(16B)=30B per block
+    // Actually: n/4 + n*6/32 + 48 bytes total = 14B per block
+    let expected_size = num_full_blocks * 14 + if remaining > 0 { 5 } else { 0 };
 
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
@@ -437,49 +446,48 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     }
 
     let mut result = Vec::with_capacity(element_count);
-    let mut offset = 0usize;
 
-    for _ in 0..num_full_blocks {
-        let d = f16_to_f32(&data[offset..offset + 2]);
-        let min = f16_to_f32(&data[offset + 2..offset + 4]);
-        let scale = data[offset + 4] as f32;
+    for block in 0..num_full_blocks {
+        let base = block * 14;
 
-        // q4_0: 12 bytes (32 nibbles, 4 per byte)
-        let q4_0 = [
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-            data[offset + 8],
-            data[offset + 9],
-            data[offset + 10],
-            data[offset + 11],
-            data[offset + 12],
-        ];
+        // Parse scale (f16)
+        let scale = f16_to_f32(&data[base..base + 2]);
 
-        // q4_h: 2 bytes (high bits for elements 0-7)
-        let q4_h = [data[offset + 13], data[offset + 14]];
+        // Parse min (f16)
+        let min = f16_to_f32(&data[base + 2..base + 4]);
 
-        for i in 0..16usize {
-            let lo = (q4_0[i / 4] >> (4 * (i % 4))) & 0x0F;
-            let hi = ((q4_h[i / 8] >> (i % 8)) & 1) as u32;
+        // Parse scales (10 bytes for 32 elements = 4 scale groups of 8)
+        let scales = &data[base + 4..base + 14];
 
-            let q = lo as u32 + hi * 16;
-            result.push(d * ((q as f32 - min) / scale));
+        // Extract nibbles and dequantize
+        for i in 0..32usize {
+            if result.len() >= element_count {
+                break;
+            }
+
+            // Get low 4 bits from nibbles (stored separately after scales)
+            let q_idx = base + 14 + i / 2;
+            let lo = (data[q_idx] >> (4 * (i % 2))) & 0x0F;
+
+            // Q4_K: value = scale * (lo - min) / 16.0
+            let q = lo as f32 - min;
+            result.push(scale * (q / 16.0));
         }
-        offset += 19;
     }
 
+    // Handle remaining elements
     if remaining > 0 {
-        let d = f16_to_f32(&data[offset..offset + 2]);
-        let min = f16_to_f32(&data[offset + 2..offset + 4]);
-        let scale = data[offset + 4] as f32;
+        let base = num_full_blocks * 14;
 
-        // q4_0: 12 bytes (32 nibbles, 4 per byte) — need at least remaining.min(8) bytes
-        let q4_0 = &data[offset + 5..offset + 5 + remaining.min(8)];
+        let scale = f16_to_f32(&data[base..base + 2]);
+        let min = f16_to_f32(&data[base + 2..base + 4]);
 
-        for i in 0..remaining {
-            let lo = (q4_0[i / 4] >> (4 * (i % 4))) & 0x0F;
-            result.push(d * ((lo as f32 - min) / scale));
+        let elems_in_block = remaining.min(32);
+        for i in 0..elems_in_block {
+            let q_idx = base + 14 + i / 2;
+            let lo = (data[q_idx] >> (4 * (i % 2))) & 0x0F;
+            let q = lo as f32 - min;
+            result.push(scale * (q / 16.0));
         }
     }
 
@@ -557,8 +565,9 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 16;
     let remaining = element_count % 16;
 
-    // Q6_K layout: d(f16,2B)+mask(u8,1B)+q6(12B)+scale(u8,1B)=16B per block
-    let expected_size = num_full_blocks * 16 + if remaining > 0 { 3 } else { 0 };
+    // Q6_K layout: d(f16,2B)+q6(12B)=14B per block (not 16B!)
+    // Actually: n/2 + n/4 + 256 bytes total
+    let expected_size = num_full_blocks * 12 + if remaining > 0 { 3 } else { 0 };
 
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
@@ -573,47 +582,25 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 
     for _ in 0..num_full_blocks {
         let d = f16_to_f32(&data[offset..offset + 2]);
-        let mask = data[offset + 2];
-        let q6 = [
-            data[offset + 3],
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-            data[offset + 8],
-            data[offset + 9],
-            data[offset + 10],
-            data[offset + 11],
-            data[offset + 12],
-        ];
+        let q6 = &data[offset + 2..offset + 14];
 
         for i in 0..16usize {
+            // Q6_K: 2 bits per element, with high bit from mask
             let q6_val = ((q6[i / 4] >> (2 * (i % 4))) & 0x03) as u8;
-            let mask_bit = (mask >> i) & 1;
-
-            let combined = if mask_bit != 0 {
-                q6_val + 4
-            } else {
-                q6_val
-            };
-
-            result.push(d * ((combined as f32 - 32.0) / 32.0));
+            let q = q6_val as i32 - 32;
+            result.push(d * (q as f32 / 64.0));
         }
-        offset += 16;
+        offset += 12;
     }
 
     if remaining > 0 {
         let d = f16_to_f32(&data[offset..offset + 2]);
-        let mask = data[offset + 2];
-        let q6 = &data[offset + 3..offset + 3 + remaining.min(8)];
+        let q6 = &data[offset + 2..offset + 2 + remaining.min(8)];
 
         for i in 0..remaining {
             let q6_val = ((q6[i / 4] >> (2 * (i % 4))) & 0x03) as u8;
-            let mask_bit = (mask >> i) & 1;
-
-            let combined = if mask_bit != 0 { q6_val + 4 } else { q6_val };
-
-            result.push(d * ((combined as f32 - 32.0) / 32.0));
+            let q = q6_val as i32 - 32;
+            result.push(d * (q as f32 / 64.0));
         }
     }
 
