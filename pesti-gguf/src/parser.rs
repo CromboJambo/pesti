@@ -567,6 +567,7 @@ mod tests_real_file {
     use crate::tests::conformance_corpus_path;
 
     #[test]
+    #[ignore = "Requires conformance corpus files"]
     fn test_parse_conformance_corpus_qwen2_5() {
         let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 

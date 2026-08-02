@@ -440,4 +440,244 @@ mod tests {
 
         let _ = std::fs::remove_file(output_path);
     }
+
+    #[test]
+    fn test_round_trip_full_model() {
+        // Simulate a complete model write/read cycle
+        let mut writer = GgufWriter::new();
+
+        // Add comprehensive metadata
+        writer.add_kv(GgufKvPair {
+            key: "general.architecture".to_string(),
+            value_type: GgufValueType::String,
+            value: GgufKvValue::String("qwen2".to_string()),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "general.quantization_version".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(2),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "general.type".to_string(),
+            value_type: GgufValueType::String,
+            value: GgufKvValue::String("q4_k_m".to_string()),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "general.file_type".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(15), // Q4_K_M
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.block_count".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(32),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.context_length".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(4096),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.embedding_length".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(4096),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.feed_forward_length".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(11008),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.attention.head_count".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(32),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.attention.head_count_kv".to_string(),
+            value_type: GgufValueType::Uint32,
+            value: GgufKvValue::Uint32(8),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.rope.freq_base".to_string(),
+            value_type: GgufValueType::Float32,
+            value: GgufKvValue::Float32(10000.0),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "qwen2.attention.layer_norm_rms_epsilon".to_string(),
+            value_type: GgufValueType::Float32,
+            value: GgufKvValue::Float32(1e-5),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "tokenizer.ggml.model".to_string(),
+            value_type: GgufValueType::String,
+            value: GgufKvValue::String("qwen2".to_string()),
+        });
+
+        writer.add_kv(GgufKvPair {
+            key: "tokenizer.ggml.tokens".to_string(),
+            value_type: GgufValueType::Array,
+            value: GgufKvValue::Array(vec![
+                GgufKvValue::String("[PAD]".to_string()),
+                GgufKvValue::String("[UNK]".to_string()),
+                GgufKvValue::String("[CLS]".to_string()),
+                GgufKvValue::String("[SEP]".to_string()),
+                GgufKvValue::String("[MASK]".to_string()),
+            ]),
+        });
+
+        // Add multiple tensors
+        let embedding_tensor = GgufTensorInfo {
+            name: "token_embd.weight".to_string(),
+            shape: vec![4096, 32000],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(embedding_tensor);
+
+        let output_tensor = GgufTensorInfo {
+            name: "output.weight".to_string(),
+            shape: vec![32000, 4096],
+            dtype: GgufDtype::F32.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(output_tensor);
+
+        let attention_norm = GgufTensorInfo {
+            name: "blk.0.attn_norm.weight".to_string(),
+            shape: vec![4096],
+            dtype: GgufDtype::F32.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(attention_norm);
+
+        let ffn_norm = GgufTensorInfo {
+            name: "blk.0.ffn_norm.weight".to_string(),
+            shape: vec![4096],
+            dtype: GgufDtype::F32.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(ffn_norm);
+
+        let wq = GgufTensorInfo {
+            name: "blk.0.attn_q.weight".to_string(),
+            shape: vec![4096, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(wq);
+
+        let wk = GgufTensorInfo {
+            name: "blk.0.attn_k.weight".to_string(),
+            shape: vec![1024, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(wk);
+
+        let wv = GgufTensorInfo {
+            name: "blk.0.attn_v.weight".to_string(),
+            shape: vec![1024, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(wv);
+
+        let wo = GgufTensorInfo {
+            name: "blk.0.attn_output.weight".to_string(),
+            shape: vec![4096, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(wo);
+
+        let w1 = GgufTensorInfo {
+            name: "blk.0.ffn_gate.weight".to_string(),
+            shape: vec![11008, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(w1);
+
+        let w2 = GgufTensorInfo {
+            name: "blk.0.ffn_down.weight".to_string(),
+            shape: vec![4096, 11008],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(w2);
+
+        let w3 = GgufTensorInfo {
+            name: "blk.0.ffn_up.weight".to_string(),
+            shape: vec![11008, 4096],
+            dtype: GgufDtype::Q4_0.to_u32(),
+            offset: 0,
+        };
+        writer.add_tensor(w3);
+
+        // Add tensor data (simulated quantized data - just zeros for round-trip test)
+        // Use the actual stored_size() method to get correct sizes
+        let tensor_names: Vec<String> = writer.tensors.iter().map(|t| t.name.clone()).collect();
+        
+        for name in &tensor_names {
+            if let Some(tensor) = writer.tensors.iter().find(|t| t.name == *name) {
+                let data_size = tensor.stored_size() as usize;
+                let data = vec![0u8; data_size];
+                writer.add_tensor_data(name, data);
+            }
+        }
+
+        // Write to temp file
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("test_round_trip_full.gguf");
+
+        writer.write(&output_path).expect("Failed to write full model GGUF");
+
+        // Read back and verify
+        let header = parse_gguf(&output_path).expect("Failed to parse written GGUF");
+
+        // Verify metadata
+        assert_eq!(header.kv_pairs.len(), 14, "Should have 14 KV pairs");
+        assert_eq!(header.tensors.len(), 11, "Should have 11 tensors");
+
+        // Verify specific KV pairs exist
+        let kv_map: std::collections::HashMap<&str, &GgufKvValue> = header
+            .kv_pairs
+            .iter()
+            .map(|p| (p.key.as_str(), &p.value))
+            .collect();
+
+        assert_eq!(
+            kv_map.get("general.architecture"),
+            Some(&GgufKvValue::String("qwen2".to_string())).as_ref()
+        );
+        assert_eq!(
+            kv_map.get("general.quantization_version"),
+            Some(&GgufKvValue::Uint32(2)).as_ref()
+        );
+        assert_eq!(
+            kv_map.get("qwen2.block_count"),
+            Some(&GgufKvValue::Uint32(32)).as_ref()
+        );
+
+        // Verify tensor names
+        let tensor_names: Vec<&str> = header.tensors.iter().map(|t| t.name.as_str()).collect();
+        assert!(tensor_names.contains(&"token_embd.weight"));
+        assert!(tensor_names.contains(&"output.weight"));
+        assert!(tensor_names.contains(&"blk.0.attn_q.weight"));
+
+        // Clean up
+        let _ = std::fs::remove_file(output_path);
+    }
 }

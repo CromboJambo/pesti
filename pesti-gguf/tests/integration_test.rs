@@ -19,6 +19,7 @@ fn conformance_corpus_path(filename: &str) -> std::path::PathBuf {
 ///
 /// This validates the parser against an actual model file, not synthetic test data.
 #[test]
+#[ignore = "Requires conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"]
 fn test_parse_real_qwen2_5_0_5b() {
     let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
@@ -75,6 +76,7 @@ fn test_parse_real_qwen2_5_0_5b() {
 
 /// Test parsing a larger Qwen2.5 3B model.
 #[test]
+#[ignore = "Requires conformance-corpus/qwen2.5-3b-instruct-q4_k_m.gguf"]
 fn test_parse_real_qwen2_5_3b() {
     let path = conformance_corpus_path("qwen2.5-3b-instruct-q4_k_m.gguf");
 
