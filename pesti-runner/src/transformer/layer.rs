@@ -225,15 +225,26 @@ impl TransformerLayer {
     ) -> Vec<f32> {
         let embed_dim = x.len() / batch_size;
 
+        // Debug: print dimensions
+        eprintln!("Layer forward: x.len={}, batch_size={}, seq_len={}, start_pos={}, embed_dim={}", 
+            x.len(), batch_size, seq_len, start_pos, embed_dim);
+
         // Attention sub-layer: x + attn(RMSNorm(x))
         let normed = self.attention_norm.forward(x, batch_size);
+        eprintln!("  normed.len={}", normed.len());
         let attn_out = self
             .attention
             .forward(&normed, batch_size, seq_len, start_pos);
+        eprintln!("  attn_out.len={}", attn_out.len());
 
         // Residual: x + attn_out
         let mut h = vec![0.0f32; batch_size * embed_dim];
         for i in 0..h.len() {
+            if i >= x.len() || i >= attn_out.len() {
+                eprintln!("  ERROR: i={}, x.len={}, attn_out.len={}, h.len={}", 
+                    i, x.len(), attn_out.len(), h.len());
+                break;
+            }
             h[i] = x[i] + attn_out[i];
         }
 
