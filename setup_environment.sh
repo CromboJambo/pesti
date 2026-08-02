@@ -7,7 +7,7 @@
 # Note: This script is silent when sourced. Run directly to see output.
 
 # Define the canonical directory for local model weights (as per memory).
-export HF_HOME="/home/crombo/projects/llm-workspace/lms-models"
+export HF_HOME="/home/crombo/projects/pesti/lms-models"
 
 # Exporting this variable makes it available to subprocesses and other scripts that source this file.
 export HF_HOME
