@@ -254,7 +254,7 @@ impl LlamaConfig {
     pub fn output_name(&self) -> &str {
         match self.arch {
             ModelArch::Gemma => "lm_head.weight",
-            ModelArch::Qwen2 | ModelArch::Qwen3 => "lm_head.weight",
+            ModelArch::Qwen2 | ModelArch::Qwen3 => "output.weight", // Qwen2 uses "output.weight" not "lm_head.weight"
             _ => "output.weight",
         }
     }
@@ -317,14 +317,31 @@ impl LlamaModel {
         let token_embeddings = weights
             .tensors
             .get(embedding_name)
-            .map(|tensor_data| Linear::from_f32_weight(tensor_data, None));
+            .map(|tensor_data| {
+                // For Qwen2, the embedding tensor shape is [embed_dim, vocab_size]
+                // We need to set in_features = embed_dim for correct row lookup
+                let embed_dim = config.embed_dim;
+                Linear::from_f32_weight_with_shape(
+                    tensor_data,
+                    None,
+                    embed_dim as usize,
+                    vocab_size as usize * embed_dim as usize,
+                )
+            });
 
         // Load output (LM head) — architecture-dependent name
         let output_name = config.output_name();
         let output = weights
             .tensors
             .get(output_name)
-            .map(|tensor_data| Linear::from_f32_weight(tensor_data, None));
+            .map(|tensor_data| {
+                // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
+                // Linear layer expects [vocab_size, embed_dim], so we need to transpose
+                // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
+                let embed_dim = config.embed_dim;
+                let vocab = vocab_size as usize;
+                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+            });
 
         // Build transformer layers
         let mut layers = Vec::with_capacity(config.num_layers);
@@ -384,7 +401,14 @@ impl LlamaModel {
         let output = weights
             .tensors
             .get(output_name)
-            .map(|tensor_data| Linear::from_f32_weight(tensor_data, None));
+            .map(|tensor_data| {
+                // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
+                // Linear layer expects [vocab_size, embed_dim], so we need to transpose
+                // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
+                let embed_dim = config.embed_dim;
+                let vocab = vocab_size as usize;
+                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+            });
 
         // Build transformer layers
         let mut layers = Vec::with_capacity(config.num_layers);
