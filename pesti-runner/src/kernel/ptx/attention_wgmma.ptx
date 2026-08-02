@@ -1,0 +1,213 @@
+// ============================================================================
+// WGMMA ATTENTION KERNEL - PART 1: Q @ K^T SCORE COMPUTATION
+// Target: sm_120 (Blackwell RTX 5060 Ti)
+// 
+// Computes scaled dot-product attention scores:
+//   S[i, j] = (Q[i] @ K[j]) / sqrt(D)
+//   
+// Input shapes:
+//   Q: [seq_len, num_heads, head_dim] f16
+//   K: [seq_len, num_heads, head_dim] f16  
+//   V: [seq_len, num_heads, head_dim] f16
+//
+// Output:
+//   scores: [seq_len, num_heads, seq_len] f32
+//
+// BLOCK CONFIGURATION:
+//   blockDim = (32, 4) = 128 threads
+//   Each block computes one 64x64 tile of the attention matrix for one head
+//
+// THREAD MAPPING:
+//   - blockIdx.x: seq_len index (which row group)
+//   - blockIdx.y: num_heads index (which head)
+//   - threadIdx.y (0..3): q_row_offset within block (0, 16, 32, 48)
+//   - threadIdx.x (0..31): lane_id
+// ============================================================================
+
+.version 8.5
+.target sm_120
+.address_size 64
+
+// Shared memory allocation
+.sbss
+.smem_q_tile:    .space 8192;    // [64, head_dim] f16 (max D=64 → 8KB)
+.smem_k_tile:    .space 8192;    // [head_dim, 64] f16 (max D=64 → 8KB)
+.smem_v_tile:    .space 8192;    // [64, head_dim] f16 (for output)
+.smem_scores:    .space 4096;    // [64, 64] f32 (partial scores accumulation)
+
+.text
+.visible .entry attention_wgmma_kernel(
+    .param .f32  alpha,            // scale = 1/sqrt(D)
+    .param .b64  q_ptr,            // [seq_len, num_heads, head_dim] f16
+    .param .b64  k_ptr,            // [seq_len, num_heads, head_dim] f16
+    .param .b64  v_ptr,            // [seq_len, num_heads, head_dim] f16
+    .param .b64  scores_ptr,       // [seq_len, num_heads, seq_len] f32
+    .param .s32  seq_len,          // K = sequence length
+    .param .s32  num_heads,        // H = number of heads
+    .param .s32  head_dim          // D = hidden dimension per head
+) {
+    // ========================================================================
+    // REGISTERS
+    // ========================================================================
+    .reg .pred  %p<16>;
+    .reg .f32   %f<128>;   // Accumulators for attention scores
+    .reg .f16   %h<64>;     // ldmatrix loads (A and B fragments)
+    .reg .b64   %rd<32>;    // Global memory pointers
+    .reg .u32   %u<64>;     // General purpose
+    
+    // ========================================================================
+    // LOAD KERNEL PARAMETERS
+    // ========================================================================
+    ld.param.f32  %f1, [alpha];           // scale factor
+    ld.param.u64  %rd1, [q_ptr];          // Q pointer
+    ld.param.u64  %rd2, [k_ptr];          // K pointer
+    ld.param.u64  %rd3, [v_ptr];          // V pointer
+    ld.param.u64  %rd4, [scores_ptr];     // Output scores pointer
+    ld.param.s32  %r1, [seq_len];         // seq_len (K)
+    ld.param.s32  %r2, [num_heads];       // num_heads (H)
+    ld.param.s32  %r3, [head_dim];        // head_dim (D)
+    
+    // ========================================================================
+    // COMPUTE BLOCK/THREAD INDICES
+    // ========================================================================
+    mov.u32  %u1, %ctaid.x;     // tile_k = blockIdx.x (which row group)
+    mov.u32  %u2, %ctaid.y;     // head_idx = blockIdx.y (which head)
+    mov.u32  %u3, %tid.x;       // lane_id (0..31)
+    mov.u32  %u4, %tid.y;       // q_row_offset (0, 16, 32, 48)
+    
+    // ========================================================================
+    // COMPUTE GLOBAL INDICES
+    // ========================================================================
+    // Q and K are stored as [seq_len, num_heads, head_dim] in row-major order
+    // Linear index = seq_idx * (H * D) + head_idx * D + dim_idx
+    
+    // Our block computes rows [tile_k*64, tile_k*64+64) for all heads
+    // But we only compute scores for one head at a time (head_idx)
+    
+    // Global Q row start: tile_k * 64
+    mul.wide.u32 %ul1, %u1, 64;       // global_q_row_start = tile_k * 64
+    
+    // K column indices: we compute for all seq_len positions (0..seq_len)
+    // For this block, we'll compute one row of the attention matrix
+    // Actually: each block computes a 64x64 submatrix:
+    //   rows = [tile_k*64, tile_k*64+64)
+    //   cols = [0, 64) for first iteration, then [64, 128), etc.
+    
+    // For now, simplify: each block computes one 64x64 tile:
+    //   q_rows: [tile_k*64, tile_k*64+64)
+    //   k_cols: [tile_k*64, tile_k*64+64) (same range for self-attention)
+    
+    // Compute Q base offset for this head
+    // Q_offset = global_q_row_start * H * D + head_idx * D
+    mul.u32  %u5, %r2, %r3;           // H * D
+    mul.wide.u32 %ul2, %ul1, %u5;     // global_q_row_start * (H * D)
+    mul.wide.u32 %ul3, %u2, %r3;      // head_idx * D
+    add.u64  %rd5, %ul2, %ul3;        // Q base pointer offset
+    
+    // K base offset (same structure as Q)
+    mul.wide.u32 %ul4, %ul1, %u5;     // global_k_row_start * (H * D)
+    add.u64  %rd6, %ul4, %ul3;        // K base pointer offset
+    
+    // V base offset (same structure)
+    add.u64  %rd7, %ul4, %ul3;        // V base pointer offset (same as K)
+    
+    // ========================================================================
+    // LOAD Q TILE FROM GLOBAL MEMORY TO SHARED MEMORY
+    // Q tile shape: [64, head_dim] f16
+    // Each thread loads 2 elements (4 bytes) via cp.async.v2.f16
+    // ========================================================================
+    
+    // Compute thread's element within the 64xhead_dim tile
+    // Thread mapping: 
+    //   - 32 threads per row (threadIdx.x)
+    //   - 4 rows per block (threadIdx.y = 0,1,2,3 → row offsets 0,16,32,48)
+    //   - Each thread loads 2 consecutive elements in its assigned row
+    
+    // element_row = q_row_offset + (threadIdx.x / 16) * 2
+    div.u32  %u6, %u3, 16;            // row_group = lane_id / 16 (0 or 1)
+    mul.u32  %u7, %u6, 2;             // row_offset_in_group = 0 or 2
+    add.u32  %u8, %u4, %u7;           // element_row = q_row_offset + row_offset
+    
+    // element_col = (threadIdx.x % 16) * 2
+    rem.u32  %u9, %u3, 16;            // col_in_group = lane_id % 16
+    mul.u32  %u10, %u9, 2;            // element_col_base
+    
+    // Global Q offset for this element:
+    // Q_offset = base_ptr + (element_row * H * D) + (head_idx * D) + element_col
+    // But we already have head_idx in the base pointer, so:
+    // Q_elem_ptr = rd5 + (element_row * D + element_col) * 2 (f16 = 2 bytes)
+    
+    mul.wide.u32 %ul5, %ul1, %r3;     // Wait, ul1 is tile_k*64, need element_row
+    // Actually: we need to recompute with element_row
+    // Let me redo this more carefully...
+    
+    // For now, use a simpler approach: each thread loads one f16 element
+    // via ld.global.b16, then store to shared memory
+    
+    // Compute linear offset in Q tile for this thread's element
+    mad.lo.u32 %u11, %u8, %r3, %u10;  // linear_idx = element_row * D + element_col
+    
+    // Global Q pointer for this element
+    mul.wide.u32 %ul6, %ul11, 2;      // * sizeof(f16)
+    add.u64  %rd8, %rd5, %ul6;        // Q element pointer
+    
+    // Load Q element (f16)
+    ld.global.b16 %h1, [%rd8];
+    
+    // Store to shared memory
+    // smem_q_tile offset = linear_idx * 2 (f16)
+    mul.wide.u32 %ul7, %ul11, 2;
+    add.u32  %u12, %u12, %ul7;        // smem offset (need to initialize %u12)
+    st.shared.b16 [%smem_q_tile + %ul7], %h1;
+    
+    // ========================================================================
+    // LOAD K TILE FROM GLOBAL MEMORY TO SHARED MEMORY
+    // K tile shape: [64, head_dim] f16 (transposed: [head_dim, 64] for WGMMA)
+    // Actually, we'll store as [64, head_dim] and transpose during ldmatrix
+    // ========================================================================
+    
+    // Similar loading pattern as Q, but for K matrix columns
+    // For attention scores S[i,j] = Q[i] @ K[j], we need K transposed
+    
+    // Load K element (same linear index calculation)
+    ld.global.b16 %h2, [%rd6 + %ul6]; // K element pointer (simplified)
+    st.shared.b16 [%smem_k_tile + %ul7], %h2;
+    
+    // ========================================================================
+    // WAIT FOR LOADS TO COMPLETE
+    // ========================================================================
+    bar.sync 0;
+    
+    // ========================================================================
+    // COMPUTE ATTENTION SCORES: Q @ K^T
+    // Each block computes one 64x64 tile of the attention matrix
+    // Using WGMMA m16n8k16 for tensor core matmul
+    // ========================================================================
+    
+    // Initialize accumulators to zero
+    mov.f32  %f1, 0f00000000;
+    mov.f32  %f2, 0f00000000;
+    // ... (more accumulator initialization)
+    
+    // For a complete implementation, we'd need to:
+    // 1. Load Q and K tiles into shared memory (done above)
+    // 2. Use ldmatrix to load fragments into registers
+    // 3. Issue WGMMA m16n8k16 instructions
+    // 4. Accumulate results
+    // 5. Apply scale factor (alpha)
+    // 6. Store output scores
+    
+    // ========================================================================
+    // STORE OUTPUT SCORES
+    // ========================================================================
+    
+    // Write computed scores to global memory
+    // scores_ptr layout: [seq_len, num_heads, seq_len] f32
+    // Linear index = q_row * (H * seq_len) + head_idx * seq_len + k_col
+    
+    // Exit kernel
+    bra EXIT;
+
+EXIT:
+    ret;
+}

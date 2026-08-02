@@ -1,0 +1,13 @@
+// ============================================================================
+// TCGEN05 ATTENTION KERNEL - PLACEHOLDER FOR DATA CENTER BLACKWELL (B200)
+// Target: sm_100 (datacenter Blackwell)
+// 
+// This is a stub PTX file for tcgen05 tensor core architecture.
+// The kernel computes scaled dot-product attention using tcgen05 instructions.
+// ============================================================================
+
+.version ^17.0
+.target sm_100
+
+// TODO: Implement actual tcgen05 attention kernel
+// For now, this is a placeholder to satisfy the build system
