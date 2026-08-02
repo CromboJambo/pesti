@@ -667,9 +667,12 @@ impl GgufHeader {
 
     /// Extract embedding/vector dimension.
     pub fn embedding_length(&self) -> Option<u32> {
+        // Try llama-style keys first (most common)
         self.get_kv_u32("llama.embedding_length")
             .or_else(|| self.get_kv_u32("embedding_length"))
             .or_else(|| self.get_kv_u32("n_embd"))
+            // Then try qwen2-specific key
+            .or_else(|| self.get_kv_u32("qwen2.embedding_length"))
     }
 
     /// Extract block count (number of layers).
@@ -677,6 +680,7 @@ impl GgufHeader {
         self.get_kv_u32("llama.block_count")
             .or_else(|| self.get_kv_u32("block_count"))
             .or_else(|| self.get_kv_u32("n_layer"))
+            .or_else(|| self.get_kv_u32("qwen2.block_count"))
     }
 
     /// Extract attention head count.
