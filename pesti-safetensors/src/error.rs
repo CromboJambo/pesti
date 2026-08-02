@@ -10,6 +10,12 @@ pub enum SafetensorsSchemaError {
 
     #[error("schema initialization failed: {0}")]
     SchemaError(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("internal safetensors error: {0}")]
+    Internal(String),
 }
 
 #[derive(Debug, Error)]
