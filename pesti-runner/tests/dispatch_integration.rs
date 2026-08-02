@@ -278,7 +278,7 @@ fn test_dispatch_conformance_real_model() {
         return;
     }
 
-    println!("\n=== Conformance: dispatch vs CPU baseline ===");
+    println!("\n=== Conformance: dispatch vs CPU baseline (Q4_K_M) ===");
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
@@ -330,7 +330,72 @@ fn test_dispatch_conformance_real_model() {
         panic!("Conformance failed: max diff {:.6e} exceeds tolerance 1e-2", max_diff);
     }
 
-    println!("✅ CPU and dispatch outputs match within tolerance");
+    println!("✅ Q4_K_M CPU and dispatch outputs match within tolerance");
+}
+
+#[test]
+fn test_dispatch_conformance_q8_0() {
+    // Use conformance corpus model (Q8_0 quantization)
+    let model_path = std::path::Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q8_0.gguf");
+    
+    if !model_path.exists() {
+        println!("Skipping conformance test: Q8_0 conformance corpus not found");
+        return;
+    }
+
+    println!("\n=== Conformance: dispatch vs CPU baseline (Q8_0) ===");
+    println!("Model: {}", model_path.display());
+
+    // Load CPU baseline
+    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+
+    // Load dispatch model
+    let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    dispatch_model.enable_dispatch();
+
+    assert!(dispatch_model.can_use_dispatch(), "Dispatch should be enabled");
+
+    // Test with token 0 (BOS)
+    let token: u32 = 0;
+
+    // CPU path
+    let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
+
+    // Dispatch path
+    let dispatch_hidden = dispatch_model.llama_model.embed(token, 0).expect("Embed failed");
+    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("Forward failed");
+    let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("Output head failed");
+
+    // Compare with tolerance (1e-2 accounts for f16 precision loss)
+    if cpu_logits.len() != dispatch_logits.len() {
+        panic!(
+            "Length mismatch: CPU len={} vs Dispatch len={}",
+            cpu_logits.len(), dispatch_logits.len()
+        );
+    }
+
+    let mut max_diff = 0.0f32;
+    let mut max_idx = 0usize;
+
+    for (i, (a, b)) in cpu_logits.iter().zip(dispatch_logits.iter()).enumerate() {
+        let diff = (a - b).abs();
+        if diff > max_diff {
+            max_diff = diff;
+            max_idx = i;
+        }
+    }
+
+    println!("Max abs diff: {:.6e} at index {}", max_diff, max_idx);
+    println!(
+        "CPU[{}]={:.8}, Dispatch[{}]={:.8}",
+        max_idx, cpu_logits[max_idx], max_idx, dispatch_logits[max_idx]
+    );
+
+    if max_diff > 1e-2 {
+        panic!("Conformance failed: max diff {:.6e} exceeds tolerance 1e-2", max_diff);
+    }
+
+    println!("✅ Q8_0 CPU and dispatch outputs match within tolerance");
 }
 
 #[test]
