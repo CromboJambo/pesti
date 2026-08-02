@@ -270,27 +270,22 @@ fn test_dispatch_vs_cpu_output() {
 
 #[test]
 fn test_dispatch_conformance_real_model() {
-    // Find a real GGUF model on disk
-    let model_path = std::env::vars()
-        .find(|(k, _)| k == "HOME")
-        .map(|(_, home)| format!("{}/.lmstudio/.internal/bundled-models/nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.Q4_K_M.gguf", home))
-        .unwrap_or_else(|| "~/.lmstudio/...".to_string());
-
-    let path = std::path::Path::new(&model_path);
+    // Use conformance corpus model (Q4_K_M quantization)
+    let model_path = std::path::Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     
-    if !path.exists() {
-        println!("Skipping conformance test: no real GGUF model found at {}", model_path);
+    if !model_path.exists() {
+        println!("Skipping conformance test: conformance corpus not found");
         return;
     }
 
     println!("\n=== Conformance: dispatch vs CPU baseline ===");
-    println!("Model: {}", model_path);
+    println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(path).expect("Failed to load GGUF");
+    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
-    let mut dispatch_model = CpuModel::load_gguf(path).expect("Failed to load GGUF");
+    let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
     dispatch_model.enable_dispatch();
 
     assert!(dispatch_model.can_use_dispatch(), "Dispatch should be enabled");
@@ -353,4 +348,75 @@ fn test_dispatch_cpu_fallback() {
         .expect("dispatch should fall back to CPU");
     assert_eq!(result.len(), hidden.len(), "Dispatch output shape mismatch");
     println!("Dispatch fallback output shape: {}", result.len());
+}
+
+#[test]
+fn test_dispatch_conformance_f16_model() {
+    use pesti_runner::model::CpuModel;
+    
+    let model_path = std::path::Path::new(
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-f16.gguf"
+    );
+    
+    if !model_path.exists() {
+        println!("Skipping conformance test: F16 model not found");
+        return;
+    }
+
+    println!("
+=== Conformance: dispatch vs CPU baseline (F16 model) ===");
+    println!("Model: {}", model_path.display());
+
+    // Load CPU baseline
+    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+
+    // Load dispatch model
+    let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    dispatch_model.enable_dispatch();
+
+    assert!(dispatch_model.can_use_dispatch(), "Dispatch should be enabled");
+
+    // Test with token 0 (BOS)
+    let token: u32 = 0;
+
+    // CPU path
+    let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
+    println!("CPU logits shape: {}", cpu_logits.len());
+
+    // Dispatch path
+    let dispatch_hidden = dispatch_model.llama_model.embed(token, 0).expect("Embed failed");
+    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("Forward failed");
+    let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("Output head failed");
+    println!("Dispatch logits shape: {}", dispatch_logits.len());
+
+    // Compare with tolerance (1e-2 accounts for f16 precision loss)
+    if cpu_logits.len() != dispatch_logits.len() {
+        panic!(
+            "Length mismatch: CPU len={} vs Dispatch len={}",
+            cpu_logits.len(), dispatch_logits.len()
+        );
+    }
+
+    let mut max_diff = 0.0f32;
+    let mut max_idx = 0usize;
+
+    for (i, (a, b)) in cpu_logits.iter().zip(dispatch_logits.iter()).enumerate() {
+        let diff = (a - b).abs();
+        if diff > max_diff {
+            max_diff = diff;
+            max_idx = i;
+        }
+    }
+
+    println!("Max abs diff: {:.6e} at index {}", max_diff, max_idx);
+    println!(
+        "CPU[{}]={:.8}, Dispatch[{}]={:.8}",
+        max_idx, cpu_logits[max_idx], max_idx, dispatch_logits[max_idx]
+    );
+
+    if max_diff > 1e-2 {
+        panic!("Conformance failed: max diff {:.6e} exceeds tolerance 1e-2", max_diff);
+    }
+
+    println!("✅ CPU and dispatch outputs match within tolerance");
 }
