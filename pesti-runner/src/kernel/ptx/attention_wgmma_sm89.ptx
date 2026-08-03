@@ -1,0 +1,107 @@
+// ============================================================================
+// WGMMA ATTENTION KERNEL for sm_8.9 (Ada Lovelace - RTX 4070 Ti SUPER)
+// ============================================================================
+
+.version 8.7
+.target sm_89
+.address_size 64
+
+.visible .entry attention_wgmma_kernel(
+    .param .u64 alpha_ptr,
+    .param .u64 q_ptr,
+    .param .u64 k_ptr,
+    .param .u64 beta_ptr,
+    .param .u64 s_ptr,
+    .param .u32 seq_q,
+    .param .u32 seq_k,
+    .param .u32 head_dim
+) {
+    .reg .b32 %r<20>;
+    .reg .b64 %rd<30>;
+
+    // Shared memory for Q and K tiles
+    .shared .align 128 .b8 __shared_q[8192];
+    .shared .align 128 .b8 __shared_k[8192];
+
+    // Load parameters
+    ld.param.u64 %rd1, [alpha_ptr];
+    ld.param.u64 %rd2, [q_ptr];
+    ld.param.u64 %rd3, [k_ptr];
+    ld.param.u64 %rd4, [beta_ptr];
+    ld.param.u64 %rd5, [s_ptr];
+    ld.param.u32 %r1, [seq_q];
+    ld.param.u32 %r2, [seq_k];
+    ld.param.u32 %r3, [head_dim];
+
+    // Get thread/block indices
+    mov.u32 %r4, %tid.x;
+    mov.u32 %r5, %ctaid.x;
+    mov.u32 %r6, %ctaid.y;
+
+    // Compute tile coordinates
+    mul.lo.u32 %r7, %r6, 64;
+    mul.lo.u32 %r8, %r5, 64;
+
+    // Output position
+    add.u32 %r9, %r7, %r4;
+    and.b32 %r10, %r4, 63;
+
+    // Bounds check
+    setp.gt.u32 %p1, %r9, %r1;
+    @%p1 bra .L_exit;
+
+    add.u32 %r11, %r8, %r10;
+    setp.gt.u32 %p2, %r11, %r2;
+    @%p2 bra .L_exit;
+
+    // Load Q tile to shared memory
+    shl.b64 %rd6, %r9, 1;
+    mad.lo.u64 %rd7, %rd6, %r3, %rd2;
+    ld.global.f16 %h1, [%rd7];
+    
+    // Store to shared Q
+    mul.lo.u32 %r12, %r10, 64;
+    add.u32 %r13, %r12, %r4;
+    shl.b64 %rd8, %r13, 1;
+    mov.u64 %rd9, __shared_q;
+    add.u64 %rd10, %rd9, %rd8;
+    st.global.f16 [%rd10], %h1;
+
+    bar.sync 0;
+
+    // Load K tile to shared memory
+    add.u32 %r14, %r8, %r10;
+    shl.b64 %rd11, %r14, 1;
+    mad.lo.u64 %rd12, %rd11, %r3, %rd3;
+    ld.global.f16 %h2, [%rd12];
+
+    mul.lo.u32 %r15, %r10, 64;
+    add.u32 %r16, %r15, %r4;
+    shl.b64 %rd13, %r16, 1;
+    mov.u64 %rd14, __shared_k;
+    add.u64 %rd15, %rd14, %rd13;
+    st.global.f16 [%rd15], %h2;
+
+    bar.sync 0;
+
+    // Simple dot product (placeholder - not real WGMMA)
+    mov.b32 %r17, 0x3fb00000;
+
+    .loop
+        add.b32 %r17, %r17, %r1;
+        sub.b32 %r18, %r3, 1;
+        setp.le.u32 %p3, %r18, 0;
+        @%p3 bra .L_end_loop;
+    .endloop
+
+.L_end_loop:
+    // Store output
+    mul.lo.u32 %r19, %r9, %r2;
+    add.u32 %r20, %r19, %r11;
+    shl.b64 %rd16, %r20, 2;
+    mad.lo.u64 %rd17, %rd16, 1, %rd5;
+    st.global.f32 [%rd17], %r17;
+
+.L_exit:
+    ret;
+}
