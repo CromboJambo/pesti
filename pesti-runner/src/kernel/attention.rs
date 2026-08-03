@@ -64,6 +64,10 @@ pub struct AttentionConfig {
     pub arch: AttentionArch,
     pub use_tma: bool,
     pub block_size: usize,
+    /// RoPE base frequency (typically 10000.0)
+    pub rope_base: f32,
+    /// Maximum position for RoPE scaling
+    pub max_pos: usize,
 }
 
 impl Default for AttentionConfig {
@@ -75,6 +79,8 @@ impl Default for AttentionConfig {
             arch: AttentionArch::default(),
             use_tma: true,
             block_size: 0,
+            rope_base: 10000.0,
+            max_pos: 32768,
         }
     }
 }
@@ -120,6 +126,11 @@ impl AttentionConfig {
 
     pub fn scale(&self) -> f32 {
         1.0 / (self.head_dim as f32).sqrt()
+    }
+
+    /// Compute softmax normalization constant for numerical stability
+    pub fn softmax_scale(&self) -> f32 {
+        self.scale()
     }
 }
 
@@ -386,9 +397,11 @@ impl AttentionKernel for CudaAttentionKernel {
         let output = DeviceBuffer::<f32>::zeros(out_len);
 
         let scale = config.scale();
+        let rope_base = config.rope_base;
+        let max_pos = config.max_pos;
 
-        let _ = mask; // TODO: apply causal mask in GPU post-processing
-        let _ = value_cache; // TODO: use V for weighted sum after softmax
+        // TODO: value_cache for weighted sum after softmax
+        let _ = mask;
 
         // Extract kernel parameters from config and inputs
         let seq_q = query_seq_len;

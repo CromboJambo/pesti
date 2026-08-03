@@ -453,6 +453,8 @@ impl DispatchContext {
             arch: AttentionArch::default(),
             use_tma: true,
             block_size: 0,
+            rope_base: 10000.0,
+            max_pos: 32768,
         };
 
         // Convert query to device buffer
