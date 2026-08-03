@@ -391,7 +391,7 @@ pub fn delta_minimize(expected: &[u8], actual: &[u8]) -> DivergenceInfo {
 }
 
 /// Information about where two outputs diverge.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DivergenceInfo {
     pub divergence_offset: Option<usize>,
     pub changes: Vec<DivergenceChange>,
@@ -399,9 +399,213 @@ pub struct DivergenceInfo {
     pub total_bytes_actual: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DivergenceChange {
     pub position: usize,
     pub expected: u8,
     pub actual: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_hash_deterministic() {
+        let data = b"test data";
+        let hash1 = simple_hash(data);
+        let hash2 = simple_hash(data);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_simple_hash_different_inputs() {
+        let hash1 = simple_hash(b"data1");
+        let hash2 = simple_hash(b"data2");
+        // Different inputs should produce different hashes (collision probability is low)
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_argmax_simple() {
+        let v = vec![1.0, 3.0, 2.0];
+        assert_eq!(argmax(&v), 1); // Index of max value (3.0)
+    }
+
+    #[test]
+    fn test_argmax_tie() {
+        let v = vec![2.0, 2.0, 1.0];
+        // max_by returns the last occurrence when values are equal
+        assert_eq!(argmax(&v), 1);
+    }
+
+    #[test]
+    fn test_argmax_single_element() {
+        let v = vec![5.0];
+        assert_eq!(argmax(&v), 0);
+    }
+
+    #[test]
+    fn test_delta_minimize_no_differences() {
+        let expected = b"hello";
+        let actual = b"hello";
+        let info = delta_minimize(expected, actual);
+
+        assert!(info.changes.is_empty());
+        assert_eq!(info.divergence_offset, None);
+        assert_eq!(info.total_bytes_expected, 5);
+        assert_eq!(info.total_bytes_actual, 5);
+    }
+
+    #[test]
+    fn test_delta_minimize_single_difference() {
+        let expected = b"hello";
+        let actual = b"hella";
+        let info = delta_minimize(expected, actual);
+
+        assert_eq!(info.changes.len(), 1);
+        assert_eq!(info.changes[0].position, 4);
+        assert_eq!(info.changes[0].expected, b'o');
+        assert_eq!(info.changes[0].actual, b'a');
+    }
+
+    #[test]
+    fn test_delta_minimize_multiple_differences() {
+        let expected = b"abcdef";
+        let actual = b"axcdef";
+        let info = delta_minimize(expected, actual);
+
+        assert_eq!(info.changes.len(), 1);
+        assert_eq!(info.changes[0].position, 1);
+    }
+
+    #[test]
+    fn test_delta_minimize_different_lengths() {
+        let expected = b"hello";
+        let actual = b"hell";
+        let info = delta_minimize(expected, actual);
+
+        assert_eq!(info.total_bytes_expected, 5);
+        assert_eq!(info.total_bytes_actual, 4);
+    }
+
+    #[test]
+    fn test_delta_minimize_empty_slices() {
+        let expected: &[u8] = &[];
+        let actual: &[u8] = &[];
+        let info = delta_minimize(expected, actual);
+
+        assert!(info.changes.is_empty());
+        assert_eq!(info.total_bytes_expected, 0);
+        assert_eq!(info.total_bytes_actual, 0);
+    }
+
+    #[test]
+    fn test_conformance_config_default_values() {
+        let config = ConformanceConfig {
+            corpus_dir: PathBuf::from("/tmp"),
+            reference_llama_cpp: None,
+            floor_pass_count: 10,
+            floor_file: None,
+        };
+
+        assert_eq!(config.floor_pass_count, 10);
+        assert!(config.reference_llama_cpp.is_none());
+        assert!(config.floor_file.is_none());
+    }
+
+    #[test]
+    fn test_conformance_result_creation() {
+        let result = ConformanceResult {
+            total_models: 5,
+            passed: vec!["model1".to_string(), "model2".to_string()],
+            failures: vec![],
+        };
+
+        assert_eq!(result.total_models, 5);
+        assert_eq!(result.passed.len(), 2);
+        assert!(result.failures.is_empty());
+    }
+
+    #[test]
+    fn test_path_ends_with_true() {
+        let path = Path::new("/tmp/model.gguf");
+        assert!(path_ends_with(path, ".gguf"));
+    }
+
+    #[test]
+    fn test_path_ends_with_false() {
+        let path = Path::new("/tmp/model.bin");
+        assert!(!path_ends_with(path, ".gguf"));
+    }
+
+    #[test]
+    fn test_path_ends_with_empty_suffix() {
+        let path = Path::new("/tmp/model");
+        assert!(path_ends_with(path, ""));
+    }
+
+    #[test]
+    fn test_conformance_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test error");
+        let conformance_err: ConformanceError = io_err.into();
+        
+        match conformance_err {
+            ConformanceError::Io(_) => {},
+            _ => panic!("Expected Io variant"),
+        }
+    }
+
+    #[test]
+    fn test_conformance_error_from_utf8() {
+        let utf8_err = String::from_utf8(vec![0xFF, 0xFE]).unwrap_err();
+        let conformance_err: ConformanceError = utf8_err.into();
+        
+        match conformance_err {
+            ConformanceError::Utf8(_) => {},
+            _ => panic!("Expected Utf8 variant"),
+        }
+    }
+
+    #[test]
+    fn test_divergence_info_clone() {
+        let change = DivergenceChange {
+            position: 5,
+            expected: b'a',
+            actual: b'b',
+        };
+
+        let info = DivergenceInfo {
+            divergence_offset: Some(0),
+            changes: vec![change.clone()],
+            total_bytes_expected: 10,
+            total_bytes_actual: 10,
+        };
+
+        let cloned = info.clone();
+        assert_eq!(cloned.divergence_offset, info.divergence_offset);
+        assert_eq!(cloned.changes.len(), info.changes.len());
+    }
+
+    #[test]
+    fn test_delta_minimize_prefix_difference() {
+        let expected = b"abcdef";
+        let actual = b"xbcdef";
+        let info = delta_minimize(expected, actual);
+
+        assert_eq!(info.changes.len(), 1);
+        assert_eq!(info.changes[0].position, 0);
+        assert_eq!(info.changes[0].expected, b'a');
+        assert_eq!(info.changes[0].actual, b'x');
+    }
+
+    #[test]
+    fn test_delta_minimize_suffix_difference() {
+        let expected = b"abc";
+        let actual = b"abd";
+        let info = delta_minimize(expected, actual);
+
+        assert_eq!(info.changes.len(), 1);
+        assert_eq!(info.changes[0].position, 2);
+    }
 }
