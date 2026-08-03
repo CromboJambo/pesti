@@ -29,3 +29,4 @@ pesti-gguf/src/string_case.tmp
 lms-models/
 test_real_file_bin
 tarpaulin-report.json
+test_models/*.gguf
