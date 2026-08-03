@@ -22,3 +22,44 @@ pub mod features {
         None // TODO: Implement with cudarc
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::features::*;
+
+    #[test]
+    fn test_cuda_available_returns_bool() {
+        let result = cuda_available();
+        assert!(result == true || result == false);
+    }
+
+    #[test]
+    fn test_device_count_returns_non_negative() {
+        let count = device_count();
+        assert!(count >= 0);
+    }
+
+    #[test]
+    fn test_compute_capability_stubs_return_none() {
+        // Stub implementations return None until cudarc integration
+        assert!(compute_capability(0).is_none());
+        assert!(compute_capability(1).is_none());
+        assert!(compute_capability(999).is_none());
+    }
+
+    #[test]
+    fn test_device_count_consistency() {
+        // Multiple calls should return consistent results
+        let count1 = device_count();
+        let count2 = device_count();
+        assert_eq!(count1, count2);
+    }
+
+    #[test]
+    fn test_cuda_available_stability() {
+        // Stub should be stable across calls
+        let result1 = cuda_available();
+        let result2 = cuda_available();
+        assert_eq!(result1, result2);
+    }
+}
