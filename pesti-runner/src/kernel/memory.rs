@@ -193,19 +193,35 @@ impl MemoryBackend for CpuMemoryBackend {
 pub struct CudaMemoryBackend {
     stream: std::sync::Arc<cuda_core::CudaStream>,
     device_info: crate::cuda_runtime::CudaDeviceInfo,
+    enabled: bool,
 }
 
 impl CudaMemoryBackend {
     pub fn new(stream: std::sync::Arc<cuda_core::CudaStream>) -> Self {
+        // Try to get device info from the stream's context
+        let device_info = crate::cuda_runtime::CudaDeviceInfo {
+            ordinal: 0,
+            name: String::new(),
+            compute_capability: (0, 0),
+            total_memory: 0,
+            free_memory: 0,
+        };
+        
+        // Try to initialize CUDA driver
+        let enabled = unsafe {
+            match cuda_core::init(0) {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!("⚠️  CUDA init failed (backend disabled): {}", e);
+                    false
+                }
+            }
+        };
+
         Self {
             stream,
-            device_info: crate::cuda_runtime::CudaDeviceInfo {
-                ordinal: 0,
-                name: String::new(),
-                compute_capability: (0, 0),
-                total_memory: 0,
-                free_memory: 0,
-            },
+            device_info,
+            enabled,
         }
     }
 
@@ -213,17 +229,63 @@ impl CudaMemoryBackend {
         stream: std::sync::Arc<cuda_core::CudaStream>,
         device_info: crate::cuda_runtime::CudaDeviceInfo,
     ) -> Self {
-        Self { stream, device_info }
+        Self {
+            stream,
+            device_info,
+            enabled: true,
+        }
     }
 
     pub fn device_info(&self) -> &crate::cuda_runtime::CudaDeviceInfo {
         &self.device_info
     }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Try to initialize device info from runtime
+    pub fn try_init_device_info(&mut self) {
+        if !self.enabled {
+            return;
+        }
+
+        // Get device info from CUDA runtime
+        match crate::cuda_runtime::CudaRuntime::for_default_device() {
+            Ok(rt) => {
+                let info = rt.device_info().clone();
+                eprintln!("✅ Device info: {} (sm_{}.{}, {} GiB)", 
+                    info.name, info.compute_capability.0, info.compute_capability.1,
+                    info.total_memory / (1024*1024*1024));
+                self.device_info = info;
+            }
+            Err(e) => {
+                eprintln!("⚠️  Could not get device info: {}", e);
+            }
+        }
+    }
 }
 
 impl MemoryBackend for CudaMemoryBackend {
     fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
+        if !self.enabled {
+            eprintln!("⚠️  CUDA backend disabled, falling back to host allocation");
+            // Fallback: allocate on CPU and copy (for testing)
+            return Err(MemoryError::AllocationFailed {
+                requested: bytes,
+                max: 0, // Signal that GPU is unavailable
+            });
+        }
+
         let total_mem = self.device_info.total_memory as usize;
+        if total_mem == 0 {
+            eprintln!("⚠️  Device memory unknown, using fallback");
+            return Err(MemoryError::AllocationFailed {
+                requested: bytes,
+                max: 0,
+            });
+        }
+
         if bytes > total_mem {
             return Err(MemoryError::AllocationFailed {
                 requested: bytes,
@@ -234,7 +296,10 @@ impl MemoryBackend for CudaMemoryBackend {
         let ptr = unsafe {
             cuda_core::memory::malloc_async(self.stream.cu_stream(), bytes)
         }
-        .map_err(|e| MemoryError::Cuda(format!("cuMemAllocAsync failed: {e}")))?;
+        .map_err(|e| {
+            eprintln!("❌ cuMemAllocAsync failed: {}", e);
+            MemoryError::Cuda(format!("cuMemAllocAsync: {}", e))
+        })?;
 
         Ok(RawHandle(ptr as u64))
     }

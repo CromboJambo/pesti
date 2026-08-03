@@ -11,6 +11,7 @@
 use crate::cuda_runtime::CudaDeviceInfo;
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::kvcache::{Kvcache, KvcacheSlice};
+use crate::kernel::rope::CudaRopeKernel;
 use half::f16;
 use std::sync::Arc;
 
@@ -396,13 +397,6 @@ impl AttentionKernel for CudaAttentionKernel {
         let out_len = query_seq_len * num_heads * cache_seq_len;
         let output = DeviceBuffer::<f32>::zeros(out_len);
 
-        let scale = config.scale();
-        let rope_base = config.rope_base;
-        let max_pos = config.max_pos;
-
-        // TODO: value_cache for weighted sum after softmax
-        let _ = mask;
-
         // Extract kernel parameters from config and inputs
         let seq_q = query_seq_len;
         let seq_k = cache_seq_len;
@@ -410,7 +404,7 @@ impl AttentionKernel for CudaAttentionKernel {
         let scale = config.scale();
 
         // Launch WGMMA attention kernel (compute Q @ K^T / sqrt(D))
-        // PTX expects: (scale, q_ptr, k_ptr, s_ptr, seq_q, seq_k, head_dim)
+        // PTX expects: (alpha=scale, q_ptr, k_ptr, beta=0, s_ptr, seq_q, seq_k, head_dim)
         match self.arch {
             AttentionArch::Wgmma => {
                 unsafe {
@@ -423,33 +417,41 @@ impl AttentionKernel for CudaAttentionKernel {
                     // Calculate grid dimensions (64x64 tiles)
                     let grid_x = (seq_k as u32).div_ceil(64);
                     let grid_y = (seq_q as u32).div_ceil(64);
-                    let block_size = 128; // (32, 4) = 128 threads
+                    let block_size = 128; // 128 threads per block
 
-                    // Build kernel parameters
-                    // Note: cuda_core::launch_kernel expects *mut c_void pointers
-                    let scale_val = scale.to_bits();
+                    // Build kernel parameters - store values so addresses don't go out of scope
+                    let alpha_val = scale.to_bits();
+                    let beta_val = 0.0f32; // No bias term in attention logits
                     let seq_q_val = seq_q as u32;
                     let seq_k_val = seq_k as u32;
                     let head_dim_val = head_dim as u32;
 
-                    let mut kernel_params: Vec<*mut std::ffi::c_void> = vec![
-                        &scale_val as *const u32 as *mut std::ffi::c_void,
-                        &q_ptr as *const u64 as *mut std::ffi::c_void,
-                        &k_ptr as *const u64 as *mut std::ffi::c_void,
-                        &s_ptr as *const u64 as *mut std::ffi::c_void,
-                        &seq_q_val as *const u32 as *mut std::ffi::c_void,
-                        &seq_k_val as *const u32 as *mut std::ffi::c_void,
-                        &head_dim_val as *const u32 as *mut std::ffi::c_void,
+                    // Create aligned arrays to hold parameter addresses
+                    // These stay in scope for the duration of launch_kernel
+                    let _kernel_params_buf = [0usize; 8];
+                    let param_ptrs: [*const std::ffi::c_void; 8] = [
+                        &alpha_val as *const u32 as *const std::ffi::c_void,
+                        &(q_ptr as u64) as *const u64 as *const std::ffi::c_void,
+                        &(k_ptr as u64) as *const u64 as *const std::ffi::c_void,
+                        &beta_val as *const f32 as *const std::ffi::c_void,
+                        &(s_ptr as u64) as *const u64 as *const std::ffi::c_void,
+                        &seq_q_val as *const u32 as *const std::ffi::c_void,
+                        &seq_k_val as *const u32 as *const std::ffi::c_void,
+                        &head_dim_val as *const u32 as *const std::ffi::c_void,
                     ];
+
+                    // Convert to mutable pointers for launch_kernel
+                    let mut param_ptrs_mut: [*mut std::ffi::c_void; 8] = 
+                        param_ptrs.map(|p| p as *mut std::ffi::c_void);
 
                     // Launch WGMMA tensor core kernel
                     cuda_core::launch_kernel(
                         self.function.cu_function(),
                         (grid_x, grid_y, 1),
                         (block_size, 1, 1),
-                        0, // dynamic shared memory (8 KiB configured in PTX)
+                        0, // dynamic shared memory (we use static .shared in PTX)
                         self.stream.cu_stream(),
-                        &mut kernel_params,
+                        &mut param_ptrs_mut,
                     )
                     .map_err(|e| AttentionError::LaunchFailed(format!("WGMMA launch failed: {e}")))?;
 
@@ -457,6 +459,11 @@ impl AttentionKernel for CudaAttentionKernel {
                     self.stream
                         .synchronize()
                         .map_err(|e| AttentionError::LaunchFailed(format!("Stream sync failed: {e}")))?;
+                    
+                    // Log successful kernel launch
+                    eprintln!("[WGMMA] Launched attention kernel: Q[{seq_q}] x K[{seq_k}] -> S[{seq_q}x{seq_k}]");
+                    eprintln!("  Grid: ({grid_x}, {grid_y}, 1), Block: {block_size} threads");
+                    eprintln!("  Scale: {scale:.6}, Head dim: {head_dim}");
                 }
             },
             AttentionArch::Tcgen05 => {

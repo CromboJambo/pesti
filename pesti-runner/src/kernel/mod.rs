@@ -70,9 +70,11 @@ pub mod candle_bridge;
 pub mod device_buf;
 pub mod dispatch;
 pub mod gemm;
+pub mod gemm_cutlass;
 pub mod kvcache;
 pub mod memory;
 pub mod mistralrs_backend;
+pub mod rope;
 pub mod tma_bridge;
 pub mod tma_descriptor;
 
