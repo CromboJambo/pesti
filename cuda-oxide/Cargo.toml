@@ -8,6 +8,7 @@ description.workspace = true
 
 [dependencies]
 cudarc.workspace = true
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core" }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
