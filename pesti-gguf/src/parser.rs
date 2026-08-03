@@ -201,14 +201,12 @@ fn read_kv_value_v3<R: Read + Seek>(
         }
         GgufValueType::Array => {
             // Array: read element type (u32), then count (u64), then elements
-            ///
-            /// GGUF v3 array format per llama.cpp:
-            /// - Element type: u32 - identifies type of array elements
-            /// - Count: u64 - number of elements
-            /// - Elements: serialized based on element type
-            ///
-            /// Note: String array elements use u64 lengths (not u32) to match
-            /// real GGUF files from llama.cpp
+            // GGUF v3 array format per llama.cpp:
+            // - Element type: u32 - identifies type of array elements
+            // - Count: u64 - number of elements
+            // - Elements: serialized based on element type
+            // Note: String array elements use u64 lengths (not u32) to match
+            // real GGUF files from llama.cpp
             let elem_type_raw = reader.read_u32::<LittleEndian>()?;
             let elem_type = GgufValueType::from_u32(elem_type_raw)
                 .ok_or(GgufError::InvalidValueType(elem_type_raw))?;
@@ -216,17 +214,16 @@ fn read_kv_value_v3<R: Read + Seek>(
             let elem_count = reader.read_u64::<LittleEndian>()? as usize;
 
             let mut elements = Vec::with_capacity(elem_count);
-            for i in 0..elem_count {
+            for _ in 0..elem_count {
                 // For each element, recursively read based on element type
                 match elem_type {
-                    GgufValueType::String => {
-                        // Real GGUF files use u64 for string array element lengths
-                        ///
-                        /// While top-level strings use u32 lengths in some GGUF versions,
-                        /// string elements inside arrays consistently use u64 lengths
-                        /// across all llama.cpp models. This matches the wire format
-                        /// specification and ensures compatibility with real model files.
-                        let str_len = reader.read_u64::<LittleEndian>()? as usize;
+                GgufValueType::String => {
+                    // Real GGUF files use u64 for string array element lengths
+                    // While top-level strings use u32 lengths in some GGUF versions,
+                    // string elements inside arrays consistently use u64 lengths
+                    // across all llama.cpp models. This matches the wire format
+                    // specification and ensures compatibility with real model files.
+                    let str_len = reader.read_u64::<LittleEndian>()? as usize;
                         let bytes = read_bytes(reader, str_len)?;
                         elements.push(GgufKvValue::String(
                             String::from_utf8(bytes).map_err(GgufError::Utf8)?,

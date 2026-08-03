@@ -4,7 +4,7 @@ use std::io::{BufWriter, Read, Seek, Write};
 use std::path::Path;
 
 use crate::error::GgufError;
-use crate::types::{GgufDtype, GgufKvPair, GgufKvValue, GgufTensorInfo, GgufValueType};
+use crate::types::{GgufKvPair, GgufKvValue, GgufTensorInfo, GgufValueType};
 
 /// GGUF file writer for serializing parsed models back to disk.
 ///
@@ -355,6 +355,7 @@ pub fn parse_and_rewrite<P: AsRef<Path>, Q: AsRef<Path>>(
 mod tests {
     use super::*;
     use crate::parser::parse_gguf;
+    use crate::types::GgufDtype;
 
     #[test]
     fn test_write_round_trip() {
