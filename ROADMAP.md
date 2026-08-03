@@ -305,99 +305,125 @@ Full dispatch infrastructure bridging the tensor kernel layer to the transformer
 
 ---
 
-## Phase 4d: WGMMA Attention Kernel (✅ Complete)
+## Phase 4d: WGMMA Attention Kernel (⚠️ Partial - TODO Implementation)
 
-**Goal:** Implement hardware-accelerated scaled dot-product attention using WGMMA tensor core instructions on Blackwell/Ada Lovelace GPUs.
+**Goal:** Implement hardware-accelerated scaled dot-product attention using WGMMA tensor core instructions.
 
-### Completed
-- [x] **PTX kernel** (`attention_wgmma.ptx`, 355 lines):
+### Completed Infrastructure ✅
+|- [x] **PTX kernel** (`attention_wgmma.ptx`, 355 lines):
   - Target: sm_120 (Blackwell RTX 5060 Ti) with JIT support for sm_89 (Ada RTX 4070)
   - Computes scaled dot-product: S = Q @ K^T / sqrt(D)
   - 64x64 tile geometry, 128 threads per block (4 warps)
   - Double-buffered shared memory: 8 KiB total (Q[64,16] + K^T[16,64])
   - cp.async prefetch for global memory coalescing
   - WGMMA m16n8k16 tensor core instructions (16 ops per K-tile iteration)
-  - Store loop for output writing (8 f32 per thread)
-
-- [x] **Rust interface** (`kernel/attention.rs`):
+|- [x] **Rust interface** (`kernel/attention.rs`):
   - `CudaAttentionKernel` struct with CUDA context management
   - `CudaAttentionKernelBuilder` for architecture selection (sm_89/sm_120)
   - `CpuAttentionKernel` CPU fallback for reference validation
-  - Attention dispatch integration in `InferenceEngine::new()`
-
-- [x] **PTX kernels**:
+|- [x] **PTX kernels**:
   - `attention_wgmma.ptx`: Main WGMMA kernel (sm_120/sm_89)
   - `attention_tcgen05.ptx`: Placeholder for datacenter Blackwell (sm_100)
-
-- [x] **Thread organization**:
+  - `attention_rope_softmax.ptx`: Fused RoPE + attention + softmax (4,369 bytes)
+|- [x] **Thread organization**:
   - Block size: (32, 4) = 128 threads
   - Grid: ceil(SeqQ/64) × ceil(SeqK/64)
   - Warp group: All 4 warps cooperate on one 64x64 tile
-  - MMA_K=16 constraint (head_dim must be multiple of 16)
-
-- [x] **Memory layout**:
-  - Shared memory per block (double-buffered):
-    - Stage 0: Q[64,16] @ offset 0 (2048B) + K^T[16,64] @ offset 2048 (2048B)
-    - Stage 1: Q[64,16] @ offset 4096 (2048B) + K^T[16,64] @ offset 6144 (2048B)
-  - Total: 8 KiB (well within 164 KiB per block limit)
-
-- [x] **Integration**:
+|- [x] **Memory layout**:
+  - Shared memory per block (double-buffered): Q[64,16] + K^T[16,64] = 8 KiB
+  - Total: well within 164 KiB per block limit
+|- [x] **Integration**:
   - Dispatch layer wired in `InferenceEngine::new()`
   - CPU fallback path via `CpuAttentionKernel`
   - Architecture detection (sm_89 vs sm_120)
 
-- [x] **Testing**:
-  - 287/287 unit tests passing (includes attention kernel tests)
-  - WGMMA GEMM tests passing (verifies tensor core path)
-  - Build verified: `cargo build --package pesti-runner` exits 0
+### 🔥 TODO: Actual Kernel Launch Implementation
 
-### Architecture
-```
-Q [SeqQ, D] f16  →  Pre-kernel RoPE  →  Q_rope [SeqQ, D] f16
-K [SeqK, D] f16  →  Pre-kernel RoPE  →  K_rope [SeqK, D] f16
+**Current state:** Placeholder returns zeros instead of computing attention scores.
 
-GPU Kernel (per head):
-  Block 0: computes S[0:64, 0:64]
-  Block 1: computes S[0:64, 64:128]
-  ...
-  
-  S_head = Q_rope_head @ K_rope_head^T / sqrt(D)
+**File:** `pesti-runner/src/kernel/attention.rs:398-401`
+
+```rust
+// TODO: Launch actual WGMMA kernel
+// For now, return placeholder output
+Ok(DeviceBuffer::<f32>::zeros(out_len))
 ```
+
+**Implementation required:**
+1. Extract parameters: `seq_q`, `seq_k`, `head_dim`, `scale`
+2. Call `self.function.launch()` with correct arguments:
+   ```rust
+   unsafe {
+       self.function.launch(
+           &[scale.to_bits(), seq_q as f32, seq_k as f32, head_dim as f32],
+           &[],  // shared memory: 8 KiB double-buffered
+           vec![query.device_ptr(), key_cache.device_ptr(), value_cache.device_ptr(), output.device_ptr()],
+       )?;
+   }
+   ```
+3. Add error handling for launch failures (fallback to CPU)
+4. Optional sync: `self.stream.synchronize()?`
+
+**Estimated effort:** 1-2 hours
 
 ### Current State
 ✅ **Build**: `cargo build --package pesti-runner` exits 0  
 ✅ **Unit tests**: 287/287 passing (includes attention kernel tests)  
 ✅ **GPU tests**: WGMMA GEMM tests passing  
-⏳ **Next**: Verify actual kernel launch with real Q/K tensors
+⚠️ **Kernel launch**: Placeholder returns zeros - GPU path untested  
 
 ### Known Limitations
 1. **Store loop simplified**: Currently stores 8 f32 per thread (may need optimization)
-2. **RoPE pre-kernel**: RoPE applied before kernel launch (not fused)
+2. **RoPE pre-kernel**: RoPE applied before kernel launch (fused version exists but unverified)
 3. **No softmax**: Computes logits only; softmax applied in CPU post-processing
 4. **Head_dim constraint**: Must be multiple of 16 (enforced by WGMMA)
+5. **GPU path untested**: Placeholder returns zeros - no actual GPU inference verified
+
+### Next Steps
+1. 🔥 **Implement kernel launch logic** - Fill in `attention.rs:398-401`
+2. ⏳ **Verify GPU inference** - Run end-to-end test with Qwen2.5 model
+3. 📊 **Benchmark speedup** - Measure actual GPU vs CPU performance
+4. 🔧 **Fix RoPE fusion** - Verify `attention_rope_softmax.ptx` with real models
+5. 🎯 **Add softmax to GPU** - Compute exp(S/scale) / sum in GPU
 
 ### Files Modified
 - `/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_wgmma.ptx` (355 lines)
 - `/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_tcgen05.ptx` (14 lines)
-- `/home/crombo/projects/pesti/pesti-runner/src/kernel/attention.rs` (~622 lines)
+- `/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax.ptx` (4,369 bytes, fused)
+- `/home/crombo/projects/pesti/pesti-runner/src/kernel/attention.rs` (~622 lines, TODO at 398-401)
 - `/home/crombo/projects/pesti/pesti-runner/src/kernel/mod.rs` (export added)
-
-### Next Steps
-1. **Fuse RoPE into kernel**: Eliminate separate pre-kernel for better performance
-2. **Add softmax**: Compute exp(S/scale) / sum in GPU
-3. **Optimize store loop**: Use coalesced stores, reduce register pressure
-4. **Benchmark**: Measure throughput vs CPU reference
-5. **Integration test**: End-to-end with real GGUF model
 
 ---
 
-## Phase 5.1: Validation & Polish (✅ Complete)
+## Phase 5.1: Validation & Polish (⚠️ Partial - Conformance Gaps)
 
-**Goal:** Fix GGUF v3 test data regression and verify conformance.
+**Goal:** Fix GGUF v3 test data regression and verify conformance across all quant types.
 
+### Completed ✅
 - [x] Fixed GGUF v3 test data regression (STRING type value + u64 key lengths)
 - [x] All 53 `pesti-gguf` tests passing
 - [x] Conformance infrastructure MVP ready for differential testing
+
+### ⚠️ Known Gaps
+
+#### K-Family Conformance Coverage: 2/8 (25%)
+**Status:** Only Q4_K_M and Q8_0 verified; 5 quant types failing with "missing output layer"
+
+| Quant Type | Status | Max Diff | Notes |
+|------------|--------|----------|-------|
+| Q2_K | ❌ FAIL | N/A | "missing output layer" error |
+| Q3_K | ❌ FAIL | N/A | "missing output layer" error |
+| Q4_0 | ❌ FAIL | N/A | "missing output layer" error |
+| **Q4_K_M** | ✅ PASSING | 0.0e0 | Byte-exact match within 1e-2 tolerance |
+| Q5_K | ❌ FAIL | N/A | "missing output layer" error |
+| Q6_K | ❌ FAIL | N/A | "missing output layer" error |
+| **Q8_0** | ✅ PASSING | 0.0e0 | Byte-exact match within 1e-2 tolerance |
+| Q5_0 | ⏸️ Skipped | N/A | URL redirect, model unavailable |
+| F16 | ⏸️ Skipped | N/A | Model file missing |
+
+**Root cause hypothesis:** Model loader not finding output tensor in lower-bit quantizations (Q2_K, Q3_K, Q4_0). Different architectures may use different tensor names (`output.weight` vs `lm_head.weight`).
+
+**Effort to fix:** 2-4 hours (add alternative tensor name detection + debug logging)
 
 ---
 
@@ -472,6 +498,81 @@ GPU Kernel (per head):
 
 - GGUF writer: 3/3 tests passing
 - SafeTensors writer: 3/3 tests passing (round-trip test is large but functional)
+
+---
+
+## Near-Term Priorities (Short-Term Goals - v0.1.5)
+
+### 🔥 Priority 1: Implement WGMMA Kernel Launch (This Week)
+**Goal:** Replace TODO placeholder with actual GPU kernel execution
+
+**File:** `pesti-runner/src/kernel/attention.rs:398-401`
+
+**Tasks:**
+- [ ] Extract parameters: `seq_q`, `seq_k`, `head_dim`, `scale`
+- [ ] Implement `self.function.launch()` call with correct arguments
+- [ ] Add error handling for launch failures (fallback to CPU)
+- [ ] Optional sync: `self.stream.synchronize()`
+
+**Estimated effort:** 1-2 hours  
+**Verification:** Run `cargo test --package pesti-runner test_dispatch_conformance_real_model`
+
+---
+
+### 🔥 Priority 2: Fix "Missing Output Layer" Conformance Error (This Week)
+**Goal:** Achieve 90%+ K-family conformance (7/8 quant types passing)
+
+**Tasks:**
+- [ ] Investigate tensor naming differences in failing models (Q2_K, Q3_K, Q4_0, Q5_K, Q6_K)
+- [ ] Add alternative output tensor name detection: `output.weight`, `lm_head.weight`, `embed_out.weight`
+- [ ] Add debug logging to show all tensor names in failing models
+- [ ] Re-run conformance tests for all K-family quantizations
+
+**Estimated effort:** 2-4 hours  
+**Verification:** Run `cargo test --package pesti-runner test_dispatch_conformance_q2_k` through `q6_k`
+
+---
+
+### ⏳ Priority 3: Verify GPU End-to-End Inference (Next Week)
+**Goal:** Confirm GPU path produces correct output with real model
+
+**Tasks:**
+- [ ] Download Qwen2.5-0.5B model (Q4_K_M)
+- [ ] Run single-token inference with GPU enabled
+- [ ] Compare output vs CPU baseline (tolerance: 1e-2)
+- [ ] Measure latency (target: <100ms per token vs ~1000μs CPU)
+
+**Estimated effort:** 2 hours  
+**Verification:** `cargo run --bin pesti-cli --model conformance-corpus/*.gguf --gpu`
+
+---
+
+### ⏳ Priority 4: Benchmark GPU Speedup (Next Week)
+**Goal:** Measure actual performance improvement vs CPU baseline
+
+**Tasks:**
+- [ ] Create benchmark harness (`benchmarks/gpu_speedup_benchmark.py`)
+- [ ] Measure tokens/sec for CPU path
+- [ ] Measure tokens/sec for GPU path
+- [ ] Profile memory bandwidth utilization
+- [ ] Document results in `PROJECT_STATUS.md`
+
+**Estimated effort:** 3 hours  
+**Target:** 3-5x speedup (650+ tok/s)
+
+---
+
+### ⏳ Priority 5: Verify RoPE Fusion Kernel (Next Week)
+**Goal:** Confirm fused `attention_rope_softmax.ptx` works correctly
+
+**Tasks:**
+- [ ] Load fused kernel PTX (4,369 bytes)
+- [ ] Run end-to-end test with Qwen2.5 model
+- [ ] Compare outputs vs separate RoPE + attention kernels
+- [ ] Verify numerical accuracy (tolerance: 1e-2)
+
+**Estimated effort:** 2 hours  
+**Verification:** Add unit test for fused kernel
 
 ---
 
