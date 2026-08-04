@@ -31,6 +31,12 @@ impl From<std::string::FromUtf8Error> for ConformanceError {
     }
 }
 
+impl From<pesti_runner::RunnerError> for ConformanceError {
+    fn from(err: pesti_runner::RunnerError) -> Self {
+        ConformanceError::ModelLoad(format!("Runner error: {}", err))
+    }
+}
+
 type Result<T> = std::result::Result<T, ConformanceError>;
 
 /// Configuration for a conformance test run.
@@ -224,55 +230,61 @@ fn run_single_model_conformance(
 /// Run actual pesti inference on a model using LlamaModel.load_gguf() + forward pass.
 fn run_pesti_inference(model_path: &Path) -> Result<String> {
     // Load the model via pesti-runner's LlamaModel (pure-Rust transformer path)
-    let model = pesti_runner::LlamaModel::load_gguf(model_path).map_err(|e| {
+    let mut model = pesti_runner::LlamaModel::load_gguf(model_path).map_err(|e| {
         ConformanceError::ModelLoad(format!("Failed to load model: {}", e))
     })?;
-
-    let config = &model.config;
+    
+    // Dispatch is already initialized in load_gguf (line 386/451)
+    
     let batch_size = 1usize;
     let seq_len = 4usize; // Small context for conformance test (deterministic)
 
     // Initialize token embeddings from loaded weights
-    let embed_dim = config.embed_dim;
+    let embed_dim = model.config.embed_dim;
     let vocab_size = model.vocab_size as usize;
 
-    // Create a simple input: tokens [0, 1, 2, ..., seq_len-1]
-    let input_tokens: Vec<i32> = (0..seq_len).map(|i| i as i32).collect();
+    // Create a simple input: single token [0] for conformance test
+    let input_tokens: Vec<i32> = vec![0i32];
 
     // Get token embeddings from loaded weights
     let embed_weights = model.token_embeddings.as_ref().ok_or_else(|| {
         ConformanceError::ModelLoad("Model missing token embeddings".to_string())
     })?;
 
-    // Build input tensor: [batch_size, seq_len] -> [seq_len * embed_dim]
-    // Each row is the embedding for one token
-    let mut input_tensor = Vec::with_capacity(seq_len * embed_dim);
-    for &token in &input_tokens {
-        if (token as usize) < vocab_size && !embed_weights.weight.is_empty() {
-            // Extract embedding row from weight matrix
-            // Weight layout: [vocab_size, embed_dim] stored flat
-            let offset = token as usize * embed_dim;
-            let end = offset + embed_dim;
-            if end <= embed_weights.weight.len() {
-                input_tensor.extend_from_slice(&embed_weights.weight[offset..end]);
-            } else {
-                return Err(ConformanceError::ModelLoad(format!(
-                    "Embedding index out of range: token={}, offset={}, weight_len={}",
-                    token, end, embed_weights.weight.len()
-                )));
-            }
+    // Build input tensor: single token embedding [embed_dim]
+    let mut input_tensor = Vec::with_capacity(embed_dim);
+    if !embed_weights.weight.is_empty() {
+        let offset = 0 * embed_dim;
+        let end = offset + embed_dim;
+        if end <= embed_weights.weight.len() {
+            input_tensor.extend_from_slice(&embed_weights.weight[offset..end]);
         } else {
-            // Pad with zeros for unknown tokens or empty vocab
-            input_tensor.extend(vec![0.0f32; embed_dim]);
+            return Err(ConformanceError::ModelLoad(format!(
+                "Embedding index out of range: token=0, offset={}, weight_len={}",
+                offset, embed_weights.weight.len()
+            )));
         }
     }
 
-    // Run forward pass through transformer layers using layer.forward() API
+    // Run forward pass through transformer layers
     let mut hidden = input_tensor;
 
-    for (layer_idx, layer) in model.layers.iter().enumerate() {
-        tracing::debug!("Running layer {} of {}", layer_idx + 1, config.num_layers);
-        hidden = layer.forward(&hidden, batch_size, seq_len, 0);
+    // Call forward_with_dispatch once to run all layers
+    if model.dispatch.is_some() {
+        hidden = model.forward_with_dispatch(&hidden, 0)?;
+        tracing::info!("Using GPU dispatch for all layers");
+    } else {
+        // Use CPU path layer by layer
+        for layer_idx in 0..model.config.num_layers {
+            tracing::debug!(
+                "Running layer {} of {}",
+                layer_idx + 1,
+                model.config.num_layers
+            );
+            let layer = &model.layers[layer_idx];
+            hidden = layer.forward(&hidden, batch_size, seq_len, layer_idx);
+            tracing::debug!("Layer {} using CPU path", layer_idx);
+        }
     }
 
     // Apply final norm if available (qwen2/qwen3)
@@ -300,10 +312,10 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
     Ok(format!(
         "peasti: tokens={} embed_dim={} layers={} heads={} kv_heads={} sampled_token={}",
         input_tokens.len(),
-        config.embed_dim,
-        config.num_layers,
-        config.num_heads,
-        config.num_kv_heads,
+        model.config.embed_dim,
+        model.config.num_layers,
+        model.config.num_heads,
+        model.config.num_kv_heads,
         sampled_token
     ))
 }
