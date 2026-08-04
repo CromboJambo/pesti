@@ -11,7 +11,6 @@
 use crate::cuda_runtime::CudaDeviceInfo;
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::kvcache::{Kvcache, KvcacheSlice};
-use crate::kernel::rope::CudaRopeKernel;
 use half::f16;
 use std::sync::Arc;
 
@@ -368,7 +367,7 @@ impl AttentionKernel for CudaAttentionKernel {
         query: &DeviceBuffer<f16>,
         key_cache: &Kvcache,
         value_cache: &Kvcache,
-        mask: Option<&DeviceBuffer<f32>>,
+        _mask: Option<&DeviceBuffer<f32>>,
         config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         if !self.is_available() {

@@ -7,7 +7,6 @@
 //! with 4th-gen tensor cores at ~150-200 tok/s throughput.
 
 use half::f16;
-use std::sync::Arc;
 use crate::kernel::gemm::{GemmArch, GemmError, GemmKernel};
 use crate::kernel::device_buf::DeviceBuffer;
 
