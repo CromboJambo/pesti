@@ -1,8 +1,12 @@
 name: CI/CD Pipeline
 
 on:
-  push:
-    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for CI run'
+        required: false
+        default: 'Manual trigger'
   pull_request:
     branches: [main, develop]
 
