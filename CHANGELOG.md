@@ -28,12 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Benchmark Results (TinyLlama-1.1B, 4 threads, CPU)
 
-| Quantization | File Size | Speed (tok/s) |
-|--------------|-----------|---------------|
-| Q3_K_M       | 526 MB    | 218.5         |
-| Q4_K_M       | 638 MB    | 216.8         |
-| Q5_K_M       | 747 MB    | 221.6         |
-| Q8_0         | 1.1 GB    | 221.8         |
+|| Quantization | File Size | Speed (tok/s) ||--------------|-----------|---------------|| Q3_K_M       | 526 MB    | 218.5         || Q4_K_M       | 638 MB    | 216.8         || Q5_K_M       | 747 MB    | 221.6         || Q8_0         | 1.1 GB    | 221.8         |
 
 **Key observation**: Performance varies by <3% across all quantization levels.
 
@@ -83,6 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 2/2 unit tests passing (verified with RTX 4070 Ti SUPER)
   - Performance target: ~6-8 tokens/second (based on llama.cpp benchmarks)
   - **Status**: ✅ Complete - production-ready CUTLASS GEMM wrapper
+- **Real Cudarc Integration for cuda-oxide**
+  - Device detection via `cuDeviceGetCount()` - returns actual GPU count
+  - Compute capability queries (sm_89+, sm_100+, sm_120+)
+  - Memory info via `cuMemGetInfo_v2()` - total/free VRAM
+  - Device name queries for multi-GPU systems
+  - Architecture support checks: `supports_tcgen05()`, `supports_wgmma()`
+  - Added `cuda-core` dependency from NVlabs/cuda-oxide git repo
+  - **12 new tests** (7 feature tests + 5 stub tests) all passing
 
 ### Changed
 
@@ -108,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Long-sequence validation**: Tested up to 2048 tokens (model context limit)
 - **Performance consistency**: Verified stable ~217-222 tok/s across all test runs
 - **CUTLASS GEMM tests**: 2/2 passing (RTX 4070 Ti SUPER verified)
+- **cuda-oxide tests**: 12 passing (real cudarc integration)
 - All existing tests remain passing (499+ total)
 
 ### Known Limitations & TODOs
@@ -123,8 +127,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Status**: Only Q4_K_M and Q8_0 verified; 5 quant types failing
 - **Failing**: Q2_K, Q3_K, Q4_0, Q5_K, Q6_K
 - **Error**: "missing output layer" - model loader not finding tensor
-- **Root cause**: Different architectures use different tensor names
-- **Effort to fix**: 2-4 hours (add alternative tensor name detection)
+- **Root cause**: Different architectures use different tensor names (`output.weight` vs `lm_head.weight`)
+- **Effort to fix**: 2-4 hours (add alternative tensor name detection + debug logging)
+- **Coverage**: 2/8 (25%)
 
 #### ⏳ GPU End-to-End Verification
 **Status**: CPU path verified; GPU path needs real model testing

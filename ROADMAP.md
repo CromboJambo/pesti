@@ -6,18 +6,19 @@
 
 | Phase | Status | Focus |
 |-------|--------|-------|
-| **Phase 1: CPU Inference** | ✅ Complete | Pure-Rust transformer + llama.cpp FFI path |
-| **Phase 1.5: Hybrid Routing** | ✅ Complete | GPU → Remote → CPU device selector |
-| **Phase 2: Backend Abstraction** | ✅ Complete | Trait layer, tensor interfaces, execution dispatch |
-| **Phase 3: Runtime** | ✅ Complete | Runner bridge, streaming, model management, SafeTensors |
-| **Phase 4a: Mistral.rs Backend** | ✅ Complete | Production GPU kernels (WGMMA, tcgen05) |
-| **Phase 4b: Candle Bridge** | ✅ Complete | candle-core tensor bridge for GPU ops |
-| **Phase 4c: Dispatch Layer** | ✅ Complete | LayerDispatch, full forward pass, GPU/CPU auto-select |
+|| **Phase 1: CPU Inference** | ✅ Complete | Pure-Rust transformer + llama.cpp FFI path |
+|| **Phase 1.5: Hybrid Routing** | ✅ Complete | GPU → Remote → CPU device selector |
+|| **Phase 2: Backend Abstraction** | ✅ Complete | Trait layer, tensor interfaces, execution dispatch |
+|| **Phase 3: Runtime** | ✅ Complete | Runner bridge, streaming, model management, SafeTensors |
+|| **Phase 4a: Mistral.rs Backend** | ✅ Complete | Production GPU kernels (WGMMA, tcgen05) |
+|| **Phase 4b: Candle Bridge** | ✅ Complete | candle-core tensor bridge for GPU ops |
+|| **Phase 4c: Dispatch Layer** | ✅ Complete | LayerDispatch, full forward pass, GPU/CPU auto-select |
+||| **Phase 4d: WGMMA Attention Kernel** | ⚠️ Partial | PTX kernel exists, launch logic TODO (1-2h) |
 || **Phase 4e: CUTLASS GEMM via cudarc** | ✅ Complete | High-performance FP16 tensor core ops for sm_8.9 (Ada Lovelace) - verified with unit tests |
-| **Phase 5.1: Validation & Polish** | ✅ Complete | GGUF v3 test data regression fixed |
-| **Phase 5.2: Pure Rust Dequantization** | ✅ Complete | ggml-quants integration, C FFI removed |
-| **Phase 6: CI/CD & Versioning** | ✅ Complete | Strict clippy, automated versioning, changelog |
-| **Phase 7: File Writers** | ✅ Complete | GGUF + SafeTensors writers with round-trip tests |
+|| **Phase 5.1: Validation & Polish** | ⚠️ Partial | GGUF v3 test data fixed, K-family conformance gaps (2/8 passing) |
+|| **Phase 5.2: Pure Rust Dequantization** | ✅ Complete | ggml-quants integration, C FFI removed |
+|| **Phase 6: CI/CD & Versioning** | ✅ Complete | Strict clippy, automated versioning, changelog |
+|| **Phase 7: File Writers** | ✅ Complete | GGUF + SafeTensors writers with round-trip tests |
 
 ---
 
