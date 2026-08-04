@@ -113,14 +113,65 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
     
     // Detect dtype mismatch: if claimed element_count * expected_bytes_per_element doesn't match data size,
     // the GGUF file might have wrong metadata. Try to infer actual dtype and element count from data size.
-    let (inferred_dtype, inferred_element_count) = if raw_data.len() < claimed_element_count / 2 {
-        // Very small data relative to claimed element count - likely a lower-bit quantization
-        // Recalculate element_count based on data size
-        let num_blocks = raw_data.len() / 24; // Q3_K uses ~24 bytes per 16 elements
-        let inferred_count = num_blocks * 16;
-        (GgufDtype::Q3_K, inferred_count)
-    } else {
-        (dtype, claimed_element_count)
+    let (inferred_dtype, inferred_element_count) = {
+        eprintln!("[DEBUG] Trying reverse inference from {} bytes", raw_data.len());
+        
+        // Try each K-family dtype to see which one matches the data size
+        for candidate_dtype in [
+            GgufDtype::Q1_K, GgufDtype::Q2_K, GgufDtype::Q3_K, GgufDtype::Q4_K,
+            GgufDtype::Q4_K_M, GgufDtype::Q5_0, GgufDtype::Q5_K, GgufDtype::Q6_K,
+        ].iter() {
+            let (block_size, elements_per_block) = match candidate_dtype {
+                GgufDtype::Q1_K => (20, 16),
+                GgufDtype::Q2_K | GgufDtype::Q2_K_S | GgufDtype::Q2_K_M => (32, 16),
+                GgufDtype::Q3_K | GgufDtype::Q3_K_S => (24, 16),
+                GgufDtype::Q4_K | GgufDtype::Q4_K_M | GgufDtype::Q4_K_S => (28, 16),
+                GgufDtype::Q5_0 | GgufDtype::Q5_K | GgufDtype::Q5_K_M | GgufDtype::Q5_K_S => (36, 16),
+                GgufDtype::Q6_K | GgufDtype::Q6_K_S => (42, 16),
+                _ => continue,
+            };
+            
+            let num_blocks = raw_data.len() / block_size;
+            let inferred_count = num_blocks * elements_per_block;
+            
+            // Calculate what bytes this would need
+            let expected_bytes = match candidate_dtype {
+                GgufDtype::Q1_K => num_blocks * 20,
+                GgufDtype::Q2_K | GgufDtype::Q2_K_S | GgufDtype::Q2_K_M => num_blocks * 32,
+                GgufDtype::Q3_K | GgufDtype::Q3_K_S => num_blocks * 24,
+                GgufDtype::Q4_K | GgufDtype::Q4_K_M | GgufDtype::Q4_K_S => num_blocks * 28,
+                GgufDtype::Q5_0 | GgufDtype::Q5_K | GgufDtype::Q5_K_M | GgufDtype::Q5_K_S => num_blocks * 36,
+                GgufDtype::Q6_K | GgufDtype::Q6_K_S => num_blocks * 42,
+                _ => continue,
+            };
+            
+            let diff = (raw_data.len() as i64 - expected_bytes as i64).abs();
+            let rel_diff = if expected_bytes > 0 {
+                (diff as f64 / expected_bytes as f64 * 100.0).abs()
+            } else {
+                100.0
+            };
+            
+            eprintln!(
+                "[DEBUG] {:?}: {} blocks -> {} elements, expected={} bytes, actual={}, diff={:.2}%",
+                candidate_dtype, num_blocks, inferred_count, expected_bytes, raw_data.len(), rel_diff
+            );
+            
+            // If this matches very closely (< 1% difference), use it
+            if rel_diff < 1.0 && diff < 100 {
+                eprintln!("[DEBUG] MATCHED {:?} with {} elements!", candidate_dtype, inferred_count);
+                break;
+            }
+        }
+        
+        // For now, keep the simple logic - will improve later
+        if raw_data.len() < claimed_element_count / 2 {
+            let num_blocks = raw_data.len() / 24; // Q3_K uses ~24 bytes per 16 elements
+            let inferred_count = num_blocks * 16;
+            (GgufDtype::Q3_K, inferred_count)
+        } else {
+            (dtype, claimed_element_count)
+        }
     };
 
     eprintln!(
