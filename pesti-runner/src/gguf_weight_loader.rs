@@ -464,36 +464,71 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     for _ in 0..num_full_blocks {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+
+        // Q4_K format: qs stores 16 nibbles (8 bytes) + h stores 2 scales (4 bytes)
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
-        for i in 0..16usize {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
-            let v = if q < 8 {
-                h[0] * ((q as f32) - 4.0)
-            } else {
-                h[1] * ((q as f32) - 4.0)
-            };
+        // First 8 elements use qs_low
+        for i in 0..8usize {
+            let q = ((qs_low >> (i * 4)) & 0x0F) as u8;
+            let v = h[0] * ((q as f32) - 4.0);
             result.push(d + delta * v);
         }
+
+        // Second 8 elements use qs_high
+        for i in 0..8usize {
+            let q = ((qs_high >> (i * 4)) & 0x0F) as u8;
+            let v = h[1] * ((q as f32) - 4.0);
+            result.push(d + delta * v);
+        }
+
         offset += 28;
     }
 
     if remaining > 0 {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+
+        // Q4_K format: qs stores 16 nibbles (8 bytes) + h stores 2 scales (4 bytes)
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
         for i in 0..remaining {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
-            let v = if q < 8 {
+            let q = if i < 8 {
+                ((qs_low >> (i * 4)) & 0x0F) as u8
+            } else {
+                ((qs_high >> ((i - 8) * 4)) & 0x0F) as u8
+            };
+            let v = if i < 8 {
                 h[0] * ((q as f32) - 4.0)
             } else {
                 h[1] * ((q as f32) - 4.0)
@@ -503,9 +538,7 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     }
 
     Ok(result)
-}
-
-fn dequantize_q5_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
+}fn dequantize_q5_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 16;
     let remaining = element_count % 16;
     let expected_size = num_full_blocks * 36 + if remaining > 0 { 4 } else { 0 };
