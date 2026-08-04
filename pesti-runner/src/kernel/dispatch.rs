@@ -1151,6 +1151,16 @@ impl RmsNormDispatch {
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>, DispatchError> {
         // RMSNorm is simple enough to do on CPU — no GPU dispatch needed
         let embed_dim = x.len() / batch_size;
+        let weight_len = self.weight.len();
+        
+        // Ensure embed_dim matches weight length
+        if embed_dim != weight_len {
+            return Err(DispatchError::Kernel(format!(
+                "RMSNorm embed_dim={} doesn't match weight_len={}",
+                embed_dim, weight_len
+            )));
+        }
+        
         let mut output = vec![0.0f32; x.len()];
 
         for b in 0..batch_size {
