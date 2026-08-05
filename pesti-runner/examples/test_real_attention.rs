@@ -17,14 +17,14 @@ use std::sync::Arc;
 fn main() {
     println!("=== GPU Attention Kernel Test ===\n");
     
-    // Initialize CUDA driver
+    // Initialize CUDA driver (use device 1: RTX 5060 Ti with sm_12.0)
     unsafe {
-        cuda_core::init(0).expect("CUDA driver init failed");
+        cuda_core::init(1).expect("CUDA driver init failed");
     }
-    println!("✅ CUDA driver initialized");
+    println!("✅ CUDA driver initialized on device 1 (RTX 5060 Ti)");
     
-    // Create context and stream
-    let ctx = CudaContext::new(0).expect("CUDA context failed");
+    // Create context and stream for device 1
+    let ctx = CudaContext::new(1).expect("CUDA context failed");
     let stream = Arc::new(ctx.default_stream());
     println!("✅ CUDA context created");
     

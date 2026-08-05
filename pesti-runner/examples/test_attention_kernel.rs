@@ -17,15 +17,15 @@ fn main() {
         }
     }
 
-    // Create context for device 1 (5060 Ti - sm_12.0 supports WGMMA)
-    let ctx = match cuda_core::CudaContext::new(1) {
+    // Create context for device 0 (4070 Ti - sm_8.9, WGMMA supported)
+    let ctx = match cuda_core::CudaContext::new(0) {
         Ok(c) => c,
         Err(e) => {
             println!("❌ Context creation failed: {}", e);
             return;
         }
     };
-    println!("✅ Context created for device 1");
+    println!("✅ Context created for device 0");
 
     // Create stream
     let _stream = match ctx.new_stream() {
