@@ -3,11 +3,21 @@
 //! Separate workspace member that eventually becomes independent.
 //! Interface boundary: consumes WeightManifest from safetensors, emits InferenceResponse to guard.
 
+#[cfg(feature = "cuda")]
 pub mod cuda_runtime;
+#[cfg(not(feature = "cuda"))]
+pub mod cuda_stub;
 pub mod dequantize;
+#[cfg(feature = "cuda")]
 pub mod device;
+#[cfg(not(feature = "cuda"))]
+pub mod device_stub;
+#[cfg(feature = "cuda")]
 pub mod device_discovery;
+#[cfg(feature = "cuda")]
 pub mod error;
+#[cfg(not(feature = "cuda"))]
+pub mod error_stub;
 pub mod gguf_weight_loader;
 pub mod inference_engine;
 pub mod kernel;
@@ -16,6 +26,7 @@ pub mod model_loader;
 pub mod model_manager;
 pub mod plug_in;
 pub mod registry;
+#[cfg(feature = "cuda")]
 pub mod remote_discovery;
 pub mod runtime;
 pub mod runner;
@@ -23,15 +34,23 @@ pub mod safetensors_weight_loader;
 pub mod safetensors_tokenizer;
 pub mod tier;
 pub mod tokenizer;
+#[cfg(feature = "cuda")]
 pub mod transformer;
 
+#[cfg(feature = "cuda")]
 pub use cuda_runtime::{
     CudaDeviceInfo, CudaError, CudaRuntime, device_count, enumerate_devices, is_available,
     select_best_device,
 };
 pub use device::{DeviceBackend, DeviceInfo, DeviceSelection, DeviceSelector, DeviceType};
+#[cfg(not(feature = "cuda"))]
+pub use device_stub::LocalDevice;
+#[cfg(feature = "cuda")]
 pub use device_discovery::LocalDevice;
+#[cfg(feature = "cuda")]
 pub use error::{Result, RunnerError};
+#[cfg(not(feature = "cuda"))]
+pub use error_stub::{Result, RunnerError};
 pub use gguf_weight_loader::{GgufWeights, load_gguf_tensor, load_gguf_weights};
 pub use safetensors_weight_loader::{
     extract_safetensors_config, get_safetensors_tensor_count, get_safetensors_total_size,
@@ -48,6 +67,7 @@ pub use model_loader::ModelLoader;
 pub use model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
 pub use plug_in::PlugInProtocol;
 pub use registry::{DiscoveredModel, ModelDiscovery, ModelEntry, ModelFormat, Registry};
+#[cfg(feature = "cuda")]
 pub use remote_discovery::{RemoteDevice, RemoteDiscoveryConfig};
 pub use runner::{DeviceRouter, RouteResult, RunnerBridge};
 pub use tier::{LayerProfiler, Tier, TieredExecution};

@@ -11,6 +11,8 @@ description = "LLM inference engine: tensor computation, model loading, tokenize
 default = []
 # Production-grade GPU kernels via mistral.rs (requires CUDA toolchain)
 mistralrs = ["dep:mistralrs"]
+# CUDA GPU backend (requires CUDA 12.5+ and NVIDIA GPU)
+cuda = ["dep:cudarc", "dep:cuda-device", "dep:cuda-host", "dep:cuda-core", "dep:intel-mkl-src"]
 
 [dependencies]
 candle-core.workspace = true
@@ -33,9 +35,7 @@ pesti-plug-in = { path = "../llm-plug-in" }
 pesti-safetensors = { path = "../pesti-safetensors" }
 pesti-gguf = { path = "../pesti-gguf" }
 ggml-quants = "0.1"
-cudarc.workspace = true
 encoding_rs = "0.8"
-intel-mkl-src.workspace = true
 gemm.workspace = true
 half.workspace = true
 float8.workspace = true
@@ -44,9 +44,6 @@ libm.workspace = true
 num-traits.workspace = true
 num_cpus.workspace = true
 rayon.workspace = true
-cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-device" }
-cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-host" }
-cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core" }
 hf-hub.workspace = true
 zip.workspace = true
 memmap2.workspace = true
@@ -58,6 +55,14 @@ reqwest.workspace = true
 llama-cpp-2.workspace = true
 llama-cpp-sys-2 = "0.1.146"
 nvml-wrapper = "0.12"
+
+# Optional GPU dependencies (enabled via `cuda` feature)
+cudarc = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-device", optional = true }
+cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-host", optional = true }
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core", optional = true }
+
 # Production-grade GPU kernels (optional, enabled via `mistralrs` feature)
 mistralrs = { version = "0.8", optional = true }
 

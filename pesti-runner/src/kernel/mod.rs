@@ -63,19 +63,32 @@
 //! - TMA descriptor is a 128-bit (4 u32) struct matching Blackwell hardware layout
 //! - KV cache stores K and V in a single contiguous buffer with V offset by head_stride * max_seq
 //! - tcgen05: K must be divisible by 64 (tile constraint), 128-thread blocks, 128x128x16 tiles
-
+//!
+#[cfg(feature = "cuda")]
 pub mod attention;
+#[cfg(feature = "cuda")]
 pub mod builder;
 pub mod candle_bridge;
 pub mod device_buf;
+#[cfg(feature = "cuda")]
+pub mod memory;
+#[cfg(not(feature = "cuda"))]
+pub mod memory_stub;
 pub mod dispatch;
 pub mod gemm;
+#[cfg(feature = "cuda")]
 pub mod gemm_cutlass;
+#[cfg(feature = "cuda")]
 pub mod kvcache;
+#[cfg(feature = "cuda")]
 pub mod memory;
+#[cfg(feature = "cuda")]
 pub mod mistralrs_backend;
+#[cfg(feature = "cuda")]
 pub mod rope;
+#[cfg(feature = "cuda")]
 pub mod tma_bridge;
+#[cfg(feature = "cuda")]
 pub mod tma_descriptor;
 
 pub use attention::{
@@ -84,10 +97,20 @@ pub use attention::{
 };
 pub use builder::{GemmBuilder, KernelFromPtx, PtxSource};
 pub use device_buf::{DeviceBuffer, DeviceBufferError, HostBuffer};
-pub use gemm::{CpuGemmKernel, CudaGemmKernel, CudaGemmKernelBuilder, GemmArch, GemmConfig, GemmError, GemmKernel};
+#[cfg(feature = "cuda")]
+pub use gemm::{
+    CpuGemmKernel, CudaGemmKernel, CudaGemmKernelBuilder, GemmArch, GemmConfig, GemmError,
+    GemmKernel,
+};
+#[cfg(feature = "cuda")]
 pub use kvcache::{KvError, Kvcache, KvcacheSlice};
-pub use memory::{CpuMemoryBackend, CudaMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle};
+#[cfg(feature = "cuda")]
+pub use memory::{
+    CpuMemoryBackend, CudaMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle,
+};
+#[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
+#[cfg(feature = "cuda")]
 pub use tma_descriptor::TmaDescriptor;
 pub use dispatch::{
     AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
