@@ -198,7 +198,7 @@ impl<T> DeviceBuffer<T> {
     /// `len * size_of::<T>()` bytes.
     pub unsafe fn from_device(ptr_addr: u64, len: usize) -> Self {
         Self {
-            handle: RawHandle(ptr_addr),
+            handle: ptr_addr,
             len,
             _marker: PhantomData,
             backed: false,
@@ -335,7 +335,7 @@ impl<T> DeviceBuffer<T> {
     /// Returns the RawHandle's u64 value. For CPU backend this is the slab
     /// index; for CUDA backend this is the actual device pointer.
     pub fn device_ptr(&self) -> u64 {
-        self.handle.as_u64()
+        self.handle
     }
 
     /// Allocate zero-initialized host-backed buffer (no backend needed).
@@ -347,7 +347,7 @@ impl<T> DeviceBuffer<T> {
     {
         let data = vec![T::default(); len];
         Self {
-            handle: RawHandle(0),
+            handle: 0,
             len,
             _marker: PhantomData,
             backed: false,
@@ -360,7 +360,7 @@ impl<T> DeviceBuffer<T> {
     /// For CPU-only mode and testing. Does not go through MemoryBackend.
     pub fn from_host(data: Vec<T>) -> Self {
         Self {
-            handle: RawHandle(0),
+            handle: 0,
             len: data.len(),
             _marker: PhantomData,
             backed: false,
@@ -374,7 +374,7 @@ impl<T> DeviceBuffer<T> {
     /// The handle is a sentinel value (0xDEAD).
     pub fn from_cpu_device(data: Vec<T>) -> Self {
         Self {
-            handle: RawHandle(0xDEAD),
+            handle: 0xDEAD,
             len: data.len(),
             _marker: PhantomData,
             backed: true,
@@ -389,7 +389,7 @@ impl<T> DeviceBuffer<T> {
     {
         let data = vec![T::default(); len];
         Self {
-            handle: RawHandle(0xDEAD),
+            handle: 0xDEAD,
             len,
             _marker: PhantomData,
             backed: true,

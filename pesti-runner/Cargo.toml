@@ -51,6 +51,7 @@ safetensors.workspace = true
 regex = { version = "1.12.3", default-features = false, features = ["perf", "unicode"] }
 tokio.workspace = true
 rand.workspace = true
+rand_distr = { workspace = true, default-features = true }
 reqwest.workspace = true
 llama-cpp-2.workspace = true
 llama-cpp-sys-2 = "0.1.146"

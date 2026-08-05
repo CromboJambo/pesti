@@ -30,6 +30,8 @@ use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
 use crate::kernel::DeviceBuffer;
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{AttentionArch, AttentionConfig};
 #[cfg(not(feature = "cuda"))]

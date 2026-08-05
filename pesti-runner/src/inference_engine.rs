@@ -10,12 +10,10 @@ use std::sync::Arc;
 use tracing::warn;
 
 // Import GEMM trait to ensure CpuGemmKernel methods are in scope
-#[cfg(feature = "cuda")]
-use crate::kernel::gemm::GemmKernel;
+use crate::kernel::gemm_stub::GemmKernel;
 
-// Import AttentionKernel trait to ensure CpuAttentionKernel methods are in scope
-#[cfg(feature = "cuda")]
-use crate::kernel::attention::AttentionKernel;
+// Import AttentionKernel trait and its Error type to ensure CpuAttentionKernel methods are in scope
+use crate::kernel::{attention_stub, AttentionError as StubAttentionError, AttentionKernel};
 
 /// Inference engine for tensor computation.
 pub struct InferenceEngine {
@@ -106,7 +104,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+                                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -154,7 +152,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+                                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -204,7 +202,7 @@ impl InferenceEngine {
                 cuda_runtime,
                 #[cfg(feature = "cuda")]
                 stream,
-                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
             }
@@ -228,7 +226,7 @@ impl InferenceEngine {
             cuda_runtime: None,
             #[cfg(feature = "cuda")]
             stream: None,
-            memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+            memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
         }
@@ -395,7 +393,7 @@ impl InferenceEngine {
         // Try GPU first
         match self.attention.forward(query, key_cache, value_cache, mask, config) {
             Ok(output) => Ok(output),
-            Err(crate::kernel::AttentionError::NotAvailable) => {
+            Err(StubAttentionError::NotAvailable) => {
                 // GPU not available — fall through to CPU
                 warn!("Attention: GPU not available, falling back to CPU");
                 self.cpu_attention
@@ -415,11 +413,22 @@ impl InferenceEngine {
                 let seq = key_cache.seq_len();
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|_| RunnerError::Attention {
-                        num_heads,
-                        head_dim,
-                        seq,
-                        detail: e,
+                    .map_err(|e: StubAttentionError| {
+                        // Convert stub AttentionError to real AttentionError
+                        let detail = match e {
+                            StubAttentionError::LaunchFailed(msg) => {
+                                crate::error::AttentionError::LaunchFailed(msg)
+                            }
+                            StubAttentionError::NotAvailable => {
+                                crate::error::AttentionError::NotAvailable
+                            }
+                        };
+                        RunnerError::Attention {
+                            num_heads,
+                            head_dim,
+                            seq,
+                            detail,
+                        }
                     })
             }
         }

@@ -1,13 +1,14 @@
 //! Stub builder module for CPU-only builds.
+//!
+//! Provides stub implementations matching the real GEMM API
+//! to allow compilation without CUDA dependencies.
 
-use crate::kernel::gemm::{GemmArch, GemmConfig};
-
-/// Dummy PTX source trait
+/// Dummy PTX source trait (stub)
 pub trait PtxSource {
     fn as_bytes(&self) -> &[u8];
 }
 
-/// Dummy kernel from PTX
+/// Dummy kernel from PTX (stub)
 pub trait KernelFromPtx {
     fn from_ptx(_ptx: &[u8], _name: &str) -> Result<Self::Kernel, crate::kernel::GemmError>
     where
@@ -16,14 +17,60 @@ pub trait KernelFromPtx {
     type Kernel;
 }
 
-/// Dummy GEMM builder (CPU-only stub)
+/// Stub configuration for a GEMM kernel launch (mirrors real GemmConfig)
+#[derive(Debug, Clone)]
+pub struct GemmConfig {
+    /// Target architecture (stub)
+    pub arch: crate::kernel::GemmArch,
+    /// Whether to use TMA for async GMEM->SMEM copies
+    pub use_tma: bool,
+    /// Custom block size override (0 = use arch default)
+    pub block_size: usize,
+}
+
+impl Default for GemmConfig {
+    fn default() -> Self {
+        Self {
+            arch: crate::kernel::GemmArch::default(),
+            use_tma: true,
+            block_size: 0,
+        }
+    }
+}
+
+impl GemmConfig {
+    pub fn effective_block_size(&self) -> usize {
+        if self.block_size > 0 {
+            self.block_size
+        } else {
+            self.arch.tile_size()
+        }
+    }
+
+    pub fn with_arch(mut self, arch: crate::kernel::GemmArch) -> Self {
+        self.arch = arch;
+        self
+    }
+
+    pub fn with_tma(mut self, use_tma: bool) -> Self {
+        self.use_tma = use_tma;
+        self
+    }
+
+    pub fn with_block_size(mut self, block_size: usize) -> Self {
+        self.block_size = block_size;
+        self
+    }
+}
+
+/// Stub GEMM builder (CPU-only stub)
 pub struct GemmBuilder {
-    pub arch: GemmArch,
+    pub arch: crate::kernel::GemmArch,
     pub config: GemmConfig,
 }
 
 impl GemmBuilder {
-    pub fn new(arch: GemmArch) -> Self {
+    pub fn new(arch: crate::kernel::GemmArch) -> Self {
         Self {
             arch,
             config: GemmConfig::default(),
@@ -43,6 +90,6 @@ impl GemmBuilder {
 
 impl Default for GemmBuilder {
     fn default() -> Self {
-        Self::new(GemmArch::default())
+        Self::new(crate::kernel::GemmArch::default())
     }
 }

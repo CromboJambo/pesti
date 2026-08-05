@@ -88,7 +88,7 @@ pub trait AttentionKernel: Send + Sync {
         query: &DeviceBuffer<f16>,
         key_cache: &Kvcache,
         value_cache: &Kvcache,
-        mask: Option<&[bool]>,
+        mask: Option<&DeviceBuffer<f32>>,
         config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError>;
 
@@ -118,7 +118,7 @@ impl AttentionKernel for CpuAttentionKernel {
         _query: &DeviceBuffer<f16>,
         _key_cache: &Kvcache,
         _value_cache: &Kvcache,
-        _mask: Option<&[bool]>,
+        _mask: Option<&DeviceBuffer<f32>>,
         _config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         // Stub implementation - return empty buffer for CPU-only builds
@@ -145,7 +145,7 @@ impl AttentionKernel for CudaAttentionKernel {
         _query: &DeviceBuffer<f16>,
         _key_cache: &Kvcache,
         _value_cache: &Kvcache,
-        _mask: Option<&[bool]>,
+        _mask: Option<&DeviceBuffer<f32>>,
         _config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         Err(AttentionError::NotAvailable)

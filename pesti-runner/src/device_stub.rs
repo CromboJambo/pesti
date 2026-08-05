@@ -1,14 +1,16 @@
 //! Stub device module for CPU-only builds.
+//!
+//! Provides LocalDevice and DeviceSelector stubs to match the real API.
 
 use std::sync::Arc;
 
-/// Dummy device info
+/// Dummy device info (mirrors real DeviceInfo)
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub name: String,
 }
 
-/// Device backend preference
+/// Dummy device backend (mirrors real DeviceBackend)
 #[derive(Debug, Clone)]
 pub struct DeviceBackend {
     pub preference: String,
@@ -28,21 +30,37 @@ impl DeviceBackend {
     }
 }
 
-/// Device type enum
+/// Device type enum (mirrors real DeviceType)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceType {
     Cpu,
     Gpu,
 }
 
-/// Device selection result
+/// Device selection result (mirrors real DeviceSelection)
 #[derive(Debug)]
 pub struct DeviceSelection {
     pub device_type: DeviceType,
     pub ordinal: usize,
 }
 
-/// Selector for choosing devices
+/// LocalDevice stub (mirrors real LocalDevice from device_discovery.rs)
+#[derive(Debug, Clone)]
+pub struct LocalDevice {
+    pub name: String,
+    pub memory_mb: u64,
+}
+
+impl LocalDevice {
+    pub fn cpu_fallback() -> Self {
+        Self {
+            name: "CPU".to_string(),
+            memory_mb: 0,
+        }
+    }
+}
+
+/// Selector for choosing devices (mirrors real DeviceSelector)
 pub struct DeviceSelector {
     _private: (),
 }

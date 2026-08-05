@@ -3,9 +3,47 @@
 //! Provides stub implementations matching the real transformer API
 //! to allow compilation without CUDA dependencies.
 
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::Rng;
 use std::path::Path;
+use tokenizers::Tokenizer;
+
+// Forward declare stub types for TransformerLayer fields
+#[derive(Debug, Clone)]
+pub struct Attention {
+    pub wq: Linear,
+    pub wk: Linear,
+    pub wv: Linear,
+    pub wo: Linear,
+}
+
+impl Attention {
+    pub fn new() -> Self {
+        Self {
+            wq: Linear::from_f32_weight(&[], None),
+            wk: Linear::from_f32_weight(&[], None),
+            wv: Linear::from_f32_weight(&[], None),
+            wo: Linear::from_f32_weight(&[], None),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FeedForward {
+    pub w1: Linear,
+    pub w2: Linear,
+    pub w3: Linear,
+}
+
+impl FeedForward {
+    pub fn new() -> Self {
+        Self {
+            w1: Linear::from_f32_weight(&[], None),
+            w2: Linear::from_f32_weight(&[], None),
+            w3: Linear::from_f32_weight(&[], None),
+        }
+    }
+}
 
 /// Stub model architecture (mirrors real ModelArch)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,13 +114,23 @@ impl Default for LlamaConfig {
     }
 }
 
-/// Stub transformer layer
+/// Stub transformer layer (mirrors real TransformerLayer from transformer/layer.rs)
 #[derive(Debug, Clone)]
-pub struct TransformerLayer {}
+pub struct TransformerLayer {
+    pub attention: Attention,
+    pub feed_forward: FeedForward,
+    pub attention_norm: RmsNorm,
+    pub ffn_norm: RmsNorm,
+}
 
 impl TransformerLayer {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            attention: Attention::new(),
+            feed_forward: FeedForward::new(),
+            attention_norm: RmsNorm::new(vec![], 1e-5),
+            ffn_norm: RmsNorm::new(vec![], 1e-5),
+        }
     }
 }
 
@@ -154,11 +202,19 @@ impl RopeConfig {
 #[derive(Debug, Clone)]
 pub struct SamplingConfig {
     pub seed: u64,
+    pub temperature: f32,
+    pub top_k: usize,
+    pub top_p: f32,
 }
 
 impl Default for SamplingConfig {
     fn default() -> Self {
-        Self { seed: 42 }
+        Self {
+            seed: 42,
+            temperature: 1.0,
+            top_k: 40,
+            top_p: 0.9,
+        }
     }
 }
 
@@ -173,13 +229,13 @@ pub fn argmax(logits: &[f32]) -> u32 {
 }
 
 /// Stub sample (mirrors real sample from sampling.rs)
-pub fn sample(logits: &[f32], _config: &SamplingConfig, rng: &mut rand::rngs::StdRng) -> u32 {
+pub fn sample(logits: &[f32], _config: &SamplingConfig, _rng: &mut rand::rngs::StdRng) -> u32 {
     let sum: f32 = logits.iter().map(|&x| x.exp()).sum();
-    let probs: Vec<f32> = logits.iter().map(|&x| (x.exp() / sum)).collect();
+    let probs: Vec<f32> = logits.iter().map(|&x| x.exp() / sum).collect();
 
     // Use explicit distribution for rand 0.10+ compatibility
-    let dist = Uniform::from(0.0..1.0);
-    let mut r = rng.sample(dist);
+    let mut rng_seed = _config.seed;
+    let r = (rng_seed as f32) / u64::MAX as f32;
     let mut cumsum = 0.0;
     for (i, &p) in probs.iter().enumerate() {
         cumsum += p;
@@ -198,7 +254,7 @@ pub struct GgufTokenizerConfig {
 }
 
 /// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf)
-pub fn load_tokenizer_from_gguf(_path: &Path) -> Result<super::GgufTokenizer, crate::error::RunnerError> {
+pub fn load_tokenizer_from_gguf(_path: &Path) -> Result<Tokenizer, crate::error::RunnerError> {
     use tokenizers::Tokenizer;
     Ok(Tokenizer::from_file(_path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?)
 }

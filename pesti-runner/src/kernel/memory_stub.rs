@@ -92,12 +92,5 @@ pub enum MemoryError {
     Cuda(String),
 }
 
-/// Raw memory handle
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RawHandle(pub u64);
-
-impl RawHandle {
-    pub fn as_u64(&self) -> u64 {
-        self.0
-    }
-}
+/// Raw memory handle (alias for u64 to match CUDA mode)
+pub type RawHandle = u64;

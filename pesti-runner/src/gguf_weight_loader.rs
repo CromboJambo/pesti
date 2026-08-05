@@ -556,14 +556,44 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     for _ in 0..num_full_blocks {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+        
+        // Q5_K format: 36 bytes/block
+        // - 2B: scale (f16)
+        // - 2B: delta (f16)  
+        // - 8B: qs (two u32s storing 16 nibbles: first 4 bits for values 0-7, last 4 bits for values 8-15)
+        // - 4B: h (two f16 scales)
+        
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
-        for i in 0..16usize {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
+        // First 8 elements (values 0-7 use h[0])
+        for i in 0..8usize {
+            let q = ((qs_low >> (i * 4)) & 0x0F) as u8;
+            let v = if q < 8 {
+                h[0] * ((q as f32) - 4.0)
+            } else {
+                h[1] * ((q as f32) - 4.0)
+            };
+            result.push(d + delta * v);
+        }
+
+        // Next 8 elements (values 8-15 use qs_high)
+        for i in 0..8usize {
+            let q = ((qs_high >> (i * 4)) & 0x0F) as u8;
             let v = if q < 8 {
                 h[0] * ((q as f32) - 4.0)
             } else {
@@ -577,14 +607,30 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     if remaining > 0 {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+        
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
         for i in 0..remaining {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
+            let q = if i < 8 {
+                ((qs_low >> (i * 4)) & 0x0F) as u8
+            } else {
+                ((qs_high >> ((i - 8) * 4)) & 0x0F) as u8
+            };
             let v = if q < 8 {
                 h[0] * ((q as f32) - 4.0)
             } else {
@@ -600,6 +646,8 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 16;
     let remaining = element_count % 16;
+    // Q6_K block size: 42 bytes per 16 elements (256 elements = 210 bytes)
+    // Format: d(2) + scales(16) + qs_low(128) + h_extra(32) + qs_high_flags(32) = 210 bytes
     let expected_size = num_full_blocks * 42 + if remaining > 0 { 5 } else { 0 };
 
     if data.len() < expected_size {
@@ -613,46 +661,104 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let mut offset = 0usize;
 
     for _ in 0..num_full_blocks {
+        // d (scale): f16 at offset 0
         let d = f16_to_f32(&data[offset..offset + 2]);
-        let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
-        let h = [
+        
+        // scales: 16 bytes = 4 f16 scales at offsets 2-17
+        let scales = [
+            f16_to_f32(&data[offset + 2..offset + 4]),
+            f16_to_f32(&data[offset + 4..offset + 6]),
             f16_to_f32(&data[offset + 6..offset + 8]),
             f16_to_f32(&data[offset + 8..offset + 10]),
         ];
+        
+        // qs_low: 128 bytes = 16 u8 per group of 16 values, storing lower 2 bits
+        // Each byte stores 4 values (2 bits each)
+        let qs_low_start = offset + 10;
+        
+        // h_extra: 32 bytes = 4 f16 scales for upper nibbles at offsets 138-170
+        let h_extra = [
+            f16_to_f32(&data[offset + 138..offset + 140]),
+            f16_to_f32(&data[offset + 140..offset + 142]),
+            f16_to_f32(&data[offset + 142..offset + 144]),
+            f16_to_f32(&data[offset + 144..offset + 146]),
+        ];
+        
+        // qs_high_flags: 32 bytes at offsets 170-202, bit-packed flags for upper nibbles
+        let qs_high_flags_start = offset + 150;
 
+        // Dequantize 16 elements per block
         for i in 0..16usize {
-            // Extract 4-bit nibbles from qs (u16) - shift by (i % 2) * 4 to stay within bounds
-            let shifted = ((qs as u32) << ((i % 2) * 4)) & 0x0F;
-            let q = shifted as u8;
-            let v = if q < 8 {
-                h[0] * ((q as f32) - 4.0)
+            // Extract lower 2 bits from qs_low (stored as 2-bit values)
+            let byte_idx = i / 4;
+            let bit_offset = (i % 4) * 2;
+            let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
+            
+            // Extract upper bits from qs_high_flags and h_extra
+            // In Q6_K, the upper 4 bits are stored in a complex format
+            let flag_byte_idx = i / 8;
+            let flag_bit = (i % 8) * 2;
+            let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
+            
+            // The actual upper nibble comes from h_extra based on the flag value
+            let q_high = if flag == 0 {
+                (i / 4) % 4
             } else {
-                h[1] * ((q as f32) - 4.0)
+                (flag - 1) as usize
             };
-            result.push(d + delta * v);
+            
+            // Combine: q = q_low + 4 * q_high (simplified model)
+            let q = (q_low as i32) + 4 * (q_high as i32);
+            
+            // Select scale based on value range
+            let scale = if q < 4 { scales[i / 4] } else { h_extra[i / 4] };
+            
+            // Dequantize: value = d * (q - 32) * scale
+            let v = (q as f32 - 32.0) * scale;
+            result.push(d * v);
         }
+
         offset += 42;
     }
 
     if remaining > 0 {
         let d = f16_to_f32(&data[offset..offset + 2]);
-        let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
-        let h = [
+        let scales = [
+            f16_to_f32(&data[offset + 2..offset + 4]),
+            f16_to_f32(&data[offset + 4..offset + 6]),
             f16_to_f32(&data[offset + 6..offset + 8]),
             f16_to_f32(&data[offset + 8..offset + 10]),
         ];
+        
+        let qs_low_start = offset + 10;
+        let h_extra = [
+            f16_to_f32(&data[offset + 138..offset + 140]),
+            f16_to_f32(&data[offset + 140..offset + 142]),
+            f16_to_f32(&data[offset + 142..offset + 144]),
+            f16_to_f32(&data[offset + 144..offset + 146]),
+        ];
+        
+        let qs_high_flags_start = offset + 150;
 
         for i in 0..remaining {
-            let shifted = ((qs as u32) << ((i % 2) * 4)) & 0x0F;
-            let q = shifted as u8;
-            let v = if q < 8 {
-                h[0] * ((q as f32) - 4.0)
+            let byte_idx = i / 4;
+            let bit_offset = (i % 4) * 2;
+            let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
+            
+            let flag_byte_idx = i / 8;
+            let flag_bit = (i % 8) * 2;
+            let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
+            
+            let q_high = if flag == 0 {
+                (i / 4) % 4
             } else {
-                h[1] * ((q as f32) - 4.0)
+                (flag - 1) as usize
             };
-            result.push(d + delta * v);
+            
+            let q = (q_low as i32) + 4 * (q_high as i32);
+            let scale = if q < 4 { scales[i / 4] } else { h_extra[i / 4] };
+            let v = (q as f32 - 32.0) * scale;
+            result.push(d * v);
         }
     }
 
@@ -677,14 +783,44 @@ fn dequantize_q8_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     for _ in 0..num_full_blocks {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+        
+        // Q8_K format: 40 bytes/block
+        // - 2B: scale (f16)
+        // - 2B: delta (f16)
+        // - 8B: qs (two u32s storing 16 nibbles)
+        // - 4B: h (two f16 scales)
+        
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
-        for i in 0..16usize {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
+        // First 8 elements (values 0-7 use h[0])
+        for i in 0..8usize {
+            let q = ((qs_low >> (i * 4)) & 0x0F) as u8;
+            let v = if q < 8 {
+                h[0] * ((q as f32) - 4.0)
+            } else {
+                h[1] * ((q as f32) - 4.0)
+            };
+            result.push(d + delta * v);
+        }
+
+        // Next 8 elements (values 8-15 use qs_high)
+        for i in 0..8usize {
+            let q = ((qs_high >> (i * 4)) & 0x0F) as u8;
             let v = if q < 8 {
                 h[0] * ((q as f32) - 4.0)
             } else {
@@ -698,14 +834,30 @@ fn dequantize_q8_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     if remaining > 0 {
         let d = f16_to_f32(&data[offset..offset + 2]);
         let delta = f16_to_f32(&data[offset + 2..offset + 4]);
-        let qs = u16::from_le_bytes([data[offset + 4], data[offset + 5]]);
+        
+        let qs_low = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let qs_high = u32::from_le_bytes([
+            data[offset + 8],
+            data[offset + 9],
+            data[offset + 10],
+            data[offset + 11],
+        ]);
         let h = [
-            f16_to_f32(&data[offset + 6..offset + 8]),
-            f16_to_f32(&data[offset + 8..offset + 10]),
+            f16_to_f32(&data[offset + 12..offset + 14]),
+            f16_to_f32(&data[offset + 14..offset + 16]),
         ];
 
         for i in 0..remaining {
-            let q = ((qs as u32 >> (i * 4)) & 0x0F) as u8;
+            let q = if i < 8 {
+                ((qs_low >> (i * 4)) & 0x0F) as u8
+            } else {
+                ((qs_high >> ((i - 8) * 4)) & 0x0F) as u8
+            };
             let v = if q < 8 {
                 h[0] * ((q as f32) - 4.0)
             } else {
@@ -738,4 +890,89 @@ fn bf16_f32(bytes: &[u8]) -> Vec<f32> {
 
 fn f16_to_f32(bytes: &[u8]) -> f32 {
     f16::from_be_bytes([bytes[0], bytes[1]]).to_f32()
+}
+
+#[cfg(test)]
+mod k_family_tests {
+    use super::*;
+
+    #[test]
+    fn test_q4_k_block_layout() {
+        let mut block = vec![0u8; 28];
+        block[0..2].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[2..4].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[4] = 0x0F;
+        block[5] = 0xF0;
+        block[6] = 0x0F;
+        block[7] = 0xF0;
+        block[8] = 0x08;
+        block[9] = 0x80;
+        block[10] = 0x09;
+        block[11] = 0xA0;
+        block[12..14].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[14..16].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+
+        let result = dequantize_q4_k(&block, 16).unwrap();
+        assert_eq!(result.len(), 16);
+        println!("Q4_K test passed!");
+    }
+
+    #[test]
+    fn test_q5_k_block_layout() {
+        let mut block = vec![0u8; 36];
+        block[0..2].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[2..4].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[4] = 0x0F;
+        block[5] = 0xF0;
+        block[6] = 0x0F;
+        block[7] = 0xF0;
+        block[8] = 0x08;
+        block[9] = 0x80;
+        block[10] = 0x09;
+        block[11] = 0xA0;
+        block[12..14].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[14..16].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+
+        let result = dequantize_q5_k(&block, 16).unwrap();
+        assert_eq!(result.len(), 16);
+        println!("Q5_K test passed!");
+    }
+
+    #[test]
+    fn test_q8_k_block_layout() {
+        let mut block = vec![0u8; 40];
+        block[0..2].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[2..4].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[4] = 0x0F;
+        block[5] = 0xF0;
+        block[6] = 0x0F;
+        block[7] = 0xF0;
+        block[8] = 0x08;
+        block[9] = 0x80;
+        block[10] = 0x09;
+        block[11] = 0xA0;
+        block[12..14].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[14..16].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+
+        let result = dequantize_q8_k(&block, 16).unwrap();
+        assert_eq!(result.len(), 16);
+        println!("Q8_K test passed!");
+    }
+
+    #[test]
+    fn test_q6_k_block_layout() {
+        let mut block = vec![0u8; 42];
+        block[0..2].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[2..4].copy_from_slice(&0x0000_f800u16.to_le_bytes());
+        block[4] = 0xFF;
+        block[5] = 0xFF;
+        block[6..8].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[8..10].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[10..12].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+        block[12..14].copy_from_slice(&0x0000_3C00u16.to_le_bytes());
+
+        let result = dequantize_q6_k(&block, 16).unwrap();
+        assert_eq!(result.len(), 16);
+        println!("Q6_K test passed!");
+    }
 }

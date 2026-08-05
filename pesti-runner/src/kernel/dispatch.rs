@@ -136,7 +136,7 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, "DispatchContext initialized");
         Self {
             engine,
-            memory: MemoryManager::new(),
+            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
@@ -150,7 +150,7 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, prefer_gpu, "DispatchContext initialized with GPU preference");
         Self {
             engine,
-            memory: MemoryManager::new(),
+            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
@@ -162,7 +162,7 @@ impl DispatchContext {
         let prefer_gpu = engine.gpu_available();
         Self {
             engine,
-            memory: MemoryManager::new(),
+            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
