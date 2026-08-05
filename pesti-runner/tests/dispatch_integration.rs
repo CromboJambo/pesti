@@ -244,7 +244,7 @@ fn test_dispatch_vs_cpu_output() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
     dispatch_model.reset();
 
-    let dispatch_hidden = dispatch_model.llama_model.embed(token, 0).expect("embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("embed failed");
     let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("forward_with_dispatch failed");
     let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("apply_output_head failed");
 
@@ -299,7 +299,7 @@ fn test_dispatch_conformance_real_model() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -380,7 +380,7 @@ fn test_dispatch_conformance_q8_0() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -461,7 +461,7 @@ fn test_dispatch_conformance_q2_k() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -542,7 +542,7 @@ fn test_dispatch_conformance_q3_k() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -623,7 +623,7 @@ fn test_dispatch_conformance_q4_0() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -704,7 +704,7 @@ fn test_dispatch_conformance_q5_k() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -785,7 +785,7 @@ fn test_dispatch_conformance_q6_k() {
 
     // Dispatch path
     let dispatch_hidden = dispatch_model
-        .llama_model
+
         .embed(token, 0)
         .expect("Embed failed");
     let dispatch_hidden = dispatch_model
@@ -840,7 +840,7 @@ fn test_dispatch_cpu_fallback() {
     let mut model = CpuModel::load_gguf(&gguf_path).expect("Failed to load GGUF");
     model.enable_dispatch();
 
-    let hidden = model.llama_model.embed(0, 0).expect("embed failed");
+    let hidden = model.embed(0, 0).expect("embed failed");
     let result = model
         .forward_with_dispatch(&hidden, 0)
         .expect("dispatch should fall back to CPU");
@@ -887,9 +887,9 @@ fn test_dispatch_conformance_f16_model() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
     println!("CPU logits shape: {}", cpu_logits.len());
 
-    // Dispatch path
-    let dispatch_hidden = dispatch_model.llama_model.embed(token, 0).expect("Embed failed");
-    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("Forward failed");
+    // Dispatch path - using new CpuModel API directly
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("embed failed");
+    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("forward_with_dispatch failed");
     let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("Output head failed");
     println!("Dispatch logits shape: {}", dispatch_logits.len());
 
