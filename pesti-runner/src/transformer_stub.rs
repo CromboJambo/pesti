@@ -1,11 +1,13 @@
 //! Stub transformer module for CPU-only builds.
 //!
-//! Provides stub implementations of LlamaModel and related types
+//! Provides stub implementations matching the real transformer API
 //! to allow compilation without CUDA dependencies.
 
+use rand::distributions::Uniform;
+use rand::Rng;
 use std::path::Path;
 
-/// Stub model architecture
+/// Stub model architecture (mirrors real ModelArch)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelArch {
     #[default]
@@ -18,7 +20,7 @@ pub enum ModelArch {
     Starcoder2,
 }
 
-/// Stub model config
+/// Stub model config (mirrors real LlamaConfig)
 #[derive(Debug, Clone)]
 pub struct LlamaConfig {
     pub arch: ModelArch,
@@ -59,6 +61,21 @@ impl LlamaConfig {
     }
 }
 
+impl Default for LlamaConfig {
+    fn default() -> Self {
+        Self {
+            arch: ModelArch::default(),
+            num_layers: 32,
+            num_heads: 32,
+            num_kv_heads: 8,
+            head_dim: 64,
+            embed_dim: 4096,
+            intermediate_dim: 11008,
+            max_seq_len: 4096,
+        }
+    }
+}
+
 /// Stub transformer layer
 #[derive(Debug, Clone)]
 pub struct TransformerLayer {}
@@ -69,7 +86,7 @@ impl TransformerLayer {
     }
 }
 
-/// Stub linear layer
+/// Stub linear layer (mirrors real Linear)
 #[derive(Debug, Clone)]
 pub struct Linear {
     weight: Vec<f32>,
@@ -98,7 +115,7 @@ impl Linear {
     }
 }
 
-/// Stub RMS norm
+/// Stub RMS norm (mirrors real RmsNorm)
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
     weight: Vec<f32>,
@@ -111,11 +128,11 @@ impl RmsNorm {
     }
 
     pub fn forward(&self, _input: &[f32], _batch_size: usize) -> Vec<f32> {
-        vec![0.0; input.len()]
+        vec![0.0; _input.len()]
     }
 }
 
-/// Stub rope config
+/// Stub rope config (mirrors real RopeConfig)
 #[derive(Debug, Clone)]
 pub struct RopeConfig {
     pub head_dim: usize,
@@ -133,7 +150,60 @@ impl RopeConfig {
     }
 }
 
-/// Stub Llama model
+/// Stub SamplingConfig (mirrors real SamplingConfig from sampling.rs)
+#[derive(Debug, Clone)]
+pub struct SamplingConfig {
+    pub seed: u64,
+}
+
+impl Default for SamplingConfig {
+    fn default() -> Self {
+        Self { seed: 42 }
+    }
+}
+
+/// Stub argmax (mirrors real argmax from sampling.rs)
+pub fn argmax(logits: &[f32]) -> u32 {
+    logits
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(i, _)| i as u32)
+        .unwrap_or(0)
+}
+
+/// Stub sample (mirrors real sample from sampling.rs)
+pub fn sample(logits: &[f32], _config: &SamplingConfig, rng: &mut rand::rngs::StdRng) -> u32 {
+    let sum: f32 = logits.iter().map(|&x| x.exp()).sum();
+    let probs: Vec<f32> = logits.iter().map(|&x| (x.exp() / sum)).collect();
+
+    // Use explicit distribution for rand 0.10+ compatibility
+    let dist = Uniform::from(0.0..1.0);
+    let mut r = rng.sample(dist);
+    let mut cumsum = 0.0;
+    for (i, &p) in probs.iter().enumerate() {
+        cumsum += p;
+        if r < cumsum {
+            return i as u32;
+        }
+    }
+    (probs.len() - 1) as u32
+}
+
+/// Stub tokenizer config (mirrors real GgufTokenizerConfig)
+#[derive(Debug, Clone)]
+pub struct GgufTokenizerConfig {
+    pub vocab_size: usize,
+    pub eos_token_id: u32,
+}
+
+/// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf)
+pub fn load_tokenizer_from_gguf(_path: &Path) -> Result<super::GgufTokenizer, crate::error::RunnerError> {
+    use tokenizers::Tokenizer;
+    Ok(Tokenizer::from_file(_path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?)
+}
+
+/// Stub Llama model (mirrors real LlamaModel from transformer/model.rs)
 #[derive(Debug, Clone)]
 pub struct LlamaModel {
     pub config: LlamaConfig,
@@ -219,21 +289,6 @@ impl Default for LlamaModel {
             final_norm: None,
             layers: vec![TransformerLayer::new(); 32],
             vocab_size: 32000,
-        }
-    }
-}
-
-impl Default for LlamaConfig {
-    fn default() -> Self {
-        Self {
-            arch: ModelArch::default(),
-            num_layers: 32,
-            num_heads: 32,
-            num_kv_heads: 8,
-            head_dim: 64,
-            embed_dim: 4096,
-            intermediate_dim: 11008,
-            max_seq_len: 4096,
         }
     }
 }

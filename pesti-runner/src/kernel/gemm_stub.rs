@@ -169,4 +169,7 @@ pub enum GemmError {
 
     #[error("not available")]
     NotAvailable,
+
+    #[error("invalid dimensions: {m}x{n} vs {k}")]
+    InvalidDimensions { m: usize, n: usize, k: usize },
 }

@@ -300,12 +300,12 @@ impl CudaGemmKernel {
         // Launch kernel with WGMMA or tcgen05 instructions
         unsafe {
             cuda_core::launch_kernel_on_stream(
-                self.function,
+                &self.function,
                 &[m, n, k, alpha, beta],
                 &[
-                    a.device_ptr().ok_or(GemmError::LaunchFailed("A not on device"))?,
-                    b.device_ptr().ok_or(GemmError::LaunchFailed("B not on device"))?,
-                    c.device_ptr().ok_or(GemmError::LaunchFailed("C not on device"))?,
+                    a.device_ptr().ok_or(GemmError::LaunchFailed("A not on device".to_string()))?,
+                    b.device_ptr().ok_or(GemmError::LaunchFailed("B not on device".to_string()))?,
+                    c.device_ptr().ok_or(GemmError::LaunchFailed("C not on device".to_string()))?,
                 ],
                 self.stream.cu_stream(),
             )
@@ -360,6 +360,12 @@ pub enum GemmError {
 
     #[error("PTX compilation failed: {0}")]
     PtxCompile(String),
+
+    #[error("not available")]
+    NotAvailable,
+
+    #[error("invalid dimensions: {m}x{n} vs {k}")]
+    InvalidDimensions { m: usize, n: usize, k: usize },
 }
 
 // --- Tests ---

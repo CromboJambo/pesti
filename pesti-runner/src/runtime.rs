@@ -28,7 +28,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(feature = "cuda")]
 use crate::device::DeviceType;
-#[cfg(feature = "cuda")]
+#[cfg(not(feature = "cuda"))]
 use crate::device_stub::LocalDevice as DeviceType;
 use crate::error::Result;
 use crate::llama::{GenerationResult, LlamaRunner, SamplingConfig, StreamingResult, TokenInfo};
@@ -351,13 +351,13 @@ impl Runtime {
             temperature: 0.7,
             top_k: 50,
             top_p: 0.95,
-            repeat_penalty: 1.1,
+            seed: Some(42),
         };
         let mut rng = StdRng::seed_from_u64(42);
 
         // Stub - actual implementation only exists with CUDA
         let _model = model;
-        let _generated: Vec<u32> = vec![];
+        let generated: Vec<u32> = vec![];
 
         // Update access count
         if let Some(state) = self

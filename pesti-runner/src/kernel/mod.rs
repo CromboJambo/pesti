@@ -138,3 +138,8 @@ pub use dispatch::{
     AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
     LinearDispatch, RmsNormDispatch,
 };
+#[cfg(not(feature = "cuda"))]
+pub use dispatch::{
+    AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
+    LinearDispatch, RmsNormDispatch,
+};

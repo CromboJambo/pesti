@@ -9,6 +9,14 @@ use half::f16;
 use std::sync::Arc;
 use tracing::warn;
 
+// Import GEMM trait to ensure CpuGemmKernel methods are in scope
+#[cfg(feature = "cuda")]
+use crate::kernel::gemm::GemmKernel;
+
+// Import AttentionKernel trait to ensure CpuAttentionKernel methods are in scope
+#[cfg(feature = "cuda")]
+use crate::kernel::attention::AttentionKernel;
+
 /// Inference engine for tensor computation.
 pub struct InferenceEngine {
     pub device: candle_core::Device,
@@ -39,7 +47,7 @@ impl InferenceEngine {
             gemm: Box::new(crate::kernel::CpuGemmKernel::new()),
             attention: Box::new(crate::kernel::CpuAttentionKernel::new()),
             memory_manager: crate::kernel::MemoryManager::Cpu(
-                crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
+                crate::kernel::CpuMemoryBackend::new(1024 * 1024),
             ),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
@@ -98,7 +106,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
+                                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -146,7 +154,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
+                                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -196,7 +204,7 @@ impl InferenceEngine {
                 cuda_runtime,
                 #[cfg(feature = "cuda")]
                 stream,
-                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
+                memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
             }
@@ -220,7 +228,7 @@ impl InferenceEngine {
             cuda_runtime: None,
             #[cfg(feature = "cuda")]
             stream: None,
-            memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
+            memory_manager: crate::kernel::CpuMemoryBackend::new(1024 * 1024),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
         }

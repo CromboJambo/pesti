@@ -87,7 +87,7 @@ pub enum RunnerError {
     MissingHeaderField(String),
 
     #[error("dispatch error: {0}")]
-    Dispatch(#[from] crate::kernel::kvcache_stub::KvError),
+    Dispatch(#[from] crate::kernel::DispatchError),
 }
 
 /// Result type alias for pesti-runner operations.

@@ -35,6 +35,8 @@ pub mod tier;
 pub mod tokenizer;
 #[cfg(feature = "cuda")]
 pub mod transformer;
+#[cfg(not(feature = "cuda"))]
+pub mod transformer_stub;
 
 #[cfg(feature = "cuda")]
 pub use cuda_runtime::{
@@ -75,6 +77,10 @@ pub use tier::{LayerProfiler, Tier, TieredExecution};
 pub use tokenizer::Tokenizer;
 #[cfg(feature = "cuda")]
 pub use transformer::{
+    GgufTokenizerConfig, LlamaModel, SamplingConfig, argmax, load_tokenizer_from_gguf, sample,
+};
+#[cfg(not(feature = "cuda"))]
+pub use transformer_stub::{
     GgufTokenizerConfig, LlamaModel, SamplingConfig, argmax, load_tokenizer_from_gguf, sample,
 };
 

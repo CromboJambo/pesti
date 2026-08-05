@@ -121,7 +121,8 @@ impl AttentionKernel for CpuAttentionKernel {
         _mask: Option<&[bool]>,
         _config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
-        Err(AttentionError::NotAvailable)
+        // Stub implementation - return empty buffer for CPU-only builds
+        Ok(DeviceBuffer::from_host(vec![]))
     }
 
     fn is_available(&self) -> bool {

@@ -24,7 +24,7 @@ pub mod rope;
 pub mod sampling;
 pub mod tokenizer;
 
-pub use model::{LlamaConfig, LlamaModel};
+pub use model::{LlamaConfig, LlamaModel, ModelArch};
 pub use sampling::{SamplingConfig, argmax, sample};
 pub use tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf};
 pub use tokenizers::tokenizer::Tokenizer as GgufTokenizer;
