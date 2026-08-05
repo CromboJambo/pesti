@@ -35,6 +35,7 @@ use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{AttentionArch, AttentionConfig};
 #[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda"))]
 use crate::kernel::attention_stub::{AttentionArch, AttentionConfig};
 #[cfg(feature = "cuda")]
 use crate::kernel::kvcache::Kvcache;
@@ -44,6 +45,7 @@ use crate::kernel::kvcache_stub::Kvcache;
 use crate::kernel::dispatch::DispatchContext;
 #[cfg(feature = "cuda")]
 use crate::transformer::{LlamaConfig, LlamaModel, ModelArch};
+#[cfg(not(feature = "cuda"))]
 #[cfg(not(feature = "cuda"))]
 use crate::transformer_stub::LlamaModel;
 use half::f16;

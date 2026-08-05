@@ -97,10 +97,10 @@ pub trait GemmKernel: Send + Sync {
     /// Perform GEMM: C = alpha * A @ B + beta * C
     fn matmul(
         &self,
-        alpha: f32,
+        _alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        beta: f32,
+        _beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -134,10 +134,10 @@ impl Default for CpuGemmKernel {
 impl GemmKernel for CpuGemmKernel {
     fn matmul(
         &self,
-        alpha: f32,
+        _alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        beta: f32,
+        _beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -286,10 +286,10 @@ impl CudaGemmKernel {
     /// Launch the GEMM kernel on the given streams.
     pub fn launch(
         &self,
-        alpha: f32,
+        _alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        beta: f32,
+        _beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -299,15 +299,22 @@ impl CudaGemmKernel {
 
         // Launch kernel with WGMMA or tcgen05 instructions
         unsafe {
+            let a_ptr = a.device_ptr() as *mut libc::c_void;
+            let b_ptr = b.device_ptr() as *mut libc::c_void;
+            let c_ptr = c.device_ptr() as *mut libc::c_void;
+
+            // Prepare kernel arguments: grid dims (u32, u32, u32), block dims (u32, u32, u32)
+            let grid_dims = (1u32, 1u32, 1u32);
+            let block_dims = (m as u32, n as u32, k as u32);
+
+            // Launch with proper signature: launch_kernel_on_stream(function, grid_dims, block_dims, stream_ptr, extra_args)
             cuda_core::launch_kernel_on_stream(
                 &self.function,
-                &[m, n, k, alpha, beta],
-                &[
-                    a.device_ptr().ok_or(GemmError::LaunchFailed("A not on device".to_string()))?,
-                    b.device_ptr().ok_or(GemmError::LaunchFailed("B not on device".to_string()))?,
-                    c.device_ptr().ok_or(GemmError::LaunchFailed("C not on device".to_string()))?,
-                ],
-                self.stream.cu_stream(),
+                grid_dims,
+                block_dims,
+                self.stream.as_ref().cu_stream() as u32,
+                self.stream.as_ref(),
+                &mut [a_ptr, b_ptr, c_ptr],
             )
             .map_err(|e| GemmError::LaunchFailed(format!("kernel launch failed: {}", e)))?;
         }
@@ -320,10 +327,10 @@ impl CudaGemmKernel {
 impl GemmKernel for CudaGemmKernel {
     fn matmul(
         &self,
-        alpha: f32,
+        _alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        beta: f32,
+        _beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,

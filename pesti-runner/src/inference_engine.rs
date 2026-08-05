@@ -10,10 +10,12 @@ use std::sync::Arc;
 use tracing::warn;
 
 // Import GEMM trait to ensure CpuGemmKernel methods are in scope
+#[cfg(not(feature = "cuda"))]
 use crate::kernel::gemm_stub::GemmKernel;
 
 // Import AttentionKernel trait and its Error type to ensure CpuAttentionKernel methods are in scope
-use crate::kernel::{attention_stub, AttentionError as StubAttentionError, AttentionKernel};
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::{attention_stub, AttentionKernel};
 
 /// Inference engine for tensor computation.
 pub struct InferenceEngine {
@@ -55,7 +57,7 @@ impl InferenceEngine {
         {
             use crate::cuda_runtime::{enumerate_devices, is_available, CudaRuntime};
             use crate::kernel::{
-                AttentionArch, AttentionConfig, AttentionError, AttentionKernel,
+                AttentionArch, AttentionConfig, AttentionKernel,
                 CudaAttentionKernelBuilder, CudaGemmKernelBuilder, GemmArch, GemmError,
             };
 
@@ -104,7 +106,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+                                memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -152,7 +154,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+                                memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -202,7 +204,7 @@ impl InferenceEngine {
                 cuda_runtime,
                 #[cfg(feature = "cuda")]
                 stream,
-                memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+                memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
             }
@@ -226,7 +228,7 @@ impl InferenceEngine {
             cuda_runtime: None,
             #[cfg(feature = "cuda")]
             stream: None,
-            memory_manager: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+            memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
         }
@@ -393,14 +395,12 @@ impl InferenceEngine {
         // Try GPU first
         match self.attention.forward(query, key_cache, value_cache, mask, config) {
             Ok(output) => Ok(output),
-            Err(StubAttentionError::NotAvailable) => {
+            Err(crate::kernel::AttentionError::NotAvailable) => {
                 // GPU not available — fall through to CPU
                 warn!("Attention: GPU not available, falling back to CPU");
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|e| {
-                        RunnerError::Tensor(format!("Attention CPU fallback failed: {e}"))
-                    })
+                    .map_err(|e| RunnerError::Tensor(format!("Attention CPU fallback failed: {e}")))
             }
             Err(e) => {
                 // GPU failed — try CPU fallback
@@ -413,15 +413,16 @@ impl InferenceEngine {
                 let seq = key_cache.seq_len();
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|e: StubAttentionError| {
-                        // Convert stub AttentionError to real AttentionError
+                    .map_err(|e: crate::kernel::AttentionError| {
+                        // Map kernel error to runner error (using the generic one from error.rs)
                         let detail = match e {
-                            StubAttentionError::LaunchFailed(msg) => {
+                            crate::kernel::AttentionError::LaunchFailed(msg) => {
                                 crate::error::AttentionError::LaunchFailed(msg)
                             }
-                            StubAttentionError::NotAvailable => {
+                            crate::kernel::AttentionError::NotAvailable => {
                                 crate::error::AttentionError::NotAvailable
                             }
+                            _ => crate::error::AttentionError::LaunchFailed(e.to_string()),
                         };
                         RunnerError::Attention {
                             num_heads,
