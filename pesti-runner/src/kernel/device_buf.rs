@@ -15,7 +15,11 @@
 //! backend.free(handle)?;
 //! ```
 
+#[cfg(feature = "cuda")]
 use crate::kernel::memory::{MemoryBackend, MemoryError, MemoryManager, RawHandle};
+
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::memory_stub::{MemoryBackend, MemoryError, MemoryManager, RawHandle};
 use std::marker::PhantomData;
 
 /// Error type for device buffer operations.

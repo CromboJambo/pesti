@@ -16,6 +16,36 @@ pub enum MemoryManager {
     Cpu(CpuMemoryBackend),
 }
 
+impl MemoryManager {
+    pub fn new_cpu(capacity: usize) -> Self {
+        MemoryManager::Cpu(CpuMemoryBackend::new(capacity))
+    }
+
+    pub fn alloc(&self, bytes: usize) -> Result<u64, MemoryError> {
+        match self {
+            MemoryManager::Cpu(backend) => backend.alloc(bytes),
+        }
+    }
+
+    pub fn free(&self, handle: u64) -> Result<(), MemoryError> {
+        match self {
+            MemoryManager::Cpu(backend) => backend.free(handle),
+        }
+    }
+
+    pub fn h2d(&self, _data: &[u8], _handle: u64) -> Result<(), MemoryError> {
+        Ok(())
+    }
+
+    pub fn d2h(&self, _handle: u64, _dst: &mut [u8]) -> Result<(), MemoryError> {
+        Ok(())
+    }
+
+    pub fn sync(&self) -> Result<(), MemoryError> {
+        Ok(())
+    }
+}
+
 /// CPU memory backend (stub)
 #[derive(Clone)]
 pub struct CpuMemoryBackend {

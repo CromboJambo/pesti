@@ -66,8 +66,12 @@
 //!
 #[cfg(feature = "cuda")]
 pub mod attention;
+#[cfg(not(feature = "cuda"))]
+pub mod attention_stub;
 #[cfg(feature = "cuda")]
 pub mod builder;
+#[cfg(not(feature = "cuda"))]
+pub mod builder_stub;
 pub mod candle_bridge;
 pub mod device_buf;
 #[cfg(feature = "cuda")]
@@ -75,13 +79,16 @@ pub mod memory;
 #[cfg(not(feature = "cuda"))]
 pub mod memory_stub;
 pub mod dispatch;
+#[cfg(feature = "cuda")]
 pub mod gemm;
+#[cfg(not(feature = "cuda"))]
+pub mod gemm_stub;
 #[cfg(feature = "cuda")]
 pub mod gemm_cutlass;
 #[cfg(feature = "cuda")]
 pub mod kvcache;
-#[cfg(feature = "cuda")]
-pub mod memory;
+#[cfg(not(feature = "cuda"))]
+pub mod kvcache_stub;
 #[cfg(feature = "cuda")]
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
@@ -91,27 +98,42 @@ pub mod tma_bridge;
 #[cfg(feature = "cuda")]
 pub mod tma_descriptor;
 
+#[cfg(feature = "cuda")]
 pub use attention::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
     CpuAttentionKernel, CudaAttentionKernel, CudaAttentionKernelBuilder,
 };
-pub use builder::{GemmBuilder, KernelFromPtx, PtxSource};
-pub use device_buf::{DeviceBuffer, DeviceBufferError, HostBuffer};
-#[cfg(feature = "cuda")]
-pub use gemm::{
-    CpuGemmKernel, CudaGemmKernel, CudaGemmKernelBuilder, GemmArch, GemmConfig, GemmError,
-    GemmKernel,
+#[cfg(not(feature = "cuda"))]
+pub use attention_stub::{
+    AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
+    CpuAttentionKernel,
 };
 #[cfg(feature = "cuda")]
+pub use builder::{GemmBuilder, KernelFromPtx, PtxSource};
+#[cfg(not(feature = "cuda"))]
+pub use builder_stub::GemmBuilder;
+pub use device_buf::{DeviceBuffer, DeviceBufferError, HostBuffer};
+#[cfg(feature = "cuda")]
+pub use gemm::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
+#[cfg(not(feature = "cuda"))]
+pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
+#[cfg(feature = "cuda")]
+pub use gemm::{CudaGemmKernel, CudaGemmKernelBuilder};
+#[cfg(feature = "cuda")]
 pub use kvcache::{KvError, Kvcache, KvcacheSlice};
+#[cfg(not(feature = "cuda"))]
+pub use kvcache_stub::{KvError, Kvcache, KvcacheSlice, TmaDescriptor};
 #[cfg(feature = "cuda")]
 pub use memory::{
     CpuMemoryBackend, CudaMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle,
 };
+#[cfg(not(feature = "cuda"))]
+pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle};
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]
 pub use tma_descriptor::TmaDescriptor;
+#[cfg(feature = "cuda")]
 pub use dispatch::{
     AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
     LinearDispatch, RmsNormDispatch,

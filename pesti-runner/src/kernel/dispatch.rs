@@ -32,15 +32,30 @@
 
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
+#[cfg(feature = "cuda")]
 use crate::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel,
     CpuAttentionKernel,
 };
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::attention_stub::{
+    AttentionArch, AttentionConfig, AttentionKernel,
+    CpuAttentionKernel,
+};
+#[cfg(feature = "cuda")]
+use crate::kernel::kvcache::Kvcache;
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::kvcache_stub::Kvcache;
+#[cfg(feature = "cuda")]
+use crate::kernel::memory::MemoryManager;
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::memory_stub::MemoryManager;
 use crate::kernel::candle_bridge;
 use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
 use crate::kernel::gemm::{GemmArch, GemmKernel};
-use crate::kernel::kvcache::Kvcache;
-use crate::kernel::memory::MemoryManager;
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::gemm_stub::{GemmArch, GemmKernel};
 use candle_core::{DType, Device};
 use half::f16;
 use tracing::{debug, warn};
@@ -521,6 +536,7 @@ impl DispatchContext {
     }
 
     /// List available devices.
+    #[cfg(feature = "cuda")]
     pub fn list_devices(&self) -> Vec<crate::cuda_runtime::CudaDeviceInfo> {
         InferenceEngine::list_devices().unwrap_or_default()
     }
