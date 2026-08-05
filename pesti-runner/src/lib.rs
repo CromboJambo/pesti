@@ -110,6 +110,7 @@ mod tests {
 
     // ── DeviceBackend ──────────────────────────────────────────────────
 
+    #[cfg(feature = "cuda")]
     #[test]
     fn device_backend_new_defaults_to_cpu() {
         let backend = DeviceBackend::new("cuda");
@@ -117,6 +118,7 @@ mod tests {
         assert!(matches!(backend.device, candle_core::Device::Cpu));
     }
 
+    #[cfg(feature = "cuda")]
     #[test]
     fn device_backend_select_cpu() {
         let mut backend = DeviceBackend::new("cpu");

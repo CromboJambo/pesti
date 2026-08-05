@@ -440,9 +440,7 @@ pub fn free_on<M: Into<MemoryManager>>(manager: M, handle: RawHandle) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::memory::CpuMemoryBackend;
-    use half::f16;
-
+    
     #[test]
     fn host_buffer_from_vec() {
         let buf = HostBuffer::from_host(vec![1, 2, 3]);
@@ -473,8 +471,10 @@ mod tests {
         assert_eq!(buf.to_host(), vec![10, 2, 3]);
     }
 
+    #[cfg(feature = "cuda")]
     #[test]
     fn device_buffer_from_backend() {
+        use crate::kernel::memory::CpuMemoryBackend;
         let mgr = MemoryManager::Cpu(CpuMemoryBackend::new(1024 * 1024));
         let bytes = 10 * std::mem::size_of::<i32>();
         let handle = mgr.alloc(bytes).unwrap();
@@ -488,8 +488,8 @@ mod tests {
     fn device_buffer_byte_len() {
         let buf: DeviceBuffer<f32> = DeviceBuffer::zeros(5);
         assert_eq!(buf.byte_len(), 5 * 4); // f32 = 4 bytes
-        let buf: DeviceBuffer<f16> = DeviceBuffer::zeros(5);
-        assert_eq!(buf.byte_len(), 5 * 2); // f16 = 2 bytes
+        let buf: DeviceBuffer<u16> = DeviceBuffer::zeros(5);
+        assert_eq!(buf.byte_len(), 5 * 2); // u16 = 2 bytes
     }
 
     #[test]

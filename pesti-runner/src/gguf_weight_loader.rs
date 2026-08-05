@@ -646,8 +646,8 @@ fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 16;
     let remaining = element_count % 16;
-    // Q6_K block size: 42 bytes per 16 elements (256 elements = 210 bytes)
-    // Format: d(2) + scales(16) + qs_low(128) + h_extra(32) + qs_high_flags(32) = 210 bytes
+    // Q6_K block size: 42 bytes per 16 elements (total tensor = 256 elements = 105 * 42 bytes)
+    // Per-block layout: d(2) + scales(8) + qs_low(8) + h_extra/qs_high_flags(4) + padding(20) = 42 bytes
     let expected_size = num_full_blocks * 42 + if remaining > 0 { 5 } else { 0 };
 
     if data.len() < expected_size {
@@ -661,10 +661,10 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let mut offset = 0usize;
 
     for _ in 0..num_full_blocks {
-        // d (scale): f16 at offset 0
+        // d (scale): f16 at offset 0-1
         let d = f16_to_f32(&data[offset..offset + 2]);
         
-        // scales: 16 bytes = 4 f16 scales at offsets 2-17
+        // scales: 4 × f16 (8 bytes) at offsets 2-9, one per group of 4 elements
         let scales = [
             f16_to_f32(&data[offset + 2..offset + 4]),
             f16_to_f32(&data[offset + 4..offset + 6]),
@@ -672,48 +672,38 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             f16_to_f32(&data[offset + 8..offset + 10]),
         ];
         
-        // qs_low: 128 bytes = 16 u8 per group of 16 values, storing lower 2 bits
-        // Each byte stores 4 values (2 bits each)
+        // qs_low: 8 bytes at offset 10-17, stores lower 2 bits for all 16 elements
+        // Each byte holds 4 values (2 bits each)
         let qs_low_start = offset + 10;
         
-        // h_extra: 32 bytes = 4 f16 scales for upper nibbles at offsets 138-170
-        let h_extra = [
-            f16_to_f32(&data[offset + 138..offset + 140]),
-            f16_to_f32(&data[offset + 140..offset + 142]),
-            f16_to_f32(&data[offset + 142..offset + 144]),
-            f16_to_f32(&data[offset + 144..offset + 146]),
-        ];
-        
-        // qs_high_flags: 32 bytes at offsets 170-202, bit-packed flags for upper nibbles
-        let qs_high_flags_start = offset + 150;
+        // h_extra/qs_high_flags: 4 bytes at offset 18-21, bit-packed flags for upper nibbles
+        // These determine which of the 4 h_extra scales to use for each element
+        let qs_high_flags_start = offset + 18;
 
         // Dequantize 16 elements per block
         for i in 0..16usize {
-            // Extract lower 2 bits from qs_low (stored as 2-bit values)
+            // Extract lower 2 bits from qs_low (stored as 2-bit values, 4 per byte)
             let byte_idx = i / 4;
             let bit_offset = (i % 4) * 2;
             let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
             
-            // Extract upper bits from qs_high_flags and h_extra
-            // In Q6_K, the upper 4 bits are stored in a complex format
-            let flag_byte_idx = i / 8;
-            let flag_bit = (i % 8) * 2;
+            // Extract upper bits from qs_high_flags (2 bits per element, bit-packed)
+            let flag_byte_idx = i / 4;
+            let flag_bit = (i % 4) * 2;
             let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
             
-            // The actual upper nibble comes from h_extra based on the flag value
-            let q_high = if flag == 0 {
-                (i / 4) % 4
-            } else {
-                (flag - 1) as usize
-            };
+            // In Q6_K, the upper nibble is derived from flags and scales
+            // q = q_low + 4 * q_high where q_high comes from h_extra based on flag
+            let q_high = if flag == 0 { 0 } else { (flag - 1) as usize };
             
-            // Combine: q = q_low + 4 * q_high (simplified model)
+            // Combine: full quantized value is a 6-bit integer
             let q = (q_low as i32) + 4 * (q_high as i32);
             
-            // Select scale based on value range
-            let scale = if q < 4 { scales[i / 4] } else { h_extra[i / 4] };
+            // Select scale based on which group of 4 this element belongs to
+            let scale = scales[i / 4];
             
             // Dequantize: value = d * (q - 32) * scale
+            // The -32 is the zero-point offset for Q6_K
             let v = (q as f32 - 32.0) * scale;
             result.push(d * v);
         }
@@ -731,32 +721,30 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         ];
         
         let qs_low_start = offset + 10;
-        let h_extra = [
-            f16_to_f32(&data[offset + 138..offset + 140]),
-            f16_to_f32(&data[offset + 140..offset + 142]),
-            f16_to_f32(&data[offset + 142..offset + 144]),
-            f16_to_f32(&data[offset + 144..offset + 146]),
-        ];
         
-        let qs_high_flags_start = offset + 150;
+        // h_extra/qs_high_flags: 4 bytes at offset 18-21, bit-packed flags for upper nibbles
+        let qs_high_flags_start = offset + 18;
 
         for i in 0..remaining {
             let byte_idx = i / 4;
             let bit_offset = (i % 4) * 2;
             let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
             
-            let flag_byte_idx = i / 8;
-            let flag_bit = (i % 8) * 2;
+            // Extract upper bits from qs_high_flags (2 bits per element, bit-packed)
+            let flag_byte_idx = i / 4;
+            let flag_bit = (i % 4) * 2;
             let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
             
-            let q_high = if flag == 0 {
-                (i / 4) % 4
-            } else {
-                (flag - 1) as usize
-            };
+            // In Q6_K, the upper nibble is derived from flags and scales
+            let q_high = if flag == 0 { 0 } else { (flag - 1) as usize };
             
+            // Combine: full quantized value is a 6-bit integer
             let q = (q_low as i32) + 4 * (q_high as i32);
-            let scale = if q < 4 { scales[i / 4] } else { h_extra[i / 4] };
+            
+            // Select scale based on which group of 4 this element belongs to
+            let scale = scales[i / 4];
+            
+            // Dequantize: value = d * (q - 32) * scale
             let v = (q as f32 - 32.0) * scale;
             result.push(d * v);
         }
