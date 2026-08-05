@@ -86,7 +86,7 @@ pub mod stub {
             }
         }
 
-        pub fn from_host(_stream: &super::CudaStream, _data: &[T]) -> Self {
+        pub fn from_host(_data: &[T]) -> Self {
             Self {
                 _marker: std::marker::PhantomData,
             }

@@ -1,7 +1,31 @@
-use crate::cuda_runtime::CudaError;
-use crate::kernel::{AttentionError, DispatchError, GemmError};
+//! Error types for pesti-runner.
+//!
+//! Provides `RunnerError` and `Result` type alias used throughout the crate.
+//! When CUDA is disabled, CUDA-related errors are represented as string messages.
+
 use thiserror::Error;
 
+/// CUDA error (stub when feature="cuda" is disabled)
+#[derive(Debug, Error)]
+pub enum CudaError {
+    #[error("CUDA not available")]
+    NotAvailable,
+    #[error("CUDA not initialized: {0}")]
+    NotInitialized(String),
+    #[error("CUDA error: {0}")]
+    Other(String),
+}
+
+/// Attention error (used by both CPU and GPU kernels)
+#[derive(Debug, Error)]
+pub enum AttentionError {
+    #[error("kernel launch failed: {0}")]
+    LaunchFailed(String),
+    #[error("attention not available")]
+    NotAvailable,
+}
+
+/// Core runner error type
 #[derive(Debug, Error)]
 pub enum RunnerError {
     #[error("GEMM error ({arch}, {m}x{n}x{k}): {detail}")]
@@ -11,7 +35,7 @@ pub enum RunnerError {
         n: usize,
         k: usize,
         #[source]
-        detail: GemmError,
+        detail: crate::kernel::GemmError,
     },
 
     #[error("attention error (heads={num_heads}, dim={head_dim}, seq={seq}): {detail}")]
@@ -63,7 +87,8 @@ pub enum RunnerError {
     MissingHeaderField(String),
 
     #[error("dispatch error: {0}")]
-    Dispatch(#[from] DispatchError),
+    Dispatch(#[from] crate::kernel::kvcache_stub::KvError),
 }
 
+/// Result type alias for pesti-runner operations.
 pub type Result<T> = std::result::Result<T, RunnerError>;

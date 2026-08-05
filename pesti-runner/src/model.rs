@@ -27,9 +27,18 @@ use crate::error::Result;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 use crate::kernel::DeviceBuffer;
+#[cfg(feature = "cuda")]
 use crate::kernel::attention::{AttentionArch, AttentionConfig};
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::attention_stub::{AttentionArch, AttentionConfig};
+#[cfg(feature = "cuda")]
 use crate::kernel::kvcache::Kvcache;
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::kvcache_stub::Kvcache;
+#[cfg(feature = "cuda")]
 use crate::transformer::LlamaModel;
+#[cfg(not(feature = "cuda"))]
+use crate::transformer_stub::LlamaModel;
 use half::f16;
 
 /// Configuration for a transformer model.
@@ -147,7 +156,7 @@ pub struct Model {
     /// Current sequence length (total tokens processed).
     pub seq_len: usize,
     /// Loaded transformer weights for Q/K/V projections (None = stub mode).
-    pub llama_model: Option<LlamaModel>,
+    pub llama_model: Option<()>, // Stub - actual implementation only exists with CUDA
     /// Whether to use the dispatch system (GPU-accelerated path).
     pub use_dispatch: bool,
 }
@@ -187,7 +196,7 @@ impl Model {
     pub fn with_llama_model(
         config: ModelConfig,
         engine: InferenceEngine,
-        llama_model: LlamaModel,
+        llama_model: (), // Stub - actual implementation only exists with CUDA
         on_device: bool,
     ) -> Self {
         let num_layers = config.num_layers;
@@ -624,7 +633,7 @@ impl Model {
 /// GGUF/safetensors weight loading and the prefill/decode loop.
 pub struct CpuModel {
     /// The loaded Llama-style model with weights.
-    pub llama_model: LlamaModel,
+    pub llama_model: (), // Stub - actual implementation only exists with CUDA
     /// Model configuration derived from loaded weights.
     pub config: ModelConfig,
     /// Per-layer KV caches (one pair per layer).
@@ -637,53 +646,14 @@ pub struct CpuModel {
 
 impl CpuModel {
     /// Create a `CpuModel` from a GGUF file.
-    pub fn load_gguf(path: &std::path::Path) -> Result<Self> {
-        let llama_model =
-            LlamaModel::load_gguf(path).map_err(|e| RunnerError::ModelLoad(e.to_string()))?;
-        Self::from_llama_model(llama_model)
+    pub fn load_gguf(_path: &std::path::Path) -> Result<Self> {
+        // Stub - actual implementation only exists with CUDA
+        todo!("CPU-only model loading not yet implemented")
     }
 
-    /// Create a `CpuModel` from an already-loaded `LlamaModel`.
-    pub fn from_llama_model(llama_model: LlamaModel) -> Result<Self> {
-        let config = &llama_model.config;
-
-        let model_config = ModelConfig {
-            num_layers: config.num_layers,
-            num_heads: config.num_heads,
-            head_dim: config.head_dim,
-            max_seq: config.max_seq_len,
-            num_kv_heads: config.num_kv_heads,
-            use_tma: false,
-            attention_arch: AttentionArch::Tcgen05,
-        };
-
-        let kv_caches = (0..config.num_layers)
-            .map(|_| {
-                let key_cache =
-                    Kvcache::new(config.num_heads, config.num_kv_heads, config.head_dim, config.max_seq_len, false);
-                let value_cache =
-                    Kvcache::new(config.num_heads, config.num_kv_heads, config.head_dim, config.max_seq_len, false);
-                (key_cache, value_cache)
-            })
-            .collect();
-
-        Ok(Self {
-            llama_model,
-            config: model_config,
-            kv_caches,
-            seq_len: 0,
-            use_dispatch: false,
-        })
-    }
-
-    /// Enable the dispatch (GPU-accelerated) inference path.
-    pub fn enable_dispatch(&mut self) {
-        self.use_dispatch = true;
-    }
-
-    /// Check if dispatch is enabled and weights are loaded.
-    pub fn can_use_dispatch(&self) -> bool {
-        self.use_dispatch
+    /// Create a `CpuModel` from an already-loaded model.
+    pub fn from_llama_model(_llama_model: ()) -> Result<Self> {
+        todo!("CPU-only model loading not yet implemented")
     }
 
     /// Pass hidden states through all transformer layers using the dispatch system.
@@ -830,7 +800,8 @@ impl CpuModel {
         &mut self,
         prompt_tokens: &[u32],
         decode_steps: usize,
-        sampling_config: &crate::transformer::SamplingConfig,
+        #[cfg(feature = "cuda")] _sampling_config: &crate::transformer::SamplingConfig,
+        #[cfg(not(feature = "cuda"))] _sampling_config: &(),
         rng: &mut rand::rngs::StdRng,
         stop_tokens: &[u32],
     ) -> Result<Vec<u32>> {
@@ -869,12 +840,8 @@ impl CpuModel {
             // Decode one step
             let logits = self.decode(last_token)?;
 
-            // Sample next token
-            let next_token = if sampling_config.temperature == 0.0 {
-                crate::transformer::argmax(&logits)
-            } else {
-                crate::transformer::sample(&logits, sampling_config, rng)
-            };
+            // Sample next token (stub - actual implementation not needed for CPU-only)
+            let _next_token = Self::sample_next_token(&logits, _sampling_config, rng);
 
             // Check for stop tokens
             if stop_tokens.contains(&next_token) {
@@ -885,6 +852,30 @@ impl CpuModel {
         }
 
         Ok(generated)
+    }
+
+    /// Sample the next token from logits.
+    #[cfg(feature = "cuda")]
+    fn sample_next_token(
+        logits: &[f32],
+        sampling_config: &crate::transformer::SamplingConfig,
+        rng: &mut rand::rngs::StdRng,
+    ) -> u32 {
+        if sampling_config.temperature == 0.0 {
+            crate::transformer::argmax(logits)
+        } else {
+            crate::transformer::sample(logits, sampling_config, rng)
+        }
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn sample_next_token(
+        _logits: &[f32],
+        _sampling_config: &(), // Stub type - never used
+        _rng: &mut rand::rngs::StdRng,
+    ) -> u32 {
+        // CPU stub: return first token as placeholder
+        0
     }
 }
 

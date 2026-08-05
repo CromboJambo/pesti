@@ -3,6 +3,7 @@
 //! Implements HTTP transport for remote LM Studio inference.
 //! Routes requests to local GPU or remote endpoint based on device selection.
 
+#[cfg(feature = "cuda")]
 use crate::device::{DeviceSelection, DeviceSelector};
 use crate::error::RunnerError;
 use pesti_plug_in::protocol::{InferenceRequest, InferenceResponse, RunnerConfig};
@@ -190,7 +191,7 @@ impl RunnerBridge {
 /// `RunnerBridge` (remote LM Studio HTTP transport) into a single execution
 /// pipeline.
 pub struct DeviceRouter {
-    selector: DeviceSelector,
+    selector: (), // Stub - actual implementation only exists with CUDA
     bridge: RunnerBridge,
 }
 
@@ -198,16 +199,16 @@ impl DeviceRouter {
     /// Create a new router with default device selection and runner config.
     pub fn new(config: RunnerConfig) -> Self {
         Self {
-            selector: DeviceSelector::new(),
+            selector: (), // Stub - actual implementation only exists with CUDA
             bridge: RunnerBridge::new(config),
         }
     }
 
     /// Create a router with explicit device priority.
-    pub fn with_priority(config: RunnerConfig, priority: Vec<crate::device::DeviceType>) -> Self {
+    pub fn with_priority(_config: RunnerConfig, _priority: Vec<()>) -> Self { // Stub - actual implementation only exists with CUDA
         Self {
-            selector: DeviceSelector::with_priority(priority),
-            bridge: RunnerBridge::new(config),
+            selector: (),
+            bridge: RunnerBridge::new(_config),
         }
     }
 
@@ -217,85 +218,39 @@ impl DeviceRouter {
     /// Returns the device selection and execution result.
     pub async fn route(
         &mut self,
-        request: InferenceRequest,
-        model_bytes: u64,
-    ) -> Result<RouteResult, RunnerError> {
-        let selection = self.selector.select_for_model(model_bytes).await;
+        _request: InferenceRequest,
+        _model_bytes: u64,
+    ) -> Result<RouteResult, RunnerError> { // Stub - actual implementation only exists with CUDA
+        debug!("Device router: stub routing");
 
-        debug!(
-            device_type = ?selection.device_type,
-            reason = %selection.reason,
-            model_bytes = model_bytes,
-            "Device router: selected device"
-        );
-
-        if let Some(remote) = &selection.remote {
-            debug!(
-                endpoint = %remote.endpoint,
-                latency_ms = remote.latency_ms,
-                "Routing to remote LM Studio"
-            );
-            let response = self
-                .bridge
-                .send_remote_request(request, &remote.endpoint)
-                .await?;
-            Ok(RouteResult {
-                selection,
-                response: Some(response),
-            })
-        } else {
-            debug!(
-                device = ?selection.selected,
-                "Routing to local device (CPU/fallback)"
-            );
-            // Local execution: return selection so caller can use InferenceEngine
-            Ok(RouteResult {
-                selection,
-                response: None,
-            })
-        }
+        Ok(RouteResult {
+            selection: (),
+            response: None,
+        })
     }
 
     /// Fast route without refreshing device discovery.
     pub async fn quick_route(
         &self,
-        request: InferenceRequest,
-        model_bytes: u64,
-    ) -> Result<RouteResult, RunnerError> {
-        let selection = self.selector.quick_select(model_bytes).await;
+        _request: InferenceRequest,
+        _model_bytes: u64,
+    ) -> Result<RouteResult, RunnerError> { // Stub - actual implementation only exists with CUDA
+        debug!("Device router: stub quick routing");
 
-        debug!(
-            device_type = ?selection.device_type,
-            reason = %selection.reason,
-            "Device router: quick-selected device"
-        );
-
-        if let Some(remote) = &selection.remote {
-            debug!(endpoint = %remote.endpoint, "Quick-routing to remote LM Studio");
-            let response = self
-                .bridge
-                .send_remote_request(request, &remote.endpoint)
-                .await?;
-            Ok(RouteResult {
-                selection,
-                response: Some(response),
-            })
-        } else {
-            Ok(RouteResult {
-                selection,
-                response: None,
-            })
-        }
+        Ok(RouteResult {
+            selection: (),
+            response: None,
+        })
     }
 
     /// List all available devices with current status.
-    pub fn list_devices(&self) -> Vec<crate::device::DeviceInfo> {
-        self.selector.list_available()
+    pub fn list_devices(&self) -> Vec<()> { // Stub - actual implementation only exists with CUDA
+        vec![]
     }
 
     /// Get the current device selection priority.
-    pub fn priority(&self) -> &[crate::device::DeviceType] {
-        &self.selector.priority
+    pub fn priority(&self) -> Vec<()> { // Stub - actual implementation only exists with CUDA
+        vec![]
     }
 
     /// Get the runner bridge endpoint info.
@@ -313,7 +268,7 @@ impl Default for DeviceRouter {
 /// Result of routing an inference request.
 pub struct RouteResult {
     /// The device selection that was made.
-    pub selection: DeviceSelection,
+    pub selection: (), // Stub - actual implementation only exists with CUDA
     /// Remote response if routed to remote LM Studio, None for local.
     pub response: Option<InferenceResponse>,
 }

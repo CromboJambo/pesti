@@ -14,7 +14,6 @@ pub mod device;
 pub mod device_stub;
 #[cfg(feature = "cuda")]
 pub mod device_discovery;
-#[cfg(feature = "cuda")]
 pub mod error;
 #[cfg(not(feature = "cuda"))]
 pub mod error_stub;
@@ -42,9 +41,8 @@ pub use cuda_runtime::{
     CudaDeviceInfo, CudaError, CudaRuntime, device_count, enumerate_devices, is_available,
     select_best_device,
 };
+#[cfg(feature = "cuda")]
 pub use device::{DeviceBackend, DeviceInfo, DeviceSelection, DeviceSelector, DeviceType};
-#[cfg(not(feature = "cuda"))]
-pub use device_stub::LocalDevice;
 #[cfg(feature = "cuda")]
 pub use device_discovery::LocalDevice;
 #[cfg(feature = "cuda")]
@@ -61,7 +59,10 @@ pub use safetensors_tokenizer::{
 };
 pub use inference_engine::InferenceEngine;
 pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
+#[cfg(feature = "cuda")]
 pub use kernel::{DeviceBuffer, HostTmaDescriptor, Kvcache};
+#[cfg(not(feature = "cuda"))]
+pub use kernel::{DeviceBuffer as DeviceBuffer, kvcache_stub::Kvcache};
 pub use model::{CpuModel, Model, ModelConfig};
 pub use model_loader::ModelLoader;
 pub use model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
@@ -72,6 +73,7 @@ pub use remote_discovery::{RemoteDevice, RemoteDiscoveryConfig};
 pub use runner::{DeviceRouter, RouteResult, RunnerBridge};
 pub use tier::{LayerProfiler, Tier, TieredExecution};
 pub use tokenizer::Tokenizer;
+#[cfg(feature = "cuda")]
 pub use transformer::{
     GgufTokenizerConfig, LlamaModel, SamplingConfig, argmax, load_tokenizer_from_gguf, sample,
 };

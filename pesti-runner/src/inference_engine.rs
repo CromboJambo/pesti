@@ -98,7 +98,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::MemoryManager::new(),
+                                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -146,7 +146,7 @@ impl InferenceEngine {
                                 cuda_runtime,
                                 #[cfg(feature = "cuda")]
                                 stream,
-                                memory_manager: crate::kernel::MemoryManager::new(),
+                                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
                             };
@@ -196,7 +196,7 @@ impl InferenceEngine {
                 cuda_runtime,
                 #[cfg(feature = "cuda")]
                 stream,
-                memory_manager: crate::kernel::MemoryManager::new(),
+                memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
             }
@@ -220,7 +220,7 @@ impl InferenceEngine {
             cuda_runtime: None,
             #[cfg(feature = "cuda")]
             stream: None,
-            memory_manager: crate::kernel::MemoryManager::new(),
+            memory_manager: crate::kernel::memory_stub::CpuMemoryBackend::new(1024 * 1024),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
         }
