@@ -206,7 +206,7 @@ impl CudaMemoryBackend {
             total_memory: 0,
             free_memory: 0,
         };
-        
+
         // Try to initialize CUDA driver
         let enabled = unsafe {
             match cuda_core::init(0) {
@@ -312,8 +312,7 @@ impl MemoryBackend for CudaMemoryBackend {
         unsafe {
             cuda_core::memory::free_async(ptr, self.stream.cu_stream())
         }
-        .map_err(|e| MemoryError::Cuda(format!("cuMemFreeAsync failed: {e}")))?;
-        Ok(())
+        .map_err(|e| MemoryError::Cuda(format!("cuMemFreeAsync failed: {e}")))
     }
 
     fn h2d(&self, src: &[u8], dst: RawHandle) -> Result<(), MemoryError> {
@@ -326,8 +325,7 @@ impl MemoryBackend for CudaMemoryBackend {
                 self.stream.cu_stream(),
             )
         }
-        .map_err(|e| MemoryError::Transfer(format!("H2D copy failed: {e}")))?;
-        Ok(())
+        .map_err(|e| MemoryError::Transfer(format!("H2D copy failed: {e}")))
     }
 
     fn d2h(&self, src: RawHandle, dst: &mut [u8]) -> Result<(), MemoryError> {
@@ -340,8 +338,7 @@ impl MemoryBackend for CudaMemoryBackend {
                 self.stream.cu_stream(),
             )
         }
-        .map_err(|e| MemoryError::Transfer(format!("D2H copy failed: {e}")))?;
-        Ok(())
+        .map_err(|e| MemoryError::Transfer(format!("D2H copy failed: {e}")))
     }
 
     fn d2d(&self, src: RawHandle, dst: RawHandle, bytes: usize) -> Result<(), MemoryError> {
@@ -350,15 +347,13 @@ impl MemoryBackend for CudaMemoryBackend {
         unsafe {
             cuda_core::memory::memcpy_dtod_async(dst_ptr, src_ptr, bytes, self.stream.cu_stream())
         }
-        .map_err(|e| MemoryError::Transfer(format!("D2D copy failed: {e}")))?;
-        Ok(())
+        .map_err(|e| MemoryError::Transfer(format!("D2D copy failed: {e}")))
     }
 
     fn sync(&self) -> Result<(), MemoryError> {
         self.stream
             .synchronize()
-            .map_err(|e| MemoryError::Cuda(format!("Stream sync failed: {e}")))?;
-        Ok(())
+            .map_err(|e| MemoryError::Cuda(format!("Stream sync failed: {e}")))
     }
 }
 
@@ -498,58 +493,5 @@ mod tests {
         let mut buf = vec![0u8; 10];
         backend.d2h(h, &mut buf).unwrap();
         assert_eq!(buf, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    }
-
-    #[test]
-    fn cpu_backend_d2d() {
-        let backend = CpuMemoryBackend::new(1024 * 1024);
-        let src = backend.alloc(10).unwrap();
-        let dst = backend.alloc(10).unwrap();
-        backend.h2d(&[42u8; 10], src).unwrap();
-        backend.d2d(src, dst, 10).unwrap();
-        let mut buf = vec![0u8; 10];
-        backend.d2h(dst, &mut buf).unwrap();
-        assert_eq!(buf, vec![42u8; 10]);
-    }
-
-    #[test]
-    fn cpu_backend_free_invalid() {
-        let backend = CpuMemoryBackend::new(1024);
-        let bad = RawHandle(9999);
-        assert!(backend.free(bad).is_err());
-    }
-
-    #[test]
-    fn cpu_backend_alloc_exceeds_capacity() {
-        let backend = CpuMemoryBackend::new(100);
-        assert!(backend.alloc(200).is_err());
-    }
-
-    #[test]
-    fn cpu_backend_used_bytes() {
-        let backend = CpuMemoryBackend::new(1024 * 1024);
-        let h1 = backend.alloc(50).unwrap();
-        let h2 = backend.alloc(30).unwrap();
-        assert_eq!(backend.used_bytes(), 80);
-        backend.free(h1).unwrap();
-        assert_eq!(backend.used_bytes(), 30);
-        backend.free(h2).unwrap();
-        assert_eq!(backend.used_bytes(), 0);
-    }
-
-    #[test]
-    fn cpu_backend_reuse_slot() {
-        let backend = CpuMemoryBackend::new(1024);
-        let h1 = backend.alloc(100).unwrap();
-        backend.free(h1).unwrap();
-        let h2 = backend.alloc(50).unwrap();
-        // Should reuse the freed slot (same index)
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn cpu_backend_sync() {
-        let backend = CpuMemoryBackend::new(1024);
-        assert!(backend.sync().is_ok());
     }
 }

@@ -1,123 +1,22 @@
-.version 8.5
+// Stub tcgen05 GEMM kernel for CPU-only builds
+// This is a minimal placeholder that compiles but does nothing useful
+.version 8.7
 .target sm_100
 .address_size 64
 
-// tcgen05 GEMM kernel for sm_100 (Blackwell datacenter: B200)
-// Kernel: C = alpha * A * B + beta * C
-// A: [M x K] row-major f16
-// B: [K x N] row-major f16
-// C: [M x N] row-major f32
-
+// tcgen05 128x128x16 tile GEMM kernel (stub)
 .visible .entry gemm_tcgen05_kernel(
-    .param .f32 alpha,
-    .param .b64 a_ptr,
-    .param .b64 b_ptr,
-    .param .f32 beta,
-    .param .b64 c_ptr,
-    .param .s32 m,
-    .param .s32 n,
-    .param .s32 k
-) {
-    .reg .pred    %p<8>;
-    .reg .f32     %f<16>;
-    .reg .f16     %h<16>;
-    .reg .b64     %rd<16>;
-    .reg .s32     %r<16>;
-    .reg .s64     %rl<8>;
-
-    ld.param.f32     %f1, [alpha];
-    ld.param.u64     %rd1, [a_ptr];
-    ld.param.u64     %rd2, [b_ptr];
-    ld.param.f32     %f2, [beta];
-    ld.param.u64     %rd3, [c_ptr];
-    ld.param.s32     %r1, [m];
-    ld.param.s32     %r2, [n];
-    ld.param.s32     %r3, [k];
-
-    // Calculate global thread indices
-    mov.u32 %r4, %blockid.x;
-    mov.u32 %r5, %blockid.y;
-    mov.u32 %r6, %threadid.x;
-    mov.u32 %r7, %threadid.y;
-
-    // Block handles 128x128 tile (tcgen05)
-    // Grid dimensions: (N/128, M/128)
-
-    // Row = blockid.y * 128 + threadid.y * 8 + lane_y
-    // Col = blockid.x * 128 + threadid.x * 8 + lane_x
-
-    // For simplicity in this stub, each thread computes a single output
-    // Real implementation would use tcgen05 instructions with TMA
-
-    mul.lo.s32   %r8, %r5, 128;
-    add.s32      %r9, %r8, %r7;
-    mul.s32      %r9, %r9, 8;
-    add.s32      %r9, %r9, %r6;
-
-    mul.lo.s32   %r10, %r4, 128;
-    add.s32      %r11, %r10, %r6;
-    mul.s32      %r11, %r11, 8;
-
-    // Bounds check
-    setp.ge.s32  %p1, %r9, %r1;
-    setp.ge.s32  %p2, %r11, %r2;
-    or.pred      %p3, %p1, %p2;
-    @%p3 bra     EXIT;
-
-    // Accumulator
-    mov.f32      %f3, 0f00000000; // 0.0f
-
-    // K-loop for dot product (simplified - no tensor cores in stub)
-    mov.s32      %r12, 0;
-K_LOOP:
-    setp.lt.s32  %p4, %r12, %r3;
-    @!%p4 bra    K_DONE;
-
-    // A[row * K + k]
-    mul.lo.s32   %r13, %r9, %r3;
-    add.s32      %r14, %r13, %r12;
-    cvta.to.global.u64 %rd4, %rd1;
-    mul.wide.s32 %rl1, %r14, 2; // f16 = 2 bytes
-    add.u64      %rd5, %rd4, %rl1;
-    ld.global.nc.v2.f16 {%h1, %h2}, [%rd5];
-
-    // B[k * N + col]
-    mul.lo.s32   %r15, %r12, %r2;
-    add.s32      %r16, %r15, %r11;
-    cvta.to.global.u64 %rd6, %rd2;
-    mul.wide.s32 %rl2, %r16, 2;
-    add.u64      %rd7, %rd6, %rl2;
-    ld.global.nc.v2.f16 {%h3, %h4}, [%rd7];
-
-    // f16 to f32 conversion and multiply-accumulate
-    cvt.f32.f16  %f4, %h1;
-    cvt.f32.f16  %f5, %h3;
-    fma.f32      %f3, %f4, %f5, %f3;
-
-    cvt.f32.f16  %f6, %h2;
-    cvt.f32.f16  %f7, %h4;
-    fma.f32      %f3, %f6, %f7, %f3;
-
-    add.s32      %r12, %r12, 2;
-    bra          K_LOOP;
-
-K_DONE:
-    // C[row * N + col] = alpha * acc + beta * C[row * N + col]
-    mul.f32      %f8, %f1, %f3;
-
-    // Load existing C
-    mul.lo.s32   %r17, %r9, %r2;
-    add.s32      %r18, %r17, %r11;
-    cvta.to.global.u64 %rd8, %rd3;
-    mul.wide.s32 %rl3, %r18, 4; // f32 = 4 bytes
-    add.u64      %rd9, %rd8, %rl3;
-    ld.global.f32 %f9, [%rd9];
-
-    fma.f32      %f10, %f2, %f9, %f8;
-
-    // Store result
-    st.global.f32 [%rd9], %f10;
-
-EXIT:
-    exit;
+    // Parameters: alpha, A, B, beta, C, m, n, k
+    .param .u32 alpha,
+    .param .param A,
+    .param .param B,
+    .param .u32 beta,
+    .param .param C,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k
+)
+{
+    // Stub: just return immediately
+    ret;
 }

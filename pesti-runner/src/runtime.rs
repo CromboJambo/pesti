@@ -347,23 +347,11 @@ impl Runtime {
             ));
         };
 
-        let sampling_config = if cfg!(feature = "cuda") {
-            #[cfg(feature = "cuda")]
-            {
-                crate::transformer::SamplingConfig {
-                    temperature: 0.7,
-                    top_k: 50,
-                    top_p: 0.95,
-                    repeat_penalty: 1.1,
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                // CPU stub - unused in stub mode
-                ()
-            }
-        } else {
-            ()
+        let sampling_config = crate::transformer::SamplingConfig {
+            temperature: 0.7,
+            top_k: 50,
+            top_p: 0.95,
+            repeat_penalty: 1.1,
         };
         let mut rng = StdRng::seed_from_u64(42);
 

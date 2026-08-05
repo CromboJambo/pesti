@@ -44,6 +44,42 @@ impl PtxSource {
         let ptx = std::fs::read_to_string(&path)?;
         Ok(Self::new(ptx, arch, kernel_name))
     }
+
+    /// Load the real WGMMA GEMM kernel PTX.
+    pub fn wgmma_real() -> Result<Self, std::io::Error> {
+        Self::from_file(
+            "src/kernel/ptx/gemm_wgmma_real.ptx",
+            GemmArch::Wgmma,
+            "gemm_wgmma_kernel",
+        )
+    }
+
+    /// Load the real tcgen05 GEMM kernel PTX.
+    pub fn tcgen05_real() -> Result<Self, std::io::Error> {
+        Self::from_file(
+            "src/kernel/ptx/gemm_tcgen05_real.ptx",
+            GemmArch::Tcgen05,
+            "gemm_tcgen05_kernel",
+        )
+    }
+
+    /// Load the stub WGMMA GEMM kernel PTX (for CPU-only builds).
+    pub fn wgmma_stub() -> Result<Self, std::io::Error> {
+        Self::from_file(
+            "src/kernel/ptx/gemm_wgmma.ptx",
+            GemmArch::Wgmma,
+            "gemm_wgmma_kernel",
+        )
+    }
+
+    /// Load the stub tcgen05 GEMM kernel PTX (for CPU-only builds).
+    pub fn tcgen05_stub() -> Result<Self, std::io::Error> {
+        Self::from_file(
+            "src/kernel/ptx/gemm_tcgen05.ptx",
+            GemmArch::Tcgen05,
+            "gemm_tcgen05_kernel",
+        )
+    }
 }
 
 /// Builder for GEMM kernels from PTX sources.
@@ -305,7 +341,7 @@ impl GemmKernel for KernelFromPtx {
                         cuda_core::DeviceBuffer::from_raw_parts(
                             a.device_ptr() as cuda_core::sys::CUdeviceptr,
                             a.len(),
-                            stream.context().clone(),
+                            (*stream).clone(),
                         )
                     };
                     Arc::new(buf)
@@ -326,7 +362,7 @@ impl GemmKernel for KernelFromPtx {
                         cuda_core::DeviceBuffer::from_raw_parts(
                             b.device_ptr() as cuda_core::sys::CUdeviceptr,
                             b.len(),
-                            stream.context().clone(),
+                            (*stream).clone(),
                         )
                     };
                     Arc::new(buf)
@@ -347,7 +383,7 @@ impl GemmKernel for KernelFromPtx {
                         cuda_core::DeviceBuffer::from_raw_parts(
                             c.device_ptr() as cuda_core::sys::CUdeviceptr,
                             c.len(),
-                            stream.context().clone(),
+                            (*stream).clone(),
                         )
                     };
                     Arc::new(buf)

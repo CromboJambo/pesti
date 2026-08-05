@@ -242,8 +242,8 @@ impl CudaGemmKernelBuilder {
 
         // Select PTX based on architecture
         let ptx_src = match self.arch {
-            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma.ptx"),
-            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05.ptx"),
+            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_real.ptx"),
+            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_real.ptx"),
         };
 
         // Load module from PTX source
