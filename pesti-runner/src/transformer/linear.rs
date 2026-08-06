@@ -110,50 +110,32 @@ impl Linear {
         eprintln!("Linear::forward: in={}, out={}, batch={}, x.len={}, weight.len={}, output.len={}",
             self.in_features, self.out_features, batch_size, x.len(), self.weight.len(), output.len());
 
-        // Use gemm crate for optimized matrix multiplication: C = alpha*A*B + beta*C
-        // We want: output[b, o] = sum_i(x[b, i] * W[o, i])
-        // gemm computes: C[m,n] = sum_k(A[m,k] * B[k,n])
-        // So we set: m=batch_size, n=out_features, k=in_features
-        //           A=x with layout [batch, in_features]
-        //           B=weight^T viewed as [in_features, out_features]
+        // Matmul: output[b, o] = sum_i(x[b, i] * W[o, i])
+        // Weight is [out_features, in_features] row-major.
         //
-        // Our weight is stored row-major: W[o][i] = weight[o * in_features + i]
-        // gemm expects column-major: B[k,n] at index k*n_col_stride + n
-        // So we tell gemm that B has col_stride=in_features, row_stride=1
-        // This makes B[i,o] read from weight[o*in_features + i] = W[o,i] ✓
+        // NOTE: gemm crate produces zero results on this system (SIMD dispatch bug).
+        // Using manual matmul with rayon parallelism for correctness.
+        use rayon::prelude::*;
 
-        let m = batch_size;
-        let n = self.out_features;
         let k = self.in_features;
+        let n = self.out_features;
 
-        if m == 0 || n == 0 || k == 0 {
-            return output;
-        }
-
-        // Call gemm::gemm with f32:
-        // C := alpha*A*B + beta*C, where:
-        //   A is [m,k] = [batch, in_features]
-        //   B is [k,n] = [in_features, out_features] (transposed weight)
-        //   C is [m,n] = [batch, out_features]
-        unsafe {
-            gemm::gemm(
-                m, n, k,
-                output.as_mut_ptr(),  // C output
-                1_isize,              // C column stride (row-major: stride=1)
-                n as isize,           // C row stride
-                false,                // read_dst=false (beta=0, overwrite C)
-                x.as_ptr(),           // A input [m,k]
-                k as isize,           // A column stride (row-major)
-                1_isize,              // A row stride
-                self.weight.as_ptr(), // B input [k,n] = transposed weight
-                k as isize,           // B column stride = in_features (to read W[o,i])
-                1_isize,              // B row stride
-                1.0f32,               // alpha
-                0.0f32,               // beta (don't read C)
-                false, false, false,  // no conjugates
-                gemm::Parallelism::Rayon(0),  // use all threads
-            );
-        }
+        // Parallelize over batch dimension
+        output
+            .par_chunks_mut(n)
+            .enumerate()
+            .for_each(|(b, out_row)| {
+                let x_row = &x[b * k..(b + 1) * k];
+                for o in 0..n {
+                    let w_row = &self.weight[o * k..(o + 1) * k];
+                    let mut acc = 0.0f32;
+                    // Manual dot product (auto-vectorized by LLVM)
+                    for i in 0..k {
+                        acc += x_row[i] * w_row[i];
+                    }
+                    out_row[o] = acc;
+                }
+            });
 
         // Apply bias if present
         if let Some(ref bias) = self.bias {

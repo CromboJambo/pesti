@@ -34,7 +34,8 @@ pub mod runner;
 pub mod safetensors_weight_loader;
 pub mod safetensors_tokenizer;
 pub mod tier;
-pub mod tile_dequant;  // Tile-by-tile dequantization for memory efficiency
+pub mod tile_dequant; // Tile-by-tile dequantization for memory efficiency
+pub mod quantized_linear; // Quantized linear layer using tile dequantization
 pub mod tokenizer;
 #[cfg(feature = "cuda")]
 pub mod transformer;

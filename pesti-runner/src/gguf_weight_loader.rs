@@ -33,9 +33,20 @@ pub struct GgufWeights {
     pub header: GgufHeader,
     /// Tensor data: name → dequantized f32 bytes.
     pub tensors: HashMap<String, Vec<u8>>,
+    /// Raw quantized tensor bytes (before dequantization).
+    /// Used by QuantizedLinear for tile-by-tile dequantization.
+    pub raw_tensors: HashMap<String, Vec<u8>>,
 }
 
 impl GgufWeights {
+    /// Get the dtype name of a tensor (e.g., "Q4_K_M", "F32").
+    pub fn tensor_dtype(&self, name: &str) -> Option<String> {
+        self.header.get_tensor(name).map(|t| {
+            let dtype = pesti_gguf::types::GgufDtype::from_u32(t.dtype);
+            format!("{:?}", dtype)
+        })
+    }
+
     /// Get the shape of a tensor as `(in_features, out_features)`.
     ///
     /// GGUF stores weight tensors as `[in_features, out_features]`.
@@ -58,16 +69,19 @@ impl GgufWeights {
 pub fn load_gguf_weights(gguf_path: &Path) -> Result<GgufWeights> {
     let header = parse_gguf(gguf_path)?;
     let mut tensors = HashMap::with_capacity(header.tensors.len());
+    let mut raw_tensors = HashMap::with_capacity(header.tensors.len());
 
     for tensor in &header.tensors {
         let stored_size = tensor.stored_size() as usize;
         let file_offset = header.data_section_start + tensor.offset;
         let raw_data = extract_tensor_bytes_from_path(gguf_path, file_offset, stored_size)?;
+        // Store raw quantized bytes for QuantizedLinear
+        raw_tensors.insert(tensor.name.clone(), raw_data.clone());
         let dequantized = dequantize_tensor(tensor, &raw_data)?;
         tensors.insert(tensor.name.clone(), dequantized);
     }
 
-    Ok(GgufWeights { header, tensors })
+    Ok(GgufWeights { header, tensors, raw_tensors })
 }
 
 /// Load a single tensor from a GGUF file.
