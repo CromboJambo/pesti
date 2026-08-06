@@ -290,6 +290,9 @@ impl DispatchContext {
     }
 
     /// CPU-only GEMM dispatch.
+    ///
+    /// Computes C = alpha * A @ B + beta * C where:
+    ///   A: [m x k] f16, B: [k x n] f16, C: [m x n] f32
     pub fn dispatch_gemm_cpu(
         &self,
         a_host: &[f16],
@@ -302,30 +305,13 @@ impl DispatchContext {
         beta: f32,
     ) -> Result<Vec<f32>, DispatchError> {
         let c_len = m * n;
-        let c_host = if let Some(c_init_data) = c_init {
+        let mut c = if let Some(c_init_data) = c_init {
             c_init_data.to_vec()
         } else {
             vec![0.0f32; c_len]
         };
 
-        // Build CPU device buffers from host data
-        let a_buf = DeviceBuffer::from_host(a_host.to_vec());
-        let b_buf = DeviceBuffer::from_host(b_host.to_vec());
-        let c_buf = DeviceBuffer::from_host(c_host.clone());
-
-        self.cpu_gemm
-            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf.clone(), m, n, k)
-            .map_err(|e| DispatchError::Kernel(format!("CPU GEMM: {e}")))?;
-
-        // Read result from device buffer
-        if let Some(_result) = c_buf.as_slice() {
-            // Result is in f32, but c_buf was created from f32 data
-            // We need to convert f16 result back... actually the CPU GEMM
-            // writes to the f32 buffer. Let's handle this differently.
-        }
-
-        // For CPU path, just compute directly
-        let mut c = vec![0.0f32; c_len];
+        // Direct f16→f32 GEMM: C[i,j] = alpha * sum_k(A[i,k] * B[k,j]) + beta * C[i,j]
         for i in 0..m {
             for j in 0..n {
                 let mut sum = 0.0f32;

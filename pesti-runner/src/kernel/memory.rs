@@ -212,7 +212,7 @@ impl CudaMemoryBackend {
             match cuda_core::init(0) {
                 Ok(_) => true,
                 Err(e) => {
-                    eprintln!("⚠️  CUDA init failed (backend disabled): {}", e);
+                    tracing::warn!(error = %e, "CUDA init failed (backend disabled)");
                     false
                 }
             }
@@ -254,13 +254,17 @@ impl CudaMemoryBackend {
         match crate::cuda_runtime::CudaRuntime::for_default_device() {
             Ok(rt) => {
                 let info = rt.device_info().clone();
-                eprintln!("✅ Device info: {} (sm_{}.{}, {} GiB)", 
-                    info.name, info.compute_capability.0, info.compute_capability.1,
-                    info.total_memory / (1024*1024*1024));
+                tracing::info!(
+                    device = %info.name,
+                    sm = format!("{}.{}", info.compute_capability.0, info.compute_capability.1),
+                    free_gib = info.free_memory as f64 / (1024.0 * 1024.0 * 1024.0),
+                    total_gib = info.total_memory as f64 / (1024.0 * 1024.0 * 1024.0),
+                    "CUDA device info"
+                );
                 self.device_info = info;
             }
             Err(e) => {
-                eprintln!("⚠️  Could not get device info: {}", e);
+                tracing::warn!(error = %e, "Could not get device info");
             }
         }
     }
@@ -269,7 +273,7 @@ impl CudaMemoryBackend {
 impl MemoryBackend for CudaMemoryBackend {
     fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
         if !self.enabled {
-            eprintln!("⚠️  CUDA backend disabled, falling back to host allocation");
+            tracing::info!("CUDA backend disabled, falling back to host allocation");
             // Fallback: allocate on CPU and copy (for testing)
             return Err(MemoryError::AllocationFailed {
                 requested: bytes,
@@ -279,7 +283,7 @@ impl MemoryBackend for CudaMemoryBackend {
 
         let total_mem = self.device_info.total_memory as usize;
         if total_mem == 0 {
-            eprintln!("⚠️  Device memory unknown, using fallback");
+            tracing::info!("Device memory unknown, using fallback");
             return Err(MemoryError::AllocationFailed {
                 requested: bytes,
                 max: 0,
@@ -297,7 +301,7 @@ impl MemoryBackend for CudaMemoryBackend {
             cuda_core::memory::malloc_async(self.stream.cu_stream(), bytes)
         }
         .map_err(|e| {
-            eprintln!("❌ cuMemAllocAsync failed: {}", e);
+            tracing::warn!(error = %e, "cuMemAllocAsync failed");
             MemoryError::Cuda(format!("cuMemAllocAsync: {}", e))
         })?;
 
