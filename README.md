@@ -200,4 +200,4 @@ See [docs/](docs/) for architecture deep-dives and session summaries.
 
 **Version**: 0.1.5 (in progress)  
 **Status**: Production-ready CPU path, GPU kernels functional but end-to-end verification pending  
-**Repository**: [github.com/nousresearch/pesti](https://github.com/nousresearch/pesti)
+**Repository**: [github.com/nousresearch/pesti](https://github.com/CromboJambo/pesti)
