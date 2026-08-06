@@ -7,13 +7,14 @@ use half::f16;
 /// Dummy attention architecture
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AttentionArch {
+    Cpu,
     Wgmma,
     Tcgen05,
 }
 
 impl Default for AttentionArch {
     fn default() -> Self {
-        Self::Tcgen05
+        Self::Cpu
     }
 }
 
@@ -28,10 +29,12 @@ pub struct AttentionConfig {
     pub block_size: usize,
     pub rope_base: f32,
     pub max_pos: usize,
+    pub scale: f32, // Pre-computed scaling factor (1/sqrt(head_dim))
 }
 
 impl Default for AttentionConfig {
     fn default() -> Self {
+        let scale = 1.0 / (64 as f32).sqrt(); // Default head_dim = 64
         Self {
             arch: AttentionArch::default(),
             use_tma: true,
@@ -41,6 +44,7 @@ impl Default for AttentionConfig {
             block_size: 128,
             rope_base: 10000.0,
             max_pos: 4096,
+            scale,
         }
     }
 }
@@ -68,6 +72,11 @@ impl AttentionConfig {
 
     pub fn with_tma(mut self, use_tma: bool) -> Self {
         self.use_tma = use_tma;
+        self
+    }
+
+    pub fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
         self
     }
 }
@@ -108,7 +117,7 @@ impl CpuAttentionKernel {
 
 impl Default for CpuAttentionKernel {
     fn default() -> Self {
-        Self::new()
+        Self::new(AttentionArch::Cpu)
     }
 }
 

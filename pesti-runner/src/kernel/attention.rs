@@ -12,6 +12,7 @@
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
 use half::f16;
+use std::simd::prelude::*;
 
 /// Attention architecture selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,9 +176,9 @@ impl AttentionKernel for CpuAttentionKernel {
         config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         // Extract host data from device buffers
-        let q_host = query.to_host();
-        let k_host = key_cache.buffer().to_host();
-        let v_host = value_cache.buffer().to_host();
+        let q_host: Vec<f32> = query.to_host().iter().map(|&x| f16::to_f32(x)).collect();
+        let k_host: Vec<f32> = key_cache.buffer().to_host().iter().map(|&x| f16::to_f32(x)).collect();
+        let v_host: Vec<f32> = value_cache.buffer().to_host().iter().map(|&x| f16::to_f32(x)).collect();
 
         let num_heads = config.num_heads;
         let head_dim = config.head_dim;
@@ -186,17 +187,39 @@ impl AttentionKernel for CpuAttentionKernel {
 
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
         let mut scores = vec![0.0f32; query_seq_len * num_heads * n];
+        
+        // SIMD inner product helper: process 8 elements at a time
+        #[inline]
+        fn simd_dot_product(q_slice: &[f32], k_slice: &[f32], head_dim: usize) -> f32 {
+            const LANES: usize = 8;
+            
+            let mut sum = 0.0f32;
+            let simd_len = (head_dim / LANES) * LANES;
+            
+            for i in (0..simd_len).step_by(LANES) {
+                let q_vec = f32x8::from_slice(&q_slice[i..]);
+                let k_vec = f32x8::from_slice(&k_slice[i..]);
+                sum += (q_vec * k_vec).reduce_sum();
+            }
+            
+            // Handle remainder
+            for i in simd_len..head_dim {
+                sum += q_slice[i] * k_slice[i];
+            }
+            
+            sum
+        }
+        
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
+                let q_base = (qs * num_heads + h) * head_dim;
                 for s in 0..n {
-                    let q_idx = (qs * num_heads + h) * head_dim;
-                    let k_idx = (h * n + s) * head_dim;
-                    let mut sum = 0.0f32;
-                    for d in 0..head_dim {
-                        let q_val = f16::to_f32(q_host[q_idx + d]);
-                        let k_val = f16::to_f32(k_host[k_idx + d]);
-                        sum += q_val * k_val;
-                    }
+                    let k_base = (h * n + s) * head_dim;
+                    let sum = simd_dot_product(
+                        &q_host[q_base..],
+                        &k_host[k_base..],
+                        head_dim,
+                    );
                     scores[qs * num_heads * n + h * n + s] = sum * config.scale;
                 }
             }
@@ -229,14 +252,50 @@ impl AttentionKernel for CpuAttentionKernel {
 
         // Step 3: Softmax @ V -> output [query_seq_len, num_heads, head_dim]
         let mut output = vec![0.0f32; query_seq_len * num_heads * head_dim];
+        
+        // SIMD vectorized dot product for softmax @ V (8 lanes)
+        #[inline]
+        fn simd_softmax_v_dot(
+            softmax_row: &[f32],
+            v_slice: &[f32],
+            n: usize,
+            head_dim: usize,
+            d: usize,
+        ) -> f32 {
+            const LANES: usize = 8;
+            
+            let mut sum = 0.0f32;
+            let simd_len = (n / LANES) * LANES;
+            
+            for i in (0..simd_len).step_by(LANES) {
+                let s_vec = f32x8::from_slice(&softmax_row[i..]);
+                let v_start = i * head_dim + d;
+                // Load V values - note: may need to handle unaligned access for non-multiple-of-8 dims
+                let mut v_vals = [0.0f32; LANES];
+                for j in 0..LANES {
+                    if i + j < n {
+                        v_vals[j] = v_slice[v_start + j * head_dim];
+                    }
+                }
+                let v_vec = f32x8::from_array(v_vals);
+                sum += (s_vec * v_vec).reduce_sum();
+            }
+            
+            // Handle remainder
+            for i in simd_len..n {
+                sum += softmax_row[i] * v_slice[i * head_dim + d];
+            }
+            
+            sum
+        }
+        
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
+                let softmax_start = (qs * num_heads + h) * n;
+                let softmax_row = &softmax_scores[softmax_start..softmax_start + n];
+                
                 for d in 0..head_dim {
-                    let mut sum = 0.0f32;
-                    for s in 0..n {
-                        let v_idx = (h * n + s) * head_dim + d;
-                        sum += softmax_scores[(qs * num_heads + h) * n + s] * f16::to_f32(v_host[v_idx]);
-                    }
+                    let sum = simd_softmax_v_dot(softmax_row, &v_host, n, head_dim, d);
                     output[qs * num_heads * head_dim + h * head_dim + d] = sum;
                 }
             }

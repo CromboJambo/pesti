@@ -3,6 +3,8 @@
 //! Separate workspace member that eventually becomes independent.
 //! Interface boundary: consumes WeightManifest from safetensors, emits InferenceResponse to guard.
 
+#![feature(portable_simd)]
+
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
 #[cfg(not(feature = "cuda"))]
