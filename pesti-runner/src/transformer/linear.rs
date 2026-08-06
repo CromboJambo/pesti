@@ -108,17 +108,57 @@ impl Linear {
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * self.out_features];
 
-        for b in 0..batch_size {
-            let x_start = b * self.in_features;
-            for o in 0..self.out_features {
-                let mut sum = 0.0f32;
-                for i in 0..self.in_features {
-                    sum += x[x_start + i] * self.weight[o * self.in_features + i];
+        // Use gemm crate for optimized matrix multiplication: C = alpha*A*B + beta*C
+        // We want: output[b, o] = sum_i(x[b, i] * W[o, i])
+        // gemm computes: C[m,n] = sum_k(A[m,k] * B[k,n])
+        // So we set: m=batch_size, n=out_features, k=in_features
+        //           A=x with layout [batch, in_features]
+        //           B=weight^T viewed as [in_features, out_features]
+        //
+        // Our weight is stored row-major: W[o][i] = weight[o * in_features + i]
+        // gemm expects column-major: B[k,n] at index k*n_col_stride + n
+        // So we tell gemm that B has col_stride=in_features, row_stride=1
+        // This makes B[i,o] read from weight[o*in_features + i] = W[o,i] ✓
+
+        let m = batch_size;
+        let n = self.out_features;
+        let k = self.in_features;
+
+        if m == 0 || n == 0 || k == 0 {
+            return output;
+        }
+
+        // Call gemm::gemm with f32:
+        // C := alpha*A*B + beta*C, where:
+        //   A is [m,k] = [batch, in_features]
+        //   B is [k,n] = [in_features, out_features] (transposed weight)
+        //   C is [m,n] = [batch, out_features]
+        unsafe {
+            gemm::gemm(
+                m, n, k,
+                output.as_mut_ptr(),  // C output
+                1_isize,              // C column stride (row-major: stride=1)
+                n as isize,           // C row stride
+                false,                // read_dst=false (beta=0, overwrite C)
+                x.as_ptr(),           // A input [m,k]
+                k as isize,           // A column stride (row-major)
+                1_isize,              // A row stride
+                self.weight.as_ptr(), // B input [k,n] = transposed weight
+                k as isize,           // B column stride = in_features (to read W[o,i])
+                1_isize,              // B row stride
+                1.0f32,               // alpha
+                0.0f32,               // beta (don't read C)
+                false, false, false,  // no conjugates
+                gemm::Parallelism::Rayon(0),  // use all threads
+            );
+        }
+
+        // Apply bias if present
+        if let Some(ref bias) = self.bias {
+            for b in 0..batch_size {
+                for o in 0..self.out_features {
+                    output[b * self.out_features + o] += bias[o];
                 }
-                if let Some(ref bias) = self.bias {
-                    sum += bias[o];
-                }
-                output[b * self.out_features + o] = sum;
             }
         }
 
@@ -161,6 +201,77 @@ fn f16_to_f32(bytes: &[u8]) -> f32 {
         let f32_exp = (exp - 15 + 127) as u32;
         let f32_bits = (sign << 31) | (f32_exp << 23) | (frac << 13);
         f32::from_bits(f32_bits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_linear_forward_vs_scalar() {
+        // Simple 2x3 matrix multiply: A (2x3) @ B^T (3x2) -> C (2x2)
+        let weight = vec![
+            1.0, 2.0, 3.0,  // row 0: W[0][0]=1, W[0][1]=2, W[0][2]=3
+            4.0, 5.0, 6.0,  // row 1: W[1][0]=4, W[1][1]=5, W[1][2]=6
+        ];
+        let bias = Some(vec![0.1, 0.2]);
+
+        let linear = Linear::new(weight, bias, 3, 2);
+
+        // Input: 2x3 matrix
+        let x = vec![
+            1.0, 2.0, 3.0,  // batch 0
+            4.0, 5.0, 6.0,  // batch 1
+        ];
+
+        let output = linear.forward(&x, 2);
+
+        // Expected: C[b,o] = sum_i(x[b,i] * W[o,i]) + bias[o]
+        // C[0,0] = 1*1 + 2*2 + 3*3 + 0.1 = 1 + 4 + 9 + 0.1 = 14.1
+        // C[0,1] = 1*4 + 2*5 + 3*6 + 0.2 = 4 + 10 + 18 + 0.2 = 32.2
+        // C[1,0] = 4*1 + 5*2 + 6*3 + 0.1 = 4 + 10 + 18 + 0.1 = 32.1
+        // C[1,1] = 4*4 + 5*5 + 6*6 + 0.2 = 16 + 25 + 36 + 0.2 = 77.2
+
+        let expected = vec![14.1, 32.2, 32.1, 77.2];
+
+        for (i, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-5,
+                "Mismatch at index {}: got {}, expected {}",
+                i, got, exp
+            );
+        }
+    }
+
+    #[test]
+    fn test_linear_forward_no_bias() {
+        let weight = vec![
+            1.0, 2.0,
+            3.0, 4.0,
+            5.0, 6.0,
+        ];
+
+        let linear = Linear::new(weight, None, 2, 3);
+
+        let x = vec![1.0, 2.0];
+
+        let output = linear.forward(&x, 1);
+
+        // Expected: C[0,o] = sum_i(x[i] * W[o,i])
+        // C[0,0] = 1*1 + 2*2 = 5
+        // C[0,1] = 1*3 + 2*4 = 11
+        // C[0,2] = 1*5 + 2*6 = 17
+
+        let expected = vec![5.0, 11.0, 17.0];
+
+        for (i, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-5,
+                "Mismatch at index {}: got {}, expected {}",
+                i, got, exp
+            );
+        }
     }
 }
 
