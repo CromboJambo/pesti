@@ -14,7 +14,7 @@ use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
 use half::f16;
 
 /// Attention architecture selector.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionArch {
     /// CPU-only attention (reference implementation).
     Cpu,
@@ -369,11 +369,12 @@ impl CudaAttentionKernelBuilder {
 /// **Option A**: GEMM-based attention using existing mma.sync kernel.
 pub struct GemmBasedAttentionKernel {
     gemm_kernel: CudaGemmKernel,
+    backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>,
 }
 
 impl GemmBasedAttentionKernel {
-    pub fn new(gemm_kernel: CudaGemmKernel) -> Self {
-        Self { gemm_kernel }
+    pub fn new(gemm_kernel: CudaGemmKernel, backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>) -> Self {
+        Self { gemm_kernel, backend }
     }
 }
 
@@ -398,10 +399,13 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         let q_m = query_seq_len * num_heads;
         let q_k = head_dim;
         let k_n = n; // We'll do Q @ K^T, so K is transposed
-        
-        // Allocate scores buffer: [q_m, k_n]
-        let mut scores_buffer = DeviceBuffer::<f32>::zeros(q_m * k_n);
-        
+
+        // Allocate scores buffer on device: [q_m, k_n]
+        let backend = &*self.backend;
+        let mut scores_buffer =
+            DeviceBuffer::<f32>::zeros_device(backend, q_m * k_n)
+                .map_err(|e| AttentionError::Cuda(format!("scores alloc: {e}")))?;
+
         // Launch Q @ K^T via GEMM
         self.gemm_kernel
             .matmul(
@@ -416,15 +420,22 @@ impl AttentionKernel for GemmBasedAttentionKernel {
             )
             .map_err(|e| AttentionError::Gemm(e))?;
 
+        // Synchronize stream to ensure GEMM completes before reading back
+        self.gemm_kernel
+            .stream()
+            .synchronize()
+            .map_err(|e| AttentionError::Cuda(format!("sync after QK: {e}")))?;
+
         // Step 2: Apply scaling factor and softmax on CPU
-        let mut scores_host = scores_buffer.to_host();
+        let mut scores_host = scores_buffer.to_host_vec(backend)
+            .map_err(|e| AttentionError::Transfer(e))?;
         let mut softmax_scores = vec![0.0f32; scores_host.len()];
-        
+
         // Apply scale and softmax per head
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
                 let start = (qs * num_heads + h) * n;
-                
+
                 // Apply scaling
                 let mut max_val = f32::NEG_INFINITY;
                 for s in 0..n {
@@ -434,7 +445,7 @@ impl AttentionKernel for GemmBasedAttentionKernel {
                         max_val = scores_host[idx];
                     }
                 }
-                
+
                 // Compute softmax
                 let mut sum = 0.0f32;
                 for s in 0..n {
@@ -443,7 +454,7 @@ impl AttentionKernel for GemmBasedAttentionKernel {
                     softmax_scores[idx] = exp_val;
                     sum += exp_val;
                 }
-                
+
                 // Normalize
                 if sum > 0.0 {
                     for s in 0..n {
@@ -457,29 +468,40 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         // Step 3: S @ V -> output [query_seq_len, num_heads, head_dim]
         // S: [query_seq_len * num_heads, cache_seq_len] (softmax scores)
         // V: [num_heads, cache_seq_len, head_dim] -> reshape to [cache_seq_len, head_dim]
-        
+
         let s_m = query_seq_len * num_heads;
         let s_k = n; // cache_seq_len
         let v_n = head_dim;
-        
-        // Convert softmax scores from f32 to f16 for GEMM input
-        let softmax_scores_f16: Vec<f16> = softmax_scores.iter().map(|&x| f16::from_f32(x)).collect();
-        
-        let mut output_buffer = DeviceBuffer::<f32>::zeros(s_m * v_n);
-        
+
+        // Convert softmax scores from f32 to f16 for GEMM input, allocate on device
+        let softmax_scores_f16: Vec<f16> =
+            softmax_scores.iter().map(|&x| f16::from_f32(x)).collect();
+        let softmax_buf = DeviceBuffer::from_host_device(backend, &softmax_scores_f16)
+            .map_err(|e| AttentionError::Cuda(format!("softmax buf alloc: {e}")))?;
+
+        let mut output_buffer =
+            DeviceBuffer::<f32>::zeros_device(backend, s_m * v_n)
+                .map_err(|e| AttentionError::Cuda(format!("output alloc: {e}")))?;
+
         // Launch S @ V via GEMM (need to transpose V)
         self.gemm_kernel
             .matmul(
-                1.0,                                      // alpha
-                &DeviceBuffer::from_host(softmax_scores_f16), // S (f16)
-                value_cache.buffer(),                     // V (f16)
-                0.0,                                      // beta
+                1.0,                                         // alpha
+                &softmax_buf,                                // S (f16)
+                value_cache.buffer(),                        // V (f16)
+                0.0,                                         // beta
                 &mut output_buffer,
-                s_m, // m = query_seq_len * num_heads
-                v_n, // n = head_dim
-                s_k, // k = cache_seq_len (V is transposed)
+                s_m,                                         // m = query_seq_len * num_heads
+                v_n,                                         // n = head_dim
+                s_k,                                         // k = cache_seq_len (V is transposed)
             )
             .map_err(|e| AttentionError::Gemm(e))?;
+
+        // Synchronize before returning
+        self.gemm_kernel
+            .stream()
+            .synchronize()
+            .map_err(|e| AttentionError::Cuda(format!("sync after SV: {e}")))?;
 
         Ok(output_buffer)
     }

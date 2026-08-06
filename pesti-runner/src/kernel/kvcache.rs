@@ -161,6 +161,11 @@ impl Kvcache {
         self.seq_len = 0;
     }
 
+    /// Set the current sequence length directly (for pre-populated device buffers).
+    pub fn set_seq_len(&mut self, seq_len: usize) {
+        self.seq_len = seq_len.min(self.max_seq);
+    }
+
     /// Append a new key vector and value vector at position `seq_len`.
     ///
     /// `key` and `value` must each have `num_heads * head_dim` elements.
