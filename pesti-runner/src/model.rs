@@ -187,6 +187,7 @@ impl Model {
                 tokenizer_config: None,
                 dispatch: None,
                 kv_caches: None,
+                cpu_kv_caches: None,
             },
             #[cfg(not(feature = "cuda"))]
             llama_model: crate::transformer_stub::LlamaModel::default(),

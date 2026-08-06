@@ -36,9 +36,9 @@ pub struct GgufWeights {
 }
 
 impl GgufWeights {
-    /// Get the shape of a tensor as `(out_features, in_features)`.
+    /// Get the shape of a tensor as `(in_features, out_features)`.
     ///
-    /// GGUF stores weight tensors as 2D `[out_features, in_features]`.
+    /// GGUF stores weight tensors as `[in_features, out_features]`.
     /// Returns `(0, 0)` if the tensor is not found or has wrong ndims.
     pub fn tensor_shape(&self, name: &str) -> (usize, usize) {
         self.header
@@ -125,14 +125,20 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
         (dtype, claimed_element_count)
     };
 
-    eprintln!(
-        "Dequantizing tensor '{}' dtype=0x{:04X} ({:?}) with {} elements, {} bytes",
-        tensor.name, tensor.dtype, dtype, claimed_element_count, raw_data.len()
+    tracing::debug!(
+        tensor = %tensor.name,
+        dtype = ?dtype,
+        elements = claimed_element_count,
+        bytes = raw_data.len(),
+        "Dequantizing tensor"
     );
     if inferred_dtype != dtype || inferred_element_count != claimed_element_count {
-        eprintln!(
-            "  [WARN] Inferred dtype {:?} and {} elements from data size (claimed: {:?}, {})",
-            inferred_dtype, inferred_element_count, dtype, claimed_element_count
+        tracing::warn!(
+            inferred_dtype = ?inferred_dtype,
+            inferred_elements = inferred_element_count,
+            claimed_dtype = ?dtype,
+            claimed_elements = claimed_element_count,
+            "Dtype/element count mismatch — using inferred values from data size"
         );
     }
 

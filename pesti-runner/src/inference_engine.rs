@@ -171,17 +171,12 @@ impl InferenceEngine {
                                 Box::new(kernel)
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "Failed to initialize CUDA GEMM kernel: {}. Falling back to CPU.",
-                                    e
-                                );
+                                tracing::warn!(error = %e, "Failed to initialize CUDA GEMM kernel, falling back to CPU");
                                 Box::new(crate::kernel::CpuGemmKernel::new())
                             }
                         },
                         None => {
-                            eprintln!(
-                                "No CUDA GEMM kernel for this device (needs sm_100+); using CPU."
-                            );
+                            tracing::info!("No CUDA GEMM kernel for this device (needs sm_100+); using CPU");
                             Box::new(crate::kernel::CpuGemmKernel::new())
                         }
                     }
@@ -242,18 +237,13 @@ impl InferenceEngine {
                                 {
                                     Ok(kernel) => Box::new(kernel),
                                     Err(e) => {
-                                        eprintln!(
-                                            "Failed to initialize CUDA attention kernel: {}. Falling back to CPU.",
-                                            e
-                                        );
+                                        tracing::warn!(error = %e, "Failed to initialize CUDA attention kernel, falling back to CPU");
                                         Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                                     }
                                 }
                             }
                             None => {
-                                eprintln!(
-                                    "No CUDA attention kernel for this device (needs sm_100+); using CPU."
-                                );
+                                tracing::info!("No CUDA attention kernel for this device (needs sm_100+); using CPU");
                                 Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                             }
                         }
