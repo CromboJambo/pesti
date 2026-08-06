@@ -77,11 +77,36 @@ impl LlamaConfig {
         };
 
         let num_layers = header.block_count().unwrap_or(32) as usize;
-        let head_dim = if num_heads > 0 {
+        let mut head_dim = if num_heads > 0 {
             embed_dim / num_heads
         } else {
             64
         };
+        // For GQA models (num_kv_heads < num_heads), the correct head_dim
+        // comes from the KV weight shape, not embed_dim / num_heads.
+        // Try to infer from K weight tensor: shape is [embed_dim, kv_dim].
+        if num_kv_heads < num_heads {
+            let k_name = match arch {
+                ModelArch::Qwen2 | ModelArch::Qwen3 => "blk.0.attn_k.weight".to_string(),
+                _ => format!("layers.0.attention.wk.weight"),
+            };
+            if let Some(k_tensor) = header.get_tensor(&k_name) {
+                if k_tensor.shape.len() >= 2 {
+                    let kv_dim = k_tensor.shape[1] as usize;
+                    let inferred = kv_dim / num_kv_heads;
+                    if inferred > 0 && inferred != head_dim {
+                        tracing::info!(
+                            head_dim_before = head_dim,
+                            head_dim_after = inferred,
+                            kv_dim,
+                            num_kv_heads,
+                            "Corrected head_dim from KV weight shape"
+                        );
+                        head_dim = inferred;
+                    }
+                }
+            }
+        }
         let intermediate_dim = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
                 .get_kv_u32(&format!("{arch_str}.feed_forward_length"))
@@ -282,6 +307,10 @@ pub struct LlamaModel {
     pub dispatch: Option<DispatchContext>,
     /// KV caches per layer (used when dispatch is enabled).
     pub kv_caches: Option<(Vec<Kvcache>, Vec<Kvcache>)>,
+    /// CPU-side KV caches for the pure-Rust transformer path.
+    /// One `LayerKvCache` per transformer layer. Initialized on first
+    /// `forward_layers_with_cache()` call.
+    pub cpu_kv_caches: Option<Vec<crate::transformer::kv_cache::LayerKvCache>>,
 }
 
 impl LlamaModel {
@@ -385,6 +414,7 @@ impl LlamaModel {
             tokenizer_config: None,
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
+            cpu_kv_caches: None,
         })
     }
 
@@ -450,6 +480,7 @@ impl LlamaModel {
             tokenizer_config: None,
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
+            cpu_kv_caches: None,
         })
     }
 
@@ -585,7 +616,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        let (wq_in, wq_out) = weights.tensor_shape(&wq_name);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
         let wk_name = match config.arch {
@@ -593,7 +624,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_k.weight"),
             _ => format!("{prefix}attention.wk.weight"),
         };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+        let (wk_in, wk_out) = weights.tensor_shape(&wk_name);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
         let wv_name = match config.arch {
@@ -601,7 +632,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_v.weight"),
             _ => format!("{prefix}attention.wv.weight"),
         };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+        let (wv_in, wv_out) = weights.tensor_shape(&wv_name);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
         let wo_name = match config.arch {
@@ -609,7 +640,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_output.weight"),
             _ => format!("{prefix}attention.wo.weight"),
         };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+        let (wo_in, wo_out) = weights.tensor_shape(&wo_name);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
@@ -667,21 +698,21 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
         let w2_name = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
         let w3_name = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
@@ -811,7 +842,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        let (wq_in, wq_out) = weights.tensor_shape(&wq_name);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
         let wk_name = match config.arch {
@@ -819,7 +850,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_k.weight"),
             _ => format!("{prefix}attention.wk.weight"),
         };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+        let (wk_in, wk_out) = weights.tensor_shape(&wk_name);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
         let wv_name = match config.arch {
@@ -827,7 +858,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_v.weight"),
             _ => format!("{prefix}attention.wv.weight"),
         };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+        let (wv_in, wv_out) = weights.tensor_shape(&wv_name);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
         let wo_name = match config.arch {
@@ -835,7 +866,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_output.weight"),
             _ => format!("{prefix}attention.wo.weight"),
         };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+        let (wo_in, wo_out) = weights.tensor_shape(&wo_name);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
@@ -893,21 +924,21 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
         let w2_name = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
         let w3_name = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
@@ -977,6 +1008,61 @@ impl LlamaModel {
         }
 
         Ok(h)
+    }
+
+    /// Pass hidden states through all transformer layers with KV caching.
+    ///
+    /// This is the efficient autoregressive decode path. Each layer's KV cache
+    /// stores previously computed keys and values, so attention only computes
+    /// over the new position rather than recomputing the entire sequence.
+    ///
+    /// - `hidden`: `[embed_dim]` — single token's hidden state
+    /// - `start_pos`: position in the sequence (for RoPE and cache slot)
+    ///
+    /// Returns: `[embed_dim]` — updated hidden state after all layers.
+    pub fn forward_layers_with_cache(
+        &mut self,
+        hidden: &[f32],
+        start_pos: usize,
+    ) -> Result<Vec<f32>> {
+        // Initialize CPU KV caches on first call
+        if self.cpu_kv_caches.is_none() {
+            let caches: Vec<crate::transformer::kv_cache::LayerKvCache> = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    crate::transformer::kv_cache::LayerKvCache::new(
+                        layer.attention.num_kv_heads,
+                        layer.attention.head_dim,
+                        self.config.max_seq_len,
+                    )
+                })
+                .collect();
+            self.cpu_kv_caches = Some(caches);
+        }
+
+        let caches = self.cpu_kv_caches.as_mut().unwrap();
+        let mut h = hidden.to_vec();
+
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            h = layer.forward_with_cache(&h, &mut caches[layer_idx], start_pos);
+        }
+
+        // Apply final norm for architectures that have it (qwen2/qwen3)
+        if let Some(ref norm) = self.final_norm {
+            h = norm.forward(&h, 1);
+        }
+
+        Ok(h)
+    }
+
+    /// Reset all CPU KV caches (call before starting a new generation sequence).
+    pub fn reset_cpu_kv_caches(&mut self) {
+        if let Some(ref mut caches) = self.cpu_kv_caches {
+            for cache in caches.iter_mut() {
+                cache.clear();
+            }
+        }
     }
 
     /// Pass hidden states through all layers using GPU dispatch (if available).

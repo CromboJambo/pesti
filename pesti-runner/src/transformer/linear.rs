@@ -107,6 +107,8 @@ impl Linear {
     /// Returns: [batch_size, out_features]
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * self.out_features];
+        eprintln!("Linear::forward: in={}, out={}, batch={}, x.len={}, weight.len={}, output.len={}",
+            self.in_features, self.out_features, batch_size, x.len(), self.weight.len(), output.len());
 
         // Use gemm crate for optimized matrix multiplication: C = alpha*A*B + beta*C
         // We want: output[b, o] = sum_i(x[b, i] * W[o, i])

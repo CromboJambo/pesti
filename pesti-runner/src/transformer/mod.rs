@@ -9,6 +9,7 @@
 //! - `rope` — Rotary positional embeddings
 //! - `sampling` — Token sampling (temperature, top-p, top-k)
 //! - `tokenizer` — GGUF tokenizer integration
+//! - `kv_cache` — KV cache for autoregressive generation
 //!
 //! ## Inference Flow
 //!
@@ -16,6 +17,7 @@
 //! GGUF file → LlamaModel::load_gguf() → forward(token, pos) → logits → sample() → next_token
 //! ```
 
+pub mod kv_cache;
 pub mod layer;
 pub mod linear;
 pub mod model;
@@ -24,6 +26,7 @@ pub mod rope;
 pub mod sampling;
 pub mod tokenizer;
 
+pub use kv_cache::LayerKvCache;
 pub use model::{LlamaConfig, LlamaModel, ModelArch};
 pub use sampling::{SamplingConfig, argmax, sample};
 pub use tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf};

@@ -41,6 +41,41 @@ impl RopeConfig {
             .collect()
     }
 
+    /// Apply RoPE to a single tensor in-place.
+    ///
+    /// `data`: `[seq_len * num_heads * head_dim]` flattened row-major
+    /// `num_heads`: number of heads in this tensor
+    /// `seq_len`: number of positions
+    /// `start_pos`: starting position for RoPE angles
+    pub fn apply_single(
+        &self,
+        data: &mut [f32],
+        num_heads: usize,
+        seq_len: usize,
+        start_pos: usize,
+    ) {
+        let theta = self.compute_theta();
+        let dim_half = self.head_dim / 2;
+
+        for pos in 0..seq_len {
+            let actual_pos = start_pos + pos;
+            for head in 0..num_heads {
+                for (i, &freq) in theta.iter().enumerate() {
+                    let angle = actual_pos as f32 * freq;
+                    let cos = angle.cos();
+                    let sin = angle.sin();
+
+                    let idx = pos * num_heads * self.head_dim + head * self.head_dim + i;
+                    let next = idx + dim_half;
+
+                    let orig = data[idx];
+                    data[idx] = orig * cos - data[next] * sin;
+                    data[next] = orig * sin + data[next] * cos;
+                }
+            }
+        }
+    }
+
     /// Apply RoPE to query and key vectors in-place.
     ///
     /// q: [batch, seq_len, num_heads, head_dim] flattened row-major
