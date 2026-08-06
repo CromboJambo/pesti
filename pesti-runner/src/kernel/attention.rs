@@ -10,7 +10,7 @@
 //! - Better for very long sequences
 
 use crate::kernel::device_buf::DeviceBuffer;
-use crate::kernel::gemm::{CudaGemmKernel, GemmArch};
+use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
 use half::f16;
 
 /// Attention architecture selector.
@@ -368,7 +368,6 @@ impl CudaAttentionKernelBuilder {
 
 /// **Option A**: GEMM-based attention using existing mma.sync kernel.
 pub struct GemmBasedAttentionKernel {
-    #[allow(dead_code)] // Will be used when implementing full GEMM path
     gemm_kernel: CudaGemmKernel,
 }
 
@@ -381,15 +380,108 @@ impl GemmBasedAttentionKernel {
 impl AttentionKernel for GemmBasedAttentionKernel {
     fn forward(
         &self,
-        _query: &DeviceBuffer<f16>,
-        _key_cache: &Kvcache,
-        _value_cache: &Kvcache,
+        query: &DeviceBuffer<f16>,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
         _mask: Option<&DeviceBuffer<f32>>,
-        _config: &AttentionConfig,
+        config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
-        // TODO: Implement full GEMM-based attention using existing gemm_kernel
-        // This will be the "real" GPU implementation
-        Ok(DeviceBuffer::zeros(1))
+        let num_heads = config.num_heads;
+        let head_dim = config.head_dim;
+        let n = key_cache.seq_len();
+        let query_seq_len = (query.len() / (num_heads * head_dim)) as usize;
+
+        // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
+        // Q: [query_seq_len, num_heads, head_dim] -> reshape to [query_seq_len * num_heads, head_dim]
+        // K: [num_heads, cache_seq_len, head_dim] -> transpose to [head_dim, num_heads * cache_seq_len]
+        
+        let q_m = query_seq_len * num_heads;
+        let q_k = head_dim;
+        let k_n = n; // We'll do Q @ K^T, so K is transposed
+        
+        // Allocate scores buffer: [q_m, k_n]
+        let mut scores_buffer = DeviceBuffer::<f32>::zeros(q_m * k_n);
+        
+        // Launch Q @ K^T via GEMM
+        self.gemm_kernel
+            .matmul(
+                1.0, // alpha
+                query,
+                key_cache.buffer(),
+                0.0, // beta (don't accumulate)
+                &mut scores_buffer,
+                q_m, // m = query_seq_len * num_heads
+                k_n, // n = cache_seq_len (K is transposed)
+                q_k, // k = head_dim
+            )
+            .map_err(|e| AttentionError::Gemm(e))?;
+
+        // Step 2: Apply scaling factor and softmax on CPU
+        let mut scores_host = scores_buffer.to_host();
+        let mut softmax_scores = vec![0.0f32; scores_host.len()];
+        
+        // Apply scale and softmax per head
+        for qs in 0..query_seq_len {
+            for h in 0..num_heads {
+                let start = (qs * num_heads + h) * n;
+                
+                // Apply scaling
+                let mut max_val = f32::NEG_INFINITY;
+                for s in 0..n {
+                    let idx = start + s;
+                    scores_host[idx] *= config.scale;
+                    if scores_host[idx] > max_val {
+                        max_val = scores_host[idx];
+                    }
+                }
+                
+                // Compute softmax
+                let mut sum = 0.0f32;
+                for s in 0..n {
+                    let idx = start + s;
+                    let exp_val = (scores_host[idx] - max_val).exp();
+                    softmax_scores[idx] = exp_val;
+                    sum += exp_val;
+                }
+                
+                // Normalize
+                if sum > 0.0 {
+                    for s in 0..n {
+                        let idx = start + s;
+                        softmax_scores[idx] /= sum;
+                    }
+                }
+            }
+        }
+
+        // Step 3: S @ V -> output [query_seq_len, num_heads, head_dim]
+        // S: [query_seq_len * num_heads, cache_seq_len] (softmax scores)
+        // V: [num_heads, cache_seq_len, head_dim] -> reshape to [cache_seq_len, head_dim]
+        
+        let s_m = query_seq_len * num_heads;
+        let s_k = n; // cache_seq_len
+        let v_n = head_dim;
+        
+        // Convert softmax scores from f32 to f16 for GEMM input
+        let softmax_scores_f16: Vec<f16> = softmax_scores.iter().map(|&x| f16::from_f32(x)).collect();
+        
+        let mut output_buffer = DeviceBuffer::<f32>::zeros(s_m * v_n);
+        
+        // Launch S @ V via GEMM (need to transpose V)
+        self.gemm_kernel
+            .matmul(
+                1.0,                                      // alpha
+                &DeviceBuffer::from_host(softmax_scores_f16), // S (f16)
+                value_cache.buffer(),                     // V (f16)
+                0.0,                                      // beta
+                &mut output_buffer,
+                s_m, // m = query_seq_len * num_heads
+                v_n, // n = head_dim
+                s_k, // k = cache_seq_len (V is transposed)
+            )
+            .map_err(|e| AttentionError::Gemm(e))?;
+
+        Ok(output_buffer)
     }
 
     fn is_available(&self) -> bool {
@@ -412,6 +504,9 @@ pub enum AttentionError {
 
     #[error("invalid dimensions: num_heads={num_heads}, head_dim={head_dim}")]
     InvalidDimensions { num_heads: usize, head_dim: usize, seq_len: usize },
+
+    #[error("GEMM error: {0}")]
+    Gemm(#[from] crate::kernel::gemm::GemmError),
 
     #[error("kernel launch failed: {detail}")]
     KernelLaunchFailed { detail: String },
