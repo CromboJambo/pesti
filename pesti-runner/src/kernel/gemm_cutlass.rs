@@ -27,7 +27,10 @@ impl CutlassGemmKernel {
     /// Check if this kernel is available for the current device.
     pub fn is_available(&self) -> bool {
         // CUTLASS via cublasLt works on sm_8.0+
-        matches!(self.arch, GemmArch::Wgmma | GemmArch::Tcgen05)
+        matches!(
+            self.arch,
+            GemmArch::Wgmma | GemmArch::Tcgen05 | GemmArch::Mma
+        )
     }
 }
 

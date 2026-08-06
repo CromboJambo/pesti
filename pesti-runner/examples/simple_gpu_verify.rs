@@ -58,10 +58,13 @@ fn main() {
             
             match engine.gemm_arch() {
                 pesti_runner::kernel::gemm::GemmArch::Wgmma => {
-                    println!("   🎯 GEMM using WGMMA (consumer Blackwell)");
+                    println!("   🎯 GEMM using WGMMA (Hopper)");
                 }
                 pesti_runner::kernel::gemm::GemmArch::Tcgen05 => {
                     println!("   🎯 GEMM using tcgen05 (datacenter B200)");
+                }
+                pesti_runner::kernel::gemm::GemmArch::Mma => {
+                    println!("   🎯 GEMM using mma.sync (tensor cores)");
                 }
             }
         }

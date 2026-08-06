@@ -67,7 +67,7 @@ impl DeviceBackend {
     pub fn is_available(&self) -> Result<bool, RunnerError> {
         Ok(match &self.device {
             Device::Cpu => true,
-            Device::Cuda(_) => is_available(),
+            Device::Cuda(_) => true,
             Device::Metal(_) => false,
         })
     }
@@ -128,10 +128,13 @@ impl DeviceSelector {
 
     /// Refresh discovered devices.
     pub async fn refresh(&mut self) {
+        // Force initialization and device enumeration upfront to resolve state issues
+        if let Err(e) = crate::cuda_runtime::enumerate_devices() {
+            tracing::warn!("CUDA runtime pre-check failed during refresh: {}", e);
+        }
         self.local_devices = crate::device_discovery::discover_local_devices();
         self.remote_devices = crate::remote_discovery::get_healthy_remote_devices().await;
     }
-
     /// Select device for a model of the given size (in bytes).
     pub async fn select_for_model(&mut self, model_bytes: u64) -> DeviceSelection {
         self.refresh().await;

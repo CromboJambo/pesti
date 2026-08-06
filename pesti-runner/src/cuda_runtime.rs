@@ -57,16 +57,20 @@ impl CudaDeviceInfo {
         self.free_memory > model_bytes + 2 * 1024 * 1024 * 1024
     }
 
-    /// Whether this device supports tcgen05 (sm_100+).
+    /// Whether this device supports tcgen05 (sm_100a/sm_103a, datacenter
+    /// Blackwell B200/B300). Consumer Blackwell (sm_120, RTX 50-series) has
+    /// no tensor memory and no tcgen05 — ptxas rejects it for sm_120a.
     pub fn supports_tcgen05(&self) -> bool {
-        let (major, _minor) = self.compute_capability;
-        major >= 10
+        let (major, minor) = self.compute_capability;
+        (major, minor) == (10, 0) || (major, minor) == (10, 3)
     }
 
-    /// Whether this device supports WGMMA (sm_120+).
+    /// Whether this device supports WGMMA (sm_90a, Hopper H100/H200 only).
+    /// Consumer Blackwell (sm_120) does NOT support wgmma — ptxas rejects
+    /// `wgmma.mma_async` for sm_120a; llama.cpp uses mma.sync there instead.
     pub fn supports_wgmma(&self) -> bool {
-        let (major, _minor) = self.compute_capability;
-        major >= 12
+        let (major, minor) = self.compute_capability;
+        (major, minor) == (9, 0)
     }
 }
 
@@ -139,7 +143,12 @@ impl CudaRuntime {
         }
         let (major, minor) = unsafe { (major.assume_init(), minor.assume_init()) };
 
-        // Get memory info
+        // Retain primary context and bind it to this thread BEFORE querying
+        // device memory: cuMemGetInfo_v2 requires a current context.
+        let ctx =
+            CudaContext::new(ordinal).map_err(|e| CudaError::ContextCreation(e.to_string()))?;
+
+        // Get memory info (valid only after a context is current on this thread)
         let (free_memory, total_memory) = unsafe {
             let mut free: usize = 0;
             let mut total: usize = 0;
@@ -156,10 +165,6 @@ impl CudaRuntime {
             total_memory,
             free_memory,
         };
-
-        // Retain primary context
-        let ctx =
-            CudaContext::new(ordinal).map_err(|e| CudaError::ContextCreation(e.to_string()))?;
 
         debug!(
             ordinal,
@@ -215,114 +220,179 @@ impl CudaRuntime {
     }
 }
 
+/// Estimate compute capability from device name.
+fn estimate_compute_capability_from_name(name: &str) -> (i32, i32) {
+    let name_lower = name.to_lowercase();
+    
+    if name_lower.contains("50") {
+        // RTX 50 series - likely sm_12+
+        (12, 0)
+    } else if name_lower.contains("40") {
+        // RTX 40 series - Ada Lovelace = sm_8.9
+        (8, 9)
+    } else if name_lower.contains("30") {
+        // RTX 30 series - Ampere = sm_8.6
+        (8, 6)
+    } else if name_lower.contains("20") {
+        // RTX 20 series - Turing = sm_7.5
+        (7, 5)
+    } else if name_lower.contains("10") {
+        // GTX 10 series - Pascal = sm_6.1
+        (6, 1)
+    } else {
+        // Unknown, default to conservative estimate
+        (8, 0)
+    }
+}
+
 /// Initialize CUDA and enumerate available devices.
 ///
 /// Returns a list of `CudaDeviceInfo` for all devices that can be queried.
 /// Returns an empty list if CUDA is not available or no devices are found.
 pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
-    unsafe {
-        cuda_core::init(0).map_err(|_| CudaError::NotAvailable)?;
-    };
-
-    let mut device_count: i32 = 0;
-    unsafe {
-        cuda_sys::cuDeviceGetCount(&mut device_count)
-            .result()
-            .map_err(|_| CudaError::NotAvailable)?;
-    };
-
-    if device_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let mut devices = Vec::with_capacity(device_count as usize);
-
-    for ordinal in 0..device_count {
-        // Get device handle
-        let cu_device = match unsafe {
-            let mut device = std::mem::MaybeUninit::uninit();
-            cuda_sys::cuDeviceGet(device.as_mut_ptr(), ordinal)
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable {
-                    ordinal: ordinal as usize,
-                })?;
-            Ok::<i32, CudaError>(device.assume_init())
-        } {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(ordinal, "CUDA device enumeration skipped: {e}");
-                continue;
+    // First try NVML (more reliable when context is in use)
+    #[cfg(feature = "cuda")]
+    {
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device_count) = nvml.device_count() {
+                if device_count > 0 {
+                    let mut devices = Vec::with_capacity(device_count as usize);
+                    
+                    for ordinal in 0..device_count as usize {
+                        if let Ok(device) = nvml.device_by_index(ordinal as u32) {
+                            // Get name
+                            if let Ok(name) = device.name() {
+                                // Get memory info
+                                if let Ok(mem_info) = device.memory_info() {
+                                    let total_memory = mem_info.total;
+                                    let free_memory = mem_info.free;
+                                    
+                                    // Estimate compute capability from name
+                                    let cc = estimate_compute_capability_from_name(&name);
+                                    
+                                    devices.push(CudaDeviceInfo {
+                                        ordinal,
+                                        name: name.to_string(),
+                                        compute_capability: cc,
+                                        total_memory,
+                                        free_memory,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !devices.is_empty() {
+                        return Ok(devices);
+                    }
+                }
             }
-        };
-
-        // Get device name
-        let mut name_buf = [0i8; 256];
+        }
+    }
+    
+    // Fallback to driver API if NVML fails or returns empty
+    #[cfg(feature = "cuda")]
+    {
         unsafe {
-            cuda_sys::cuDeviceGetName(name_buf.as_mut_ptr(), name_buf.len() as i32, cu_device)
+            cuda_core::init(0).map_err(|_| CudaError::NotAvailable)?;
         };
-        let name: String = name_buf
-            .iter()
-            .take_while(|&&c| c != 0)
-            .map(|&c| c as u8)
-            .collect::<Vec<u8>>()
-            .into_iter()
-            .map(|b| b as char)
-            .collect();
 
-        // Get compute capability
-        let (major, minor) =
-            {
+        let mut device_count: i32 = 0;
+        unsafe {
+            cuda_sys::cuDeviceGetCount(&mut device_count)
+                .result()
+                .map_err(|_| CudaError::NotAvailable)?;
+        };
+
+        if device_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut devices = Vec::with_capacity(device_count as usize);
+
+        for ordinal in 0..device_count {
+            // Get device handle
+            let cu_device = match unsafe {
+                let mut device = std::mem::MaybeUninit::uninit();
+                cuda_sys::cuDeviceGet(device.as_mut_ptr(), ordinal)
+                    .result()
+                    .map_err(|_| CudaError::DeviceUnavailable {
+                        ordinal: ordinal as usize,
+                    })?;
+                Ok::<i32, CudaError>(device.assume_init())
+            } {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(ordinal, "CUDA device enumeration skipped: {e}");
+                    continue;
+                }
+            };
+
+            // Get device name
+            let mut name_buf = [0i8; 256];
+            unsafe {
+                cuda_sys::cuDeviceGetName(name_buf.as_mut_ptr(), name_buf.len() as i32, cu_device)
+            };
+            let name: String = name_buf
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect::<Vec<u8>>()
+                .into_iter()
+                .map(|b| b as char)
+                .collect();
+
+            // Get compute capability
+            let (major, minor) = {
                 let mut m = std::mem::MaybeUninit::uninit();
                 let mut n = std::mem::MaybeUninit::uninit();
                 unsafe {
                     cuda_sys::cuDeviceGetAttribute(
-                    m.as_mut_ptr(),
-                    cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-                    cu_device,
-                )
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
+                        m.as_mut_ptr(),
+                        cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                        cu_device,
+                    )
+                    .result()
+                    .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
                     cuda_sys::cuDeviceGetAttribute(
-                    n.as_mut_ptr(),
-                    cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-                    cu_device,
-                )
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
+                        n.as_mut_ptr(),
+                        cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                        cu_device,
+                    )
+                    .result()
+                    .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
                     (m.assume_init(), n.assume_init())
                 }
             };
 
-        // Get memory info
-        let (free_memory, total_memory) = unsafe {
-            let mut free: usize = 0;
-            let mut total: usize = 0;
-            cuda_sys::cuMemGetInfo_v2(&mut free, &mut total)
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable {
-                    ordinal: ordinal as usize,
-                })?;
-            (free as u64, total as u64)
-        };
+            // Get memory info
+            let (free_memory, total_memory) = unsafe {
+                let mut free: usize = 0;
+                let mut total: usize = 0;
+                cuda_sys::cuMemGetInfo_v2(&mut free, &mut total)
+                    .result()
+                    .map_err(|_| CudaError::DeviceUnavailable {
+                        ordinal: ordinal as usize,
+                    })?;
+                (free as u64, total as u64)
+            };
 
-        let _device_info = CudaDeviceInfo {
-            ordinal: ordinal as usize,
-            name: name.clone(),
-            compute_capability: (major, minor),
-            total_memory,
-            free_memory,
-        };
+            devices.push(CudaDeviceInfo {
+                ordinal: ordinal as usize,
+                name,
+                compute_capability: (major, minor),
+                total_memory,
+                free_memory,
+            });
+        }
 
-        devices.push(CudaDeviceInfo {
-            ordinal: ordinal as usize,
-            name,
-            compute_capability: (major, minor),
-            total_memory,
-            free_memory,
-        });
+        Ok(devices)
     }
-
-    Ok(devices)
+    
+    #[cfg(not(feature = "cuda"))]
+    {
+        Ok(Vec::new())
+    }
 }
 
 /// Select the best device for a model of the given size.
@@ -360,7 +430,23 @@ pub fn select_best_device(model_bytes: u64) -> Option<CudaDeviceInfo> {
 }
 
 /// Check if CUDA is available on this system.
+/// 
+/// Uses NVML (NVIDIA Management Library) for more reliable device detection,
+/// especially when another process already has the CUDA context.
 pub fn is_available() -> bool {
+    // First try NVML (more reliable when context is in use)
+    #[cfg(feature = "cuda")]
+    {
+        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(count) = nvml.device_count() {
+                if count > 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    
+    // Fallback to driver API if NVML fails
     enumerate_devices().is_ok() && !enumerate_devices().unwrap_or_default().is_empty()
 }
 
@@ -441,4 +527,3 @@ pub fn copy_device_to_host(
         Ok(())
     }
 }
-

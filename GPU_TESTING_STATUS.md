@@ -1,120 +1,77 @@
-# GPU Testing Status Report
+# GPU Benchmark Status (updated)
 
-## ✅ Current Status: READY FOR BENCHMARKING
+## What Works Now
 
-### Infrastructure Verified
+The custom CUDA kernel layer in `pesti-runner` has a **real, verified GEMM kernel**:
 
-**CUDA Backend:**
-- ✅ CUDA detected and available
-- ✅ Two GPUs present: RTX 4070 & RTX 5060 Ti  
-- ✅ cudarc integration working
-- ✅ Inference engine creation successful
-- ✅ GEMM kernels available (tcgen05 architecture)
-- ✅ Attention kernels available
+- **`src/kernel/ptx/gemm_mma_sync.ptx`** — classic warp-level tensor cores
+  (`mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32`), one warp per 16x8
+  output tile, target sm_80 (forward-compatible JIT to sm_89/sm_120).
+- **Numerically verified** on both GPUs (4070 Ti SUPER sm_8.9, 5060 Ti sm_12.0):
+  - 40x24x32 odd-dim boundary: 0/960 element errors vs CPU reference
+  - 1024x1024x1024: 0/1,048,576 errors, max abs error 0.0
+  - 1024^3 GEMM: ~0.45 ms on 5060 Ti (naive single-thread CPU ref: 47 s)
+- **InferenceEngine reports honestly**: `GPU available: true`,
+  `Backend: GPU (cuda:... | NVIDIA GeForce RTX ...)`, `GEMM arch: Mma`.
 
-**Models Available:**
-- ✅ Qwen2.5-0.5B in multiple quantizations (q2_k, q3_k, q4_k_m, q5_k, q6_k, q8_0)
-- ✅ TinyLlama models (q3, q5, q8)
-- ✅ Total: 12 GGUF files ready for testing
+## Key Fixes (vs earlier broken state)
 
-### Test Results
+1. **CUDA context ordering** — `cuMemGetInfo_v2` was called before
+   `CudaContext::new` (needs a current context). Context is now created first.
+2. **Device ordinal routing** — engine now uses the requested `Device::Cuda(ordinal)`
+   (via `location()`), not hardcoded device 0.
+3. **CPU engine no longer tries CUDA init** — gated on `Device::Cuda(_)` only,
+   not NVML `is_available()`.
+4. **`backend_description()` / `gpu_available()`** report the truth via a
+   `gpu_gemm` flag set only when a CUDA kernel actually built.
+5. **candle-core/cuda feature wired** into pesti's `cuda` feature — without it,
+   `Device::cuda_if_available()` silently returned `Device::Cpu`.
+6. **Arch model corrected** (was backwards):
+   - `wgmma` = Hopper sm_90a ONLY (ptxas rejects it on sm_120a)
+   - `tcgen05` = datacenter Blackwell sm_100a/sm_103a ONLY
+   - `mma.sync` = every tensor-core GPU incl. consumer Blackwell (RTX 50)
+   - Capability gates in `cuda_runtime.rs` updated to match.
+7. **Kernel launch fixed** — was passing block_dims=(m,n,k) and 3 args to an
+   8-param kernel, and passing device pointers as param *values* (driver
+   dereferenced them on host -> segfault). Now grid=(n/8, m/16), block=(32,1,1),
+   params are host-side values of the exact kernel-param types.
+8. **PTX must be ASCII-only** — the driver's embedded ptxas rejects non-ASCII
+   in comments ("Unexpected non-ASCII character") even though standalone ptxas
+   13.3 accepts it.
 
-**GPU Verification (`simple_gpu_verify`):**
+## Fragment Layout (mma.m16n8k16 f16, per PTX ISA 9.7.15.5)
+
+g = lane/4 (groupID), t = lane%4, c = 2t:
+
 ```
-✅ CUDA device detected
-✅ Engine created successfully  
-✅ GEMM available: true
-✅ Attention available: true
-✅ Architecture: tcgen05 (datacenter B200)
+A: reg0={A[g][c],A[g][c+1]} reg1={A[g+8][c],A[g+8][c+1]}
+   reg2={A[g][c+8],A[g][c+9]} reg3={A[g+8][c+8],A[g+8][c+9]}
+B: reg0={B[2t][g],B[2t+1][g]} reg1={B[2t+8][g],B[2t+9][g]}
+   (B pairs are k-consecutive at same n -> stride n*2 bytes in memory!)
+D: d0=D[g][c] d1=D[g][c+1] d2=D[g+8][c] d3=D[g+8][c+1]
 ```
 
-**CPU Baseline (`cpu_baseline`):**
-```
-✅ CPU backend operational
-✅ GEMM available: true
-✅ Attention available: true
-```
+Gotchas hit: A pairs are column-adjacent (stride 2 bytes); B pairs are
+k-adjacent (stride n*2 bytes); B needs `tile_col*8` column offset; predicates
+must not be reused across fragments with different bounds.
 
-**Benchmark Comparison (`benchmark_cpu_vs_gpu`):**
-```
-CPU Initialization: 0.018s
-GPU Initialization: 0.000s (overhead not yet measured)
-Speedup: ~2700x (initialization only - not meaningful for real inference)
-```
-
-**E2E Test (`e2e_gpu_inference`):**
-```
-✅ Model loaded successfully
-✅ CPU inference path verified
-✅ GPU inference path verified
-⚠️  GPU backend shows "not ready" - kernel launch still being tested
-```
-
-### Known Issues
-
-1. **GPU availability flag**: `gpu_available()` returns false even though CUDA works
-   - Root cause: Backend initialization order issue
-   - Impact: Minor - kernels are actually available
-   
-2. **Device enumeration in benchmarks**: `cuda_runtime::enumerate_devices()` fails when called directly
-   - Root cause: CUDA driver not initialized before enumeration
-   - Workaround: Use `Device::cuda_if_available()` first
-
-3. **WGMMA kernel launch**: Not yet tested with real model inference
-   - Status: Infrastructure ready, actual kernel execution pending
-   - Next step: Full token generation benchmark
-
-### Recommended Next Steps
-
-**Immediate (Today):**
-1. ✅ Run full token generation benchmark with `e2e_gpu_inference`
-2. ✅ Test different quantization levels (q2_k → q8_0)
-3. ⏳ Fix GPU availability flag in `device.rs`
-
-**Short-term (This Week):**
-1. Measure actual tokens/sec for CPU vs GPU
-2. Profile kernel execution times
-3. Test with larger models to stress VRAM allocation
-
-**Medium-term (Next Sprint):**
-1. Implement proper device info initialization
-2. Add WGMMA kernel benchmark
-3. Create automated benchmarking suite
-
-### Benchmark Commands
+## How to Run
 
 ```bash
-# Quick verification
-cargo run --example simple_gpu_verify --features cuda
-
-# CPU baseline
-cargo run --example cpu_baseline
-
-# Quick comparison  
-cargo run --example benchmark_cpu_vs_gpu --features cuda
-
-# Full E2E test
-cargo run --example e2e_gpu_inference --features cuda
-
-# Comprehensive model scan
-cargo run --example comprehensive_benchmark --features cuda
+export HF_HOME=/home/crombo/projects/llm-workspace/llmstudio_models
+cargo run --package pesti-runner --features cuda --example gemm_mma_verify
+cargo run --package pesti-runner --features cuda --example simple_gpu_verify
 ```
 
-### Files Created/Modified
+## What Still Does NOT Work
 
-**New Examples:**
-- `pesti-runner/examples/cpu_baseline.rs` - CPU-only benchmark
-- `pesti-runner/examples/benchmark_cpu_vs_gpu.rs` - Quick comparison
-- `pesti-runner/examples/comprehensive_benchmark.rs` - Full model scan
-
-**Bug Fixes:**
-- Fixed `RawHandle` type mismatch in stub (`memory_stub.rs`)
-- Proper newtype wrapper for CPU-only builds
-
-### Conclusion
-
-Your GPU infrastructure is **production-ready** for benchmarking. The CUDA backend is operational, kernels are available, and models are loaded. The next step is to run full token generation benchmarks to measure actual throughput (tokens/sec) and compare against CPU performance.
-
-The minor issues (GPU availability flag, device enumeration) don't block testing - they're just cosmetic/organizational improvements for better diagnostics.
-
-**Status: 🟢 READY TO BENCHMARK**
+- `attention` kernel: PTX files (`attention_wgmma.ptx` etc.) are still
+  pseudocode stubs; attention falls back to CPU.
+- Old `gemm_wgmma_real.ptx` / `gemm_tcgen05_real.ptx` are stubs, not real PTX
+  (wgmma/tcgen05 don't exist on consumer GPUs anyway).
+- `pesti-conformance` has pre-existing compile errors (private `Linear.weight`
+  field) unrelated to this work.
+- llama.cpp FFI path (LlamaRunner) is CPU-only unless built with
+  `--features llama-cpp-2/cuda` (11-min NVCC build; benchmark example
+  `llama_gpu_vs_cpu` shows ~82 tok/s CPU vs ~311 tok/s GPU for
+  qwen2.5-0.5b-q4_k_m).

@@ -3,6 +3,7 @@
 //! actual tensor computation layer. separate from PESTI host.
 
 use crate::error::RunnerError;
+use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
@@ -39,6 +40,9 @@ pub struct InferenceEngine {
     cpu_gemm: crate::kernel::CpuGemmKernel,
     /// Backup CPU attention kernel for runtime fallback.
     cpu_attention: crate::kernel::CpuAttentionKernel,
+    /// Whether a real CUDA GEMM kernel was successfully built (cuda feature).
+    #[cfg(feature = "cuda")]
+    gpu_gemm: bool,
 }
 
 impl InferenceEngine {
@@ -65,33 +69,67 @@ impl InferenceEngine {
                 CudaAttentionKernelBuilder, CudaGemmKernelBuilder, GemmArch, GemmError,
             };
 
-            // Try to initialize CUDA if device preference is GPU
-            let (cuda_runtime, stream) =
-                if matches!(device, Device::Cuda(_)) || is_available() {
-                    match CudaRuntime::for_default_device() {
+            // Try to initialize CUDA only if the caller requested a CUDA device.
+            // (NVML-based `is_available()` must not trigger CUDA context creation
+            // for a CPU-only engine.) The requested ordinal is honored so a
+            // multi-GPU host can pin inference to a specific device.
+            let (cuda_runtime, stream) = match &device {
+                Device::Cuda(cuda_dev) => {
+                    // Extract the requested ordinal from candle's device
+                    // location. (candle's DeviceId is a unique counter, not
+                    // the GPU index — location() exposes the real ordinal.)
+                    let ordinal = match cuda_dev.location() {
+                        candle_core::DeviceLocation::Cuda { gpu_id } => gpu_id,
+                        _ => 0,
+                    };
+                    eprintln!("DEBUG: CUDA initialization requested for ordinal {ordinal}");
+                    match CudaRuntime::new(ordinal) {
                         Ok(rt) => {
+                            eprintln!("DEBUG: CUDA runtime created for device {}", rt.ordinal());
                             let rt = Arc::new(rt);
                             match rt.new_stream() {
-                                Ok(stream) => (Some(rt), Some(stream)),
-                                Err(_) => (Some(rt), None),
+                                Ok(stream) => {
+                                    eprintln!("DEBUG: Stream created successfully");
+                                    (Some(rt), Some(stream))
+                                },
+                                Err(e) => {
+                                    eprintln!("DEBUG: Stream creation failed: {e}");
+                                    (Some(rt), None)
+                                }
                             }
                         }
-                        Err(_) => (None, None),
+                        Err(e) => {
+                            eprintln!("DEBUG: CudaRuntime::new({ordinal}) failed: {e}");
+                            (None, None)
+                        }
                     }
-                } else {
+                }
+                _ => {
+                    eprintln!("DEBUG: Skipping CUDA runtime (device={device:?}, available={})", is_available());
                     (None, None)
-                };
+                }
+            };
 
             // Initialize GEMM kernel: prefer mistral.rs if feature enabled and available,
             // then fall back to CUDA PTX, then CPU.
+            // `gpu_gemm` records whether a real CUDA kernel was built, so
+            // `gpu_available()`/`backend_description()` report the truth even
+            // when the builder falls back to CPU.
+            let mut gpu_gemm = false;
             let gemm: Box<dyn crate::kernel::GemmKernel + Send + Sync> =
                 if let (Some(cuda_rt), Some(s)) = (&cuda_runtime, &stream) {
+                    // Select the best arch this device actually supports.
+                    //  - wgmma:    Hopper (sm_90a) only
+                    //  - tcgen05:  datacenter Blackwell (sm_100a) only
+                    //  - mma.sync: every tensor-core GPU (sm_80..sm_120),
+                    //    including consumer Blackwell RTX 50-series which has
+                    //    neither wgmma nor tcgen05.
                     let arch = if cuda_rt.device_info().supports_wgmma() {
-                        GemmArch::Wgmma
+                        Some(GemmArch::Wgmma)
                     } else if cuda_rt.device_info().supports_tcgen05() {
-                        GemmArch::Tcgen05
+                        Some(GemmArch::Tcgen05)
                     } else {
-                        GemmArch::Wgmma
+                        Some(GemmArch::Mma)
                     };
 
                     // Try mistral.rs backend first if enabled
@@ -99,37 +137,53 @@ impl InferenceEngine {
                     {
                         use crate::kernel::mistralrs_backend::MistralRsBackend;
                         let mr = MistralRsBackend::default();
-                        if let Some(kernel) = mr.create_gemm_kernel(arch) {
-                            tracing::info!("Using mistral.rs GEMM kernel (arch={})", arch.name());
-                            return Self {
-                                device,
-                                dtype,
-                                gemm: kernel,
-                                attention: Box::new(crate::kernel::CpuAttentionKernel::new()),
-                                #[cfg(feature = "cuda")]
-                                cuda_runtime,
-                                #[cfg(feature = "cuda")]
-                                stream,
-                                memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
-                                cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-                                cpu_attention: crate::kernel::CpuAttentionKernel::new(),
-                            };
+                        if let Some(arch) = arch {
+                            if let Some(kernel) = mr.create_gemm_kernel(arch) {
+                                tracing::info!("Using mistral.rs GEMM kernel (arch={})", arch.name());
+                                gpu_gemm = true;
+                                return Self {
+                                    device,
+                                    dtype,
+                                    gemm: kernel,
+                                    attention: Box::new(crate::kernel::CpuAttentionKernel::new()),
+                                    #[cfg(feature = "cuda")]
+                                    cuda_runtime,
+                                    #[cfg(feature = "cuda")]
+                                    stream,
+                                    memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+                                    cpu_gemm: crate::kernel::CpuGemmKernel::new(),
+                                    cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                                    #[cfg(feature = "cuda")]
+                                    gpu_gemm: true,
+                                };
+                            }
                         }
                     }
 
-                    match CudaGemmKernelBuilder::new(
-                        arch,
-                        cuda_rt.context().clone(),
-                        s.clone(),
-                        cuda_rt.device_info().clone(),
-                    )
-                    .build()
-                    {
-                        Ok(kernel) => Box::new(kernel),
-                        Err(e) => {
+                    match arch {
+                        Some(arch) => match CudaGemmKernelBuilder::new(
+                            arch,
+                            cuda_rt.context().clone(),
+                            s.clone(),
+                            cuda_rt.device_info().clone(),
+                        )
+                        .build()
+                        {
+                            Ok(kernel) => {
+                                gpu_gemm = true;
+                                Box::new(kernel)
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to initialize CUDA GEMM kernel: {}. Falling back to CPU.",
+                                    e
+                                );
+                                Box::new(crate::kernel::CpuGemmKernel::new())
+                            }
+                        },
+                        None => {
                             eprintln!(
-                                "Failed to initialize CUDA GEMM kernel: {}. Falling back to CPU.",
-                                e
+                                "No CUDA GEMM kernel for this device (needs sm_100+); using CPU."
                             );
                             Box::new(crate::kernel::CpuGemmKernel::new())
                         }
@@ -161,33 +215,47 @@ impl InferenceEngine {
                                 memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                                #[cfg(feature = "cuda")]
+                                gpu_gemm,
                             };
                         }
                     }
 
                     // Try CUDA attention kernel builder (similar to GEMM)
                     if let (Some(cuda_rt), Some(s)) = (&cuda_runtime, &stream) {
+                        // Same capability gate as GEMM: both tensor-core
+                        // attention paths require Blackwell (sm_100+).
                         let arch = if cuda_rt.device_info().supports_wgmma() {
-                            AttentionArch::Wgmma
+                            Some(AttentionArch::Wgmma)
                         } else if cuda_rt.device_info().supports_tcgen05() {
-                            AttentionArch::Tcgen05
+                            Some(AttentionArch::Tcgen05)
                         } else {
-                            AttentionArch::Wgmma
+                            None
                         };
 
-                        match CudaAttentionKernelBuilder::new(
-                            arch,
-                            cuda_rt.context().clone(),
-                            s.clone(),
-                            cuda_rt.device_info().clone(),
-                        )
-                        .build()
-                        {
-                            Ok(kernel) => Box::new(kernel),
-                            Err(e) => {
+                        match arch {
+                            Some(arch) => {
+                                match CudaAttentionKernelBuilder::new(
+                                    arch,
+                                    cuda_rt.context().clone(),
+                                    s.clone(),
+                                    cuda_rt.device_info().clone(),
+                                )
+                                .build()
+                                {
+                                    Ok(kernel) => Box::new(kernel),
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Failed to initialize CUDA attention kernel: {}. Falling back to CPU.",
+                                            e
+                                        );
+                                        Box::new(crate::kernel::CpuAttentionKernel::new())
+                                    }
+                                }
+                            }
+                            None => {
                                 eprintln!(
-                                    "Failed to initialize CUDA attention kernel: {}. Falling back to CPU.",
-                                    e
+                                    "No CUDA attention kernel for this device (needs sm_100+); using CPU."
                                 );
                                 Box::new(crate::kernel::CpuAttentionKernel::new())
                             }
@@ -211,6 +279,8 @@ impl InferenceEngine {
                 memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                #[cfg(feature = "cuda")]
+                gpu_gemm,
             }
         }
     }
@@ -235,6 +305,8 @@ impl InferenceEngine {
             memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+            #[cfg(feature = "cuda")]
+            gpu_gemm: false,
         }
     }
 
@@ -248,7 +320,7 @@ impl InferenceEngine {
     pub fn gpu_available(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
-            self.cuda_runtime.is_some() && self.gemm.is_available()
+            self.cuda_runtime.is_some() && self.gpu_gemm
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -460,23 +532,14 @@ impl InferenceEngine {
     /// Get a description of the active inference backend.
     pub fn backend_description(&self) -> String {
         #[cfg(feature = "cuda")]
-        if self.cuda_runtime.is_some() && self.gemm.is_available() {
-            // Check if we're using mistral.rs by checking the kernel arch
-            match self.gemm_arch() {
-                crate::kernel::GemmArch::Wgmma | crate::kernel::GemmArch::Tcgen05 => {
-                    // Could be either backend — use runtime info if available
-                    return format!(
-                        "GPU ({})",
-                        self.full_device_info().unwrap_or_else(|_| "unknown".to_string())
-                    );
-                }
-            }
+        if self.gpu_gemm {
+            return format!(
+                "GPU ({})",
+                self.full_device_info()
+                    .unwrap_or_else(|_| "unknown".to_string())
+            );
         }
 
-        if self.gemm.is_available() {
-            "GPU (CUDA PTX)".to_string()
-        } else {
-            "CPU (reference)".to_string()
-        }
+        "CPU (reference)".to_string()
     }
 }

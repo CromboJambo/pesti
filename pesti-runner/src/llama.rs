@@ -347,7 +347,10 @@ impl LlamaRunner {
         info!("Prompt: {} tokens", prompt_len);
 
         // Create batch for prompt
-        let mut batch = LlamaBatch::new(prompt_len, 0);
+        // NOTE: second arg is n_seq_max (max sequences per token), NOT a
+        // position. Passing 0 allocates zero-sized seq_id slots, and `add()`
+        // always writes seq_id[..][0] → heap corruption. Must be >= 1.
+        let mut batch = LlamaBatch::new(prompt_len, 1);
         for (i, tok) in prompt_tokens.iter().enumerate() {
             batch.add(*tok, i as i32, &[0], true)?;
         }
@@ -359,9 +362,13 @@ impl LlamaRunner {
 
         // Sample first token
         let mut tokens: Vec<LlamaToken> = vec![];
-        let ctx = self.context.borrow_mut();
-        let _logits = ctx.get_logits_ith((prompt_len - 1) as i32);
-        let mut token = sampler.sample(&ctx, (prompt_len - 1) as i32);
+        let mut token = {
+            // Scope the borrow: it must be released before the decode loop
+            // below, which calls `decode()` (another borrow_mut).
+            let ctx = self.context.borrow_mut();
+            let _logits = ctx.get_logits_ith((prompt_len - 1) as i32);
+            sampler.sample(&ctx, (prompt_len - 1) as i32)
+        };
         tokens.push(token);
 
         info!("First token sampled: {:?}", token);
@@ -371,17 +378,19 @@ impl LlamaRunner {
         let mut gen_count = 0;
 
         for pos in prompt_len..(prompt_len + config.max_tokens as usize) {
-            // Create new batch for single token
-            let mut new_batch = LlamaBatch::new(1, pos as i32);
-            new_batch.add(token, pos as i32, &[0], false)?;
+            // Create new batch for single token (n_seq_max=1, one sequence).
+            // logits=true so get_logits_ith() below is initialized.
+            let mut new_batch = LlamaBatch::new(1, 1);
+            new_batch.add(token, pos as i32, &[0], true)?;
 
             // Decode
             self.decode(&mut new_batch)?;
 
-            // Sample next token
-            let _logits = self.get_logits_ith(pos as i32)?;
+            // Sample next token. get_logits_ith/sample take the batch index:
+            // each iteration uses a fresh 1-token batch, so the index is 0.
+            let _logits = self.get_logits_ith(0)?;
             let ctx = self.context.borrow();
-            let next_token = sampler.sample(&ctx, pos as i32);
+            let next_token = sampler.sample(&ctx, 0);
             drop(ctx);
 
             token = next_token;
@@ -474,7 +483,10 @@ impl LlamaRunner {
         info!("Prompt: {} tokens", prompt_len);
 
         // Create batch for prompt
-        let mut batch = LlamaBatch::new(prompt_len, 0);
+        // NOTE: second arg is n_seq_max (max sequences per token), NOT a
+        // position. Passing 0 allocates zero-sized seq_id slots, and `add()`
+        // always writes seq_id[..][0] → heap corruption. Must be >= 1.
+        let mut batch = LlamaBatch::new(prompt_len, 1);
         for (i, tok) in prompt_tokens.iter().enumerate() {
             batch.add(*tok, i as i32, &[0], true)?;
         }
@@ -522,17 +534,19 @@ impl LlamaRunner {
         let mut gen_count = 0;
 
         for pos in prompt_len..(prompt_len + config.max_tokens as usize) {
-            // Create new batch for single token
-            let mut new_batch = LlamaBatch::new(1, pos as i32);
-            new_batch.add(token, pos as i32, &[0], false)?;
+            // Create new batch for single token (n_seq_max=1, one sequence).
+            // logits=true so get_logits_ith() below is initialized.
+            let mut new_batch = LlamaBatch::new(1, 1);
+            new_batch.add(token, pos as i32, &[0], true)?;
 
             // Decode
             self.decode(&mut new_batch)?;
 
-            // Sample next token
-            let _logits = self.get_logits_ith(pos as i32)?;
+            // Sample next token. get_logits_ith/sample take the batch index:
+            // each iteration uses a fresh 1-token batch, so the index is 0.
+            let _logits = self.get_logits_ith(0)?;
             let ctx = self.context.borrow();
-            let next_token = sampler.sample(&ctx, pos as i32);
+            let next_token = sampler.sample(&ctx, 0);
             drop(ctx);
 
             let is_eos = self.model.is_eog_token(next_token);
@@ -723,6 +737,14 @@ impl LlamaRunner {
                 0.0,
                 0.0,
             ));
+        }
+
+        // Terminal sampler: llama.cpp requires a final sampler that actually
+        // selects a token. Greedy for temperature <= 0, otherwise dist.
+        if config.temperature <= 0.0 {
+            samplers.push(LlamaSampler::greedy());
+        } else {
+            samplers.push(LlamaSampler::dist(config.seed));
         }
 
         LlamaSampler::chain_simple(samplers)

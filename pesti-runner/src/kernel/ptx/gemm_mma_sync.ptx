@@ -1,0 +1,296 @@
+// Real GEMM kernel for consumer Blackwell (sm_120, RTX 50 series) using
+// classic warp-level tensor cores: mma.sync.aligned.m16n8k16.
+//
+// Why mma.sync and not wgmma/tcgen05:
+//   - wgmma.mma_async  : Hopper-only (sm_90a). Rejected by ptxas on sm_120a.
+//   - tcgen05.mma      : datacenter Blackwell (sm_100a/sm_103a). Rejected on
+//                        sm_120a (consumer Blackwell has no tensor memory).
+//   - mma.sync.m16n8k16: supported on every tensor-core arch (sm_80..sm_120);
+//                        this is what llama.cpp uses on RTX 50-series GPUs.
+//
+// Compute: C[m x n] = alpha * A[m x k] @ B[k x n] + beta * C[m x n]
+//   A, B in f16 (row-major), C in f32 (row-major).
+//
+// Layout: one warp (32 threads) per 16x8 output tile.
+//   gridDim  = (ceil(n/8), ceil(m/16), 1)
+//   blockDim = (32, 1, 1)
+//
+// Fragment layout per PTX ISA 9.7.15.5 (mma.m16n8k16, .f16):
+//   groupID g = laneid>>2, threadID_in_group t = laneid%4
+//
+//   A (4 x .b32 = 8 f16, low to high):
+//     reg0 = {A[g][2t],   A[g][2t+1]}
+//     reg1 = {A[g+8][2t], A[g+8][2t+1]}
+//     reg2 = {A[g][2t+8], A[g][2t+9]}
+//     reg3 = {A[g+8][2t+8], A[g+8][2t+9]}
+//
+//   B (2 x .b32 = 4 f16, low to high; B is k x n = 16 x 8):
+//     reg0 = {B[2t][g],   B[2t+1][g]}
+//     reg1 = {B[2t+8][g], B[2t+9][g]}
+//
+//   D (4 x .f32, C or D accumulator, 16 x 8):
+//     d0 = D[g][2t], d1 = D[g][2t+1], d2 = D[g+8][2t], d3 = D[g+8][2t+1]
+//
+// Out-of-bounds elements are treated as zero (predicated loads) so arbitrary
+// m/n/k work; k is stepped in chunks of 16 with a partial-tile tail.
+//
+// Target sm_80: mma.sync.m16n8k16 is available on every tensor-core arch
+// (sm_80 Ampere through sm_120 consumer Blackwell), and PTX is
+// forward-compatible; one module JITs for sm_89, sm_120, etc.
+.version 8.7
+.target sm_80
+.address_size 64
+
+.visible .entry gemm_mma_kernel(
+    .param .f32 alpha,
+    .param .u64 A,
+    .param .u64 B,
+    .param .f32 beta,
+    .param .u64 C,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k
+)
+{
+    .reg .pred %p<10>;
+    .reg .b16 %h<8>;
+    .reg .b32 %r<48>;
+    .reg .b64 %rd<16>;
+    .reg .f32 %f<10>;
+
+    // ---- Load kernel parameters ----
+    ld.param.f32 %f0, [alpha];       // %f0 = alpha
+    ld.param.u64 %rd0, [A];          // %rd0 = A base
+    ld.param.u64 %rd1, [B];          // %rd1 = B base
+    ld.param.f32 %f1, [beta];        // %f1 = beta
+    ld.param.u64 %rd2, [C];          // %rd2 = C base
+    ld.param.u32 %r0, [m];           // %r0 = m
+    ld.param.u32 %r1, [n];           // %r1 = n
+    ld.param.u32 %r2, [k];           // %r2 = k
+
+    // ---- Thread / tile coordinates ----
+    mov.u32 %r3, %tid.x;             // lane 0..31
+    mov.u32 %r4, %ctaid.x;           // n-tile index
+    mov.u32 %r5, %ctaid.y;           // m-tile index
+
+    shr.u32 %r6, %r3, 2;             // g = lane/4 (0..7)     [groupID]
+    and.b32 %r7, %r3, 3;             // lane%4                [threadID_in_group]
+    shl.b32 %r8, %r7, 1;             // 2t = (lane%4)*2 (0,2,4,6)
+
+    mul.lo.u32 %r10, %r5, 16;        // tile row base
+    add.u32 %r11, %r10, %r6;         // row0 = tile_row*16 + g
+    add.u32 %r12, %r11, 8;           // row1 = row0 + 8
+    mul.lo.u32 %r13, %r4, 8;         // tile col base
+    add.u32 %r14, %r13, %r8;         // col0 = tile_col*8 + 2t
+    add.u32 %r15, %r14, 1;           // col1 = col0 + 1
+
+    // ---- Zero accumulator (16x8 f32 tile) ----
+    mov.f32 %f2, 0f00000000;         // d0
+    mov.f32 %f3, 0f00000000;         // d1
+    mov.f32 %f4, 0f00000000;         // d2
+    mov.f32 %f5, 0f00000000;         // d3
+
+    // ---- Main K loop (chunks of 16) ----
+    mov.u32 %r16, 0;                 // kk = 0
+    $L_k_loop:
+    setp.ge.u32 %p0, %r16, %r2;
+    @%p0 bra $L_k_done;
+
+    // ---- Load A fragment (4 x b32 pairs) ----
+    // Bounds predicates (set once per k-step):
+    //   %p1 = row0 >= m, %p2 = row1 >= m
+    //   %p3 = kk+2t+1 >= k  (tail bound for reg0/reg1, which read kk+2t..kk+2t+1)
+    //   %p4 = kk+2t+9 >= k  (tail bound for reg2/reg3, which read kk+2t+8..+9)
+    setp.ge.u32 %p1, %r11, %r0;
+    setp.ge.u32 %p2, %r12, %r0;
+    add.u32 %r17, %r16, %r8;
+    add.u32 %r17, %r17, 1;
+    setp.ge.u32 %p3, %r17, %r2;
+    add.u32 %r17, %r16, %r8;
+    add.u32 %r17, %r17, 9;
+    setp.ge.u32 %p4, %r17, %r2;
+
+    // reg0 = {A[row0][kk+2t], A[row0][kk+2t+1]}
+    mul.lo.u32 %r18, %r11, %r2;      // row0 * k
+    add.u32 %r19, %r18, %r16;
+    add.u32 %r19, %r19, %r8;         // elem idx of A[row0][kk+2t]
+    or.pred %p5, %p1, %p3;
+    @%p5 bra $L_a0_skip;
+    mul.wide.u32 %rd4, %r19, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    ld.global.u16 %h1, [%rd5+2];
+    mov.b32 %r20, {%h0, %h1};
+    bra $L_a0_done;
+    $L_a0_skip:
+    mov.u32 %r20, 0;
+    $L_a0_done:
+
+    // reg1 = {A[row1][kk+2t], A[row1][kk+2t+1]}
+    mul.lo.u32 %r21, %r12, %r2;      // row1 * k
+    add.u32 %r22, %r21, %r16;
+    add.u32 %r22, %r22, %r8;         // elem idx of A[row1][kk+2t]
+    or.pred %p5, %p2, %p3;           // row1 >= m | tail(+1)
+    @%p5 bra $L_a1_skip;
+    mul.wide.u32 %rd4, %r22, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    ld.global.u16 %h1, [%rd5+2];
+    mov.b32 %r23, {%h0, %h1};
+    bra $L_a1_done;
+    $L_a1_skip:
+    mov.u32 %r23, 0;
+    $L_a1_done:
+
+    // reg2 = {A[row0][kk+2t+8], A[row0][kk+2t+9]}
+    add.u32 %r24, %r19, 8;           // elem idx of A[row0][kk+2t+8]
+    or.pred %p5, %p1, %p4;           // row0 >= m | tail(+9)
+    @%p5 bra $L_a2_skip;
+    mul.wide.u32 %rd4, %r24, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    ld.global.u16 %h1, [%rd5+2];
+    mov.b32 %r25, {%h0, %h1};
+    bra $L_a2_done;
+    $L_a2_skip:
+    mov.u32 %r25, 0;
+    $L_a2_done:
+
+    // reg3 = {A[row1][kk+2t+8], A[row1][kk+2t+9]}
+    add.u32 %r26, %r22, 8;           // elem idx of A[row1][kk+2t+8]
+    or.pred %p5, %p2, %p4;           // row1 >= m | tail(+9)
+    @%p5 bra $L_a3_skip;
+    mul.wide.u32 %rd4, %r26, 2;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    ld.global.u16 %h1, [%rd5+2];
+    mov.b32 %r27, {%h0, %h1};
+    bra $L_a3_done;
+    $L_a3_skip:
+    mov.u32 %r27, 0;
+    $L_a3_done:
+
+    // ---- Load B fragment (2 x b32 pairs) ----
+    // B is k x n (16 x 8). reg0 = {B[kk+2t][g], B[kk+2t+1][g]}
+    // NOTE: the two f16 in a B register are k-consecutive at the SAME n,
+    // so they are n elements apart in row-major memory (stride n*2 bytes),
+    // NOT adjacent like A's pairs.
+    // elem idx = (kk+2t)*n + (tile_col*8 + g)
+    add.u32 %r28, %r16, %r8;         // k0 = kk + 2t
+    mul.lo.u32 %r29, %r28, %r1;      // k0 * n
+    mul.lo.u32 %r43, %r4, 8;         // tile_col * 8
+    add.u32 %r43, %r43, %r6;         // + g  -> B column in global B
+    add.u32 %r30, %r29, %r43;        // elem idx
+    setp.ge.u32 %p5, %r28, %r2;      // k0 >= k
+    add.u32 %r44, %r28, 1;
+    setp.ge.u32 %p6, %r44, %r2;      // k0+1 >= k
+    setp.ge.u32 %p7, %r43, %r1;      // col >= n
+    or.pred %p4, %p5, %p6;
+    or.pred %p4, %p4, %p7;
+    @%p4 bra $L_b0_skip;
+    mul.wide.u32 %rd4, %r30, 2;
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    mul.wide.u32 %rd7, %r1, 2;       // n * 2 bytes (stride between k rows)
+    add.u64 %rd6, %rd5, %rd7;
+    ld.global.u16 %h1, [%rd6];
+    mov.b32 %r31, {%h0, %h1};
+    bra $L_b0_done;
+    $L_b0_skip:
+    mov.u32 %r31, 0;
+    $L_b0_done:
+
+    // reg1 = {B[kk+2t+8][g], B[kk+2t+9][g]}
+    add.u32 %r32, %r28, 8;           // k0+8
+    mul.lo.u32 %r33, %r32, %r1;
+    add.u32 %r33, %r33, %r43;        // + (tile_col*8 + g)
+    setp.ge.u32 %p5, %r32, %r2;      // k0+8 >= k
+    add.u32 %r44, %r32, 1;
+    setp.ge.u32 %p6, %r44, %r2;      // k0+9 >= k
+    or.pred %p4, %p5, %p6;
+    or.pred %p4, %p4, %p7;           // col >= n (from b0 block)
+    @%p4 bra $L_b1_skip;
+    mul.wide.u32 %rd4, %r33, 2;
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.u16 %h0, [%rd5];
+    add.u64 %rd6, %rd5, %rd7;        // + n*2 bytes (stride from b0 block)
+    ld.global.u16 %h1, [%rd6];
+    mov.b32 %r34, {%h0, %h1};
+    bra $L_b1_done;
+    $L_b1_skip:
+    mov.u32 %r34, 0;
+    $L_b1_done:
+
+    // ---- Tensor core MMA: D += A @ B (m16n8k16) ----
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%f2, %f3, %f4, %f5},
+        {%r20, %r23, %r25, %r27},
+        {%r31, %r34},
+        {%f2, %f3, %f4, %f5};
+
+    // Advance K by 16
+    add.u32 %r16, %r16, 16;
+    bra $L_k_loop;
+
+    $L_k_done:
+
+    // ---- Apply alpha, beta and store C ----
+    mul.f32 %f2, %f2, %f0;
+    mul.f32 %f3, %f3, %f0;
+    mul.f32 %f4, %f4, %f0;
+    mul.f32 %f5, %f5, %f0;
+
+    // d0 -> C[row0][col0]
+    mul.lo.u32 %r35, %r11, %r1;
+    add.u32 %r36, %r35, %r14;        // idx C[row0][col0]
+    setp.ge.u32 %p7, %r11, %r0;
+    setp.ge.u32 %p8, %r14, %r1;
+    or.pred %p4, %p7, %p8;
+    @%p4 bra $L_c0_skip;
+    mul.wide.u32 %rd4, %r36, 4;
+    add.u64 %rd5, %rd2, %rd4;
+    ld.global.f32 %f6, [%rd5];
+    fma.rn.f32 %f6, %f6, %f1, %f2;  // beta*old + alpha*acc
+    st.global.f32 [%rd5], %f6;
+    $L_c0_skip:
+
+    // d1 -> C[row0][col1]
+    add.u32 %r37, %r35, %r15;        // idx C[row0][col1]
+    setp.ge.u32 %p8, %r15, %r1;
+    or.pred %p4, %p7, %p8;
+    @%p4 bra $L_c1_skip;
+    mul.wide.u32 %rd4, %r37, 4;
+    add.u64 %rd5, %rd2, %rd4;
+    ld.global.f32 %f6, [%rd5];
+    fma.rn.f32 %f6, %f6, %f1, %f3;
+    st.global.f32 [%rd5], %f6;
+    $L_c1_skip:
+
+    // d2 -> C[row1][col0]
+    mul.lo.u32 %r38, %r12, %r1;
+    add.u32 %r39, %r38, %r14;        // idx C[row1][col0]
+    setp.ge.u32 %p7, %r12, %r0;
+    setp.ge.u32 %p8, %r14, %r1;
+    or.pred %p4, %p7, %p8;
+    @%p4 bra $L_c2_skip;
+    mul.wide.u32 %rd4, %r39, 4;
+    add.u64 %rd5, %rd2, %rd4;
+    ld.global.f32 %f6, [%rd5];
+    fma.rn.f32 %f6, %f6, %f1, %f4;
+    st.global.f32 [%rd5], %f6;
+    $L_c2_skip:
+
+    // d3 -> C[row1][col1]
+    add.u32 %r40, %r38, %r15;        // idx C[row1][col1]
+    setp.ge.u32 %p8, %r15, %r1;
+    or.pred %p4, %p7, %p8;
+    @%p4 bra $L_c3_skip;
+    mul.wide.u32 %rd4, %r40, 4;
+    add.u64 %rd5, %rd2, %rd4;
+    ld.global.f32 %f6, [%rd5];
+    fma.rn.f32 %f6, %f6, %f1, %f5;
+    st.global.f32 [%rd5], %f6;
+    $L_c3_skip:
+
+    ret;
+}

@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 1: CUDA device detection
     println!("Test 1: Device Detection");
+    #[cfg(feature = "cuda")]
     match pesti_runner::InferenceEngine::list_devices() {
         Ok(devices) => {
             println!("✅ Found {} CUDA devices:", devices.len());
@@ -31,6 +32,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             println!("❌ Device detection failed: {}", e);
         }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        println!("⚠️  CUDA feature not enabled, skipping device detection");
+        println!("   Run with: cargo run --features cuda --package pesti-runner --example benchmark_gpu");
     }
 
     // Test 2: CPU GEMM baseline
@@ -67,7 +73,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 3: GPU GEMM if available
     println!("\nTest 3: GPU GEMM (1024x1024x1024)");
+    #[cfg(feature = "cuda")]
     let gpu_available = pesti_runner::InferenceEngine::list_devices().is_ok();
+    #[cfg(not(feature = "cuda"))]
+    let gpu_available = false;
     
     if gpu_available {
         match Device::cuda_if_available(0) {
