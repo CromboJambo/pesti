@@ -35,6 +35,25 @@ pub struct GgufWeights {
     pub tensors: HashMap<String, Vec<u8>>,
 }
 
+impl GgufWeights {
+    /// Get the shape of a tensor as `(out_features, in_features)`.
+    ///
+    /// GGUF stores weight tensors as 2D `[out_features, in_features]`.
+    /// Returns `(0, 0)` if the tensor is not found or has wrong ndims.
+    pub fn tensor_shape(&self, name: &str) -> (usize, usize) {
+        self.header
+            .get_tensor(name)
+            .and_then(|t| {
+                if t.shape.len() >= 2 {
+                    Some((t.shape[0] as usize, t.shape[1] as usize))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or((0, 0))
+    }
+}
+
 /// Load all tensors from a GGUF file into memory.
 pub fn load_gguf_weights(gguf_path: &Path) -> Result<GgufWeights> {
     let header = parse_gguf(gguf_path)?;
@@ -43,11 +62,6 @@ pub fn load_gguf_weights(gguf_path: &Path) -> Result<GgufWeights> {
     for tensor in &header.tensors {
         let stored_size = tensor.stored_size() as usize;
         let file_offset = header.data_section_start + tensor.offset;
-        eprintln!(
-            "  extract: {} offset={} stored_size={}",
-            tensor.name, file_offset, stored_size
-        );
-
         let raw_data = extract_tensor_bytes_from_path(gguf_path, file_offset, stored_size)?;
         let dequantized = dequantize_tensor(tensor, &raw_data)?;
         tensors.insert(tensor.name.clone(), dequantized);
@@ -105,10 +119,6 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
         let num_blocks = raw_data.len() / block_size;
         let inferred_count = num_blocks * elements_per_block;
 
-        eprintln!(
-            "[REVERSE INFERENCE] Using dtype {:?} with {} elements from data size (claimed: {:?}, {})",
-            dtype, inferred_count, dtype, claimed_element_count
-        );
         (dtype, inferred_count)
     } else {
         // Non-K-family types - use claimed values
@@ -185,10 +195,6 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
             match dequantize_q6_k(raw_data, inferred_element_count) {
                 Ok(result) => Ok(result.into_iter().flat_map(|v| v.to_le_bytes()).collect()),
                 Err(_) => {
-                    eprintln!(
-                        "[WARN] Q6_K dequant failed for '{}', skipping tensor",
-                        tensor.name
-                    );
                     Ok(vec![])
                 }
             }

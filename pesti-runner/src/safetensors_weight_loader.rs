@@ -41,6 +41,25 @@ pub struct SafetensorsWeights {
     pub tensors: HashMap<String, Vec<u8>>,
 }
 
+impl SafetensorsWeights {
+    /// Get the shape of a tensor as `(out_features, in_features)`.
+    ///
+    /// Safetensors stores weight tensors as 2D `[out_features, in_features]`.
+    /// Returns `(0, 0)` if the tensor is not found or has wrong ndims.
+    pub fn tensor_shape(&self, name: &str) -> (usize, usize) {
+        self.metadata
+            .get(name)
+            .and_then(|(shape, _, _)| {
+                if shape.len() >= 2 {
+                    Some((shape[0], shape[1]))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or((0, 0))
+    }
+}
+
 /// Load all tensors from a safetensors file into memory.
 ///
 /// Converts F16/BF16 to f32. F32 tensors are passed through.

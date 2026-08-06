@@ -44,7 +44,34 @@ impl Linear {
         }
     }
 
+    /// Build a Linear layer from f32 bytes with explicit shape (preferred).
+    ///
+    /// Use this instead of `from_f32_weight` for attention/FFN weights where
+    /// `in_features > 1`. The shape-less variant defaults `in_features=1`,
+    /// which is only correct for 1D embedding lookups.
+    pub fn from_f32_weight_with_dims(
+        weight_f32: &[u8],
+        bias: Option<Vec<f32>>,
+        in_features: usize,
+        out_features: usize,
+    ) -> Self {
+        let weight: Vec<f32> = weight_f32
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        Self {
+            weight,
+            bias,
+            in_features,
+            out_features,
+        }
+    }
+
     /// Build a Linear layer from f32 bytes (used for safetensors loading).
+    ///
+    /// **Note:** Defaults `in_features=1`, which is only correct for 1D
+    /// embedding tensors. For attention/FFN weights, use
+    /// `from_f32_weight_with_dims` or `from_f32_weight_with_shape` instead.
     pub fn from_f32_weight(weight_f32: &[u8], bias: Option<Vec<f32>>) -> Self {
         let elements = weight_f32.len() / 4;
         let weight: Vec<f32> = weight_f32

@@ -578,10 +578,39 @@ impl LlamaModel {
                 }),
         }?;
 
-        let wq = Linear::from_f32_weight(wq_data, None);
-        let wk = Linear::from_f32_weight(wk_data, None);
-        let wv = Linear::from_f32_weight(wv_data, None);
-        let wo = Linear::from_f32_weight(wo_data, None);
+        // Use tensor shapes for correct in_features/out_features.
+        // Shape is [out_features, in_features] in both GGUF and safetensors.
+        let wq_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_q.weight"),
+            _ => format!("{prefix}attention.wq.weight"),
+        };
+        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
+
+        let wk_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_k.weight"),
+            _ => format!("{prefix}attention.wk.weight"),
+        };
+        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+        let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
+
+        let wv_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_v.weight"),
+            _ => format!("{prefix}attention.wv.weight"),
+        };
+        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+        let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
+
+        let wo_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_output.weight"),
+            _ => format!("{prefix}attention.wo.weight"),
+        };
+        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+        let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
             wq,
@@ -633,9 +662,27 @@ impl LlamaModel {
             }
         };
 
-        let w1 = Linear::from_f32_weight(w1_data, None);
-        let w2 = Linear::from_f32_weight(w2_data, None);
-        let w3 = Linear::from_f32_weight(w3_data, None);
+        // Use tensor shapes for FFN weights
+        let w1_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
+            _ => format!("{prefix}feed_forward.w1.weight"),
+        };
+        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);
+        let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
+
+        let w2_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
+            _ => format!("{prefix}feed_forward.w2.weight"),
+        };
+        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);
+        let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
+
+        let w3_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
+            _ => format!("{prefix}feed_forward.w3.weight"),
+        };
+        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);
+        let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
 
@@ -757,10 +804,39 @@ impl LlamaModel {
                 }),
         }?;
 
-        let wq = Linear::from_f32_weight(wq_data, None);
-        let wk = Linear::from_f32_weight(wk_data, None);
-        let wv = Linear::from_f32_weight(wv_data, None);
-        let wo = Linear::from_f32_weight(wo_data, None);
+        // Use tensor shapes for correct in_features/out_features.
+        // Shape is [out_features, in_features] in both GGUF and safetensors.
+        let wq_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_q.weight"),
+            _ => format!("{prefix}attention.wq.weight"),
+        };
+        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
+
+        let wk_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_k.weight"),
+            _ => format!("{prefix}attention.wk.weight"),
+        };
+        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+        let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
+
+        let wv_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_v.weight"),
+            _ => format!("{prefix}attention.wv.weight"),
+        };
+        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+        let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
+
+        let wo_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_output.weight"),
+            _ => format!("{prefix}attention.wo.weight"),
+        };
+        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+        let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
             wq,
@@ -812,9 +888,27 @@ impl LlamaModel {
             }
         };
 
-        let w1 = Linear::from_f32_weight(w1_data, None);
-        let w2 = Linear::from_f32_weight(w2_data, None);
-        let w3 = Linear::from_f32_weight(w3_data, None);
+        // Use tensor shapes for FFN weights
+        let w1_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
+            _ => format!("{prefix}feed_forward.w1.weight"),
+        };
+        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);
+        let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
+
+        let w2_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
+            _ => format!("{prefix}feed_forward.w2.weight"),
+        };
+        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);
+        let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
+
+        let w3_name = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
+            _ => format!("{prefix}feed_forward.w3.weight"),
+        };
+        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);
+        let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
 
@@ -874,7 +968,7 @@ impl LlamaModel {
         let mut h = hidden.to_vec();
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
-            h = layer.forward(&h, 1, 1, start_pos + layer_idx);
+            h = layer.forward(&h, 1, 1, start_pos); // Fixed: was start_pos + layer_idx
         }
 
         // Apply final norm for architectures that have it (qwen2/qwen3)

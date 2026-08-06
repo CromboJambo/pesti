@@ -14,7 +14,6 @@ pub struct RmsNorm {
 impl RmsNorm {
     pub fn new(weight: Vec<f32>, eps: f32) -> Self {
         let dim = weight.len();
-        eprintln!("RmsNorm::new: weight.len()={}, dim={}", weight.len(), dim);
         Self { weight, eps, dim }
     }
 

@@ -85,30 +85,24 @@ impl InferenceEngine {
                         candle_core::DeviceLocation::Cuda { gpu_id } => gpu_id,
                         _ => 0,
                     };
-                    eprintln!("DEBUG: CUDA initialization requested for ordinal {ordinal}");
                     match CudaRuntime::new(ordinal) {
                         Ok(rt) => {
-                            eprintln!("DEBUG: CUDA runtime created for device {}", rt.ordinal());
                             let rt = Arc::new(rt);
                             match rt.new_stream() {
                                 Ok(stream) => {
-                                    eprintln!("DEBUG: Stream created successfully");
                                     (Some(rt), Some(stream))
                                 },
                                 Err(e) => {
-                                    eprintln!("DEBUG: Stream creation failed: {e}");
                                     (Some(rt), None)
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("DEBUG: CudaRuntime::new({ordinal}) failed: {e}");
                             (None, None)
                         }
                     }
                 }
                 _ => {
-                    eprintln!("DEBUG: Skipping CUDA runtime (device={device:?}, available={})", is_available());
                     (None, None)
                 }
             };
