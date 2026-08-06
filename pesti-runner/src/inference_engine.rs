@@ -49,17 +49,20 @@ impl InferenceEngine {
     pub fn new(device: Device, dtype: DType) -> Self {
         // CPU-only mode - just use CPU kernels
         #[cfg(not(feature = "cuda"))]
-        return Self {
-            device,
-            dtype,
-            gemm: Box::new(crate::kernel::CpuGemmKernel::new()),
-            attention: Box::new(crate::kernel::CpuAttentionKernel::new()),
-            memory_manager: crate::kernel::MemoryManager::Cpu(
-                crate::kernel::CpuMemoryBackend::new(1024 * 1024),
-            ),
-            cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-            cpu_attention: crate::kernel::CpuAttentionKernel::new(),
-        };
+        {
+            use crate::kernel::attention_stub::AttentionArch;
+            return Self {
+                device,
+                dtype,
+                gemm: Box::new(crate::kernel::CpuGemmKernel::new()),
+                attention: Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)),
+                memory_manager: crate::kernel::MemoryManager::Cpu(
+                    crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+                ),
+                cpu_gemm: crate::kernel::CpuGemmKernel::new(),
+                cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
+            };
+        }
 
         #[cfg(feature = "cuda")]
         {
@@ -145,14 +148,14 @@ impl InferenceEngine {
                                     device,
                                     dtype,
                                     gemm: kernel,
-                                    attention: Box::new(crate::kernel::CpuAttentionKernel::new()),
+                                    attention: Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)),
                                     #[cfg(feature = "cuda")]
                                     cuda_runtime,
                                     #[cfg(feature = "cuda")]
                                     stream,
                                     memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                                     cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-                                    cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                                    cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                                     #[cfg(feature = "cuda")]
                                     gpu_gemm: true,
                                 };
@@ -214,7 +217,7 @@ impl InferenceEngine {
                                 stream,
                                 memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-                                cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                                cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                                 #[cfg(feature = "cuda")]
                                 gpu_gemm,
                             };
@@ -249,7 +252,7 @@ impl InferenceEngine {
                                             "Failed to initialize CUDA attention kernel: {}. Falling back to CPU.",
                                             e
                                         );
-                                        Box::new(crate::kernel::CpuAttentionKernel::new())
+                                        Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                                     }
                                 }
                             }
@@ -257,14 +260,14 @@ impl InferenceEngine {
                                 eprintln!(
                                     "No CUDA attention kernel for this device (needs sm_100+); using CPU."
                                 );
-                                Box::new(crate::kernel::CpuAttentionKernel::new())
+                                Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                             }
                         }
                     } else {
-                        Box::new(crate::kernel::CpuAttentionKernel::new())
+                        Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                     }
                 } else {
-                    Box::new(crate::kernel::CpuAttentionKernel::new())
+                    Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu))
                 };
 
             Self {
@@ -278,7 +281,7 @@ impl InferenceEngine {
                 stream,
                 memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-                cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+                cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                 #[cfg(feature = "cuda")]
                 gpu_gemm,
             }
@@ -291,7 +294,12 @@ impl InferenceEngine {
         dtype: DType,
         gemm: Box<dyn crate::kernel::GemmKernel + Send + Sync>,
     ) -> Self {
-        let attention = Box::new(crate::kernel::CpuAttentionKernel::new());
+        #[cfg(feature = "cuda")]
+        use crate::kernel::attention::AttentionArch;
+        #[cfg(not(feature = "cuda"))]
+        use crate::kernel::attention_stub::AttentionArch;
+        
+        let attention = Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu));
 
         Self {
             device,
@@ -304,7 +312,7 @@ impl InferenceEngine {
             stream: None,
             memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-            cpu_attention: crate::kernel::CpuAttentionKernel::new(),
+            cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
             #[cfg(feature = "cuda")]
             gpu_gemm: false,
         }
