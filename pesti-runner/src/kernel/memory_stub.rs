@@ -4,10 +4,10 @@ use crate::kernel::device_buf::DeviceBuffer;
 
 /// Dummy MemoryBackend trait
 pub trait MemoryBackend {
-    fn alloc(&self, bytes: usize) -> Result<u64, MemoryError>;
-    fn free(&self, handle: u64) -> Result<(), MemoryError>;
-    fn h2d(&self, data: &[u8], handle: u64) -> Result<(), MemoryError>;
-    fn d2h(&self, handle: u64, dst: &mut [u8]) -> Result<(), MemoryError>;
+    fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError>;
+    fn free(&self, handle: RawHandle) -> Result<(), MemoryError>;
+    fn h2d(&self, data: &[u8], handle: RawHandle) -> Result<(), MemoryError>;
+    fn d2h(&self, handle: RawHandle, dst: &mut [u8]) -> Result<(), MemoryError>;
 }
 
 /// Dummy MemoryManager
@@ -21,23 +21,23 @@ impl MemoryManager {
         MemoryManager::Cpu(CpuMemoryBackend::new(capacity))
     }
 
-    pub fn alloc(&self, bytes: usize) -> Result<u64, MemoryError> {
+    pub fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
         match self {
             MemoryManager::Cpu(backend) => backend.alloc(bytes),
         }
     }
 
-    pub fn free(&self, handle: u64) -> Result<(), MemoryError> {
+    pub fn free(&self, handle: RawHandle) -> Result<(), MemoryError> {
         match self {
             MemoryManager::Cpu(backend) => backend.free(handle),
         }
     }
 
-    pub fn h2d(&self, _data: &[u8], _handle: u64) -> Result<(), MemoryError> {
+    pub fn h2d(&self, _data: &[u8], _handle: RawHandle) -> Result<(), MemoryError> {
         Ok(())
     }
 
-    pub fn d2h(&self, _handle: u64, _dst: &mut [u8]) -> Result<(), MemoryError> {
+    pub fn d2h(&self, _handle: RawHandle, _dst: &mut [u8]) -> Result<(), MemoryError> {
         Ok(())
     }
 
@@ -59,19 +59,19 @@ impl CpuMemoryBackend {
 }
 
 impl MemoryBackend for CpuMemoryBackend {
-    fn alloc(&self, _bytes: usize) -> Result<u64, MemoryError> {
-        Ok(0xDEAD) // Dummy handle
+    fn alloc(&self, _bytes: usize) -> Result<RawHandle, MemoryError> {
+        Ok(RawHandle(0xDEAD)) // Dummy handle
     }
 
-    fn free(&self, _handle: u64) -> Result<(), MemoryError> {
+    fn free(&self, _handle: RawHandle) -> Result<(), MemoryError> {
         Ok(())
     }
 
-    fn h2d(&self, _data: &[u8], _handle: u64) -> Result<(), MemoryError> {
+    fn h2d(&self, _data: &[u8], _handle: RawHandle) -> Result<(), MemoryError> {
         Ok(())
     }
 
-    fn d2h(&self, _handle: u64, _dst: &mut [u8]) -> Result<(), MemoryError> {
+    fn d2h(&self, _handle: RawHandle, _dst: &mut [u8]) -> Result<(), MemoryError> {
         Ok(())
     }
 }
@@ -82,8 +82,8 @@ pub enum MemoryError {
     #[error("allocation failed: requested {requested}, but only {available} available")]
     AllocationFailed { requested: usize, available: usize },
 
-    #[error("invalid handle: {0}")]
-    InvalidHandle(u64),
+    #[error("invalid handle: {0:?}")]
+    InvalidHandle(RawHandle),
 
     #[error("transfer error: {0}")]
     Transfer(String),
@@ -92,5 +92,16 @@ pub enum MemoryError {
     Cuda(String),
 }
 
-/// Raw memory handle (alias for u64 to match CUDA mode)
-pub type RawHandle = u64;
+/// Raw memory handle (newtype wrapper for consistency with CUDA mode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawHandle(pub u64);
+
+impl RawHandle {
+    pub fn new(handle: u64) -> Self {
+        Self(handle)
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0
+    }
+}

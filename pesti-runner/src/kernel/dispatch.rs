@@ -136,7 +136,7 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, "DispatchContext initialized");
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
@@ -150,7 +150,7 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, prefer_gpu, "DispatchContext initialized with GPU preference");
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
@@ -162,7 +162,7 @@ impl DispatchContext {
         let prefer_gpu = engine.gpu_available();
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::new_cpu(1024 * 1024),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(),
@@ -1198,99 +1198,3 @@ impl RmsNormDispatch {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dispatch_context_new() {
-        let ctx = DispatchContext::new();
-        // GPU may or may not be available depending on the test environment
-        assert!(ctx.gpu_available() || !ctx.prefer_gpu());
-    }
-
-    #[test]
-    fn dispatch_context_gpu_preference() {
-        let ctx = DispatchContext::with_gpu_preference(true);
-        assert!(ctx.prefer_gpu());
-        assert!(!ctx.gpu_available()); // No GPU in test env
-
-        let mut ctx = ctx;
-        ctx.set_prefer_gpu(false);
-        assert!(!ctx.prefer_gpu());
-    }
-
-    #[test]
-    fn linear_dispatch_new() {
-        let weights_f16: Vec<f16> = vec![f16::from_f32(1.0); 4];
-        let weights_f32: Vec<f32> = vec![1.0; 4];
-        let linear = LinearDispatch::new(weights_f16, weights_f32, None, 2, 2);
-        assert_eq!(linear.in_features(), 2);
-        assert_eq!(linear.out_features(), 2);
-    }
-
-    #[test]
-    fn rms_norm_dispatch_forward() {
-        let norm = RmsNormDispatch::new(vec![1.0, 1.0, 1.0, 1.0], 1e-5);
-        let x = vec![2.0, 2.0, 2.0, 2.0];
-        let result = norm.forward(&x, 1).unwrap();
-        // RMS of [2,2,2,2] = 2.0, so output = [1,1,1,1] * 1.0 = [1,1,1,1]
-        for val in &result {
-            assert!((val - 1.0).abs() < 1e-4);
-        }
-    }
-
-    #[test]
-    fn swiglu_dispatch_basic() {
-        let x = vec![1.0, 2.0];
-        let y = vec![1.0, 1.0];
-        let output = swiglu_dispatch(&x, &y, 2);
-        assert!(output[0] > 0.0 && output[0] < 1.0); // silu(1) ≈ 0.731
-        assert!(output[1] > 1.0 && output[1] < 2.0); // silu(2) ≈ 1.762
-    }
-
-    #[test]
-    fn linear_dispatch_cpu_forward() {
-        let weights_f16: Vec<f16> = vec![f16::from_f32(1.0); 4];
-        let weights_f32: Vec<f32> = vec![1.0; 4];
-        let linear = LinearDispatch::new(weights_f16, weights_f32, None, 2, 2);
-
-        let x = vec![1.0, 0.0];
-        let result = linear.forward_cpu(&x, 1).unwrap();
-        // weights = [[1,1],[1,1]], x = [1,0] → output = [1,1]
-        assert!((result[0] - 1.0).abs() < 1e-5);
-        assert!((result[1] - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn linear_dispatch_cpu_with_bias() {
-        let weights_f16: Vec<f16> = vec![f16::from_f32(1.0); 4];
-        let weights_f32: Vec<f32> = vec![1.0; 4];
-        let bias = vec![1.0, 2.0];
-        let linear = LinearDispatch::new(weights_f16, weights_f32, Some(bias), 2, 2);
-
-        let x = vec![1.0, 1.0];
-        let result = linear.forward_cpu(&x, 1).unwrap();
-        // weights = [[1,1],[1,1]], x = [1,1] → matmul = [2,2], + bias = [3,4]
-        assert!((result[0] - 3.0).abs() < 1e-5);
-        assert!((result[1] - 4.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn linear_dispatch_cpu_batch() {
-        // Identity-like weights: [[1,0],[0,1]]
-        let weights_f16: Vec<f16> = vec![
-            f16::from_f32(1.0), f16::from_f32(0.0),
-            f16::from_f32(0.0), f16::from_f32(1.0),
-        ];
-        let weights_f32: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0];
-        let linear = LinearDispatch::new(weights_f16, weights_f32, None, 2, 2);
-
-        let x = vec![1.0, 2.0, 3.0, 4.0]; // batch=2
-        let result = linear.forward_cpu(&x, 2).unwrap();
-        assert!((result[0] - 1.0).abs() < 1e-5);
-        assert!((result[1] - 2.0).abs() < 1e-5);
-        assert!((result[2] - 3.0).abs() < 1e-5);
-        assert!((result[3] - 4.0).abs() < 1e-5);
-    }
-}

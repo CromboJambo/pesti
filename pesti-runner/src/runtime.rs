@@ -349,6 +349,14 @@ impl Runtime {
             ));
         };
 
+        #[cfg(feature = "cuda")]
+        let sampling_config = crate::transformer::SamplingConfig {
+            temperature: 0.7,
+            top_k: 50,
+            top_p: 0.95,
+            seed: Some(42),
+        };
+        #[cfg(not(feature = "cuda"))]
         let sampling_config = crate::transformer_stub::SamplingConfig {
             temperature: 0.7,
             top_k: 50,

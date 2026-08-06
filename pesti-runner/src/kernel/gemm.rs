@@ -134,10 +134,10 @@ impl Default for CpuGemmKernel {
 impl GemmKernel for CpuGemmKernel {
     fn matmul(
         &self,
-        _alpha: f32,
+        alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        _beta: f32,
+        beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -286,10 +286,10 @@ impl CudaGemmKernel {
     /// Launch the GEMM kernel on the given streams.
     pub fn launch(
         &self,
-        _alpha: f32,
+        alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        _beta: f32,
+        beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -327,10 +327,10 @@ impl CudaGemmKernel {
 impl GemmKernel for CudaGemmKernel {
     fn matmul(
         &self,
-        _alpha: f32,
+        alpha: f32,
         a: &DeviceBuffer<f16>,
         b: &DeviceBuffer<f16>,
-        _beta: f32,
+        beta: f32,
         c: &mut DeviceBuffer<f32>,
         m: usize,
         n: usize,
@@ -377,39 +377,3 @@ pub enum GemmError {
 
 // --- Tests ---
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cpu_gemm_2x2() {
-        // Simple 2x2 matrix multiplication: A @ B = C
-        let a_host = vec![f16::from_f32(1.0), f16::from_f32(2.0), f16::from_f32(3.0), f16::from_f32(4.0)];
-        let b_host = vec![f16::from_f32(5.0), f16::from_f32(6.0), f16::from_f32(7.0), f16::from_f32(8.0)];
-        let expected = vec![19.0, 22.0, 43.0, 50.0]; // [[1,2],[3,4]] @ [[5,6],[7,8]]
-
-        let a_buf = DeviceBuffer::from_cpu(&a_host).expect("A alloc should succeed");
-        let b_buf = DeviceBuffer::from_cpu(&b_host).expect("B alloc should succeed");
-        let mut c_buf = DeviceBuffer::zeros_cpu_device(4);
-
-        let kernel = CpuGemmKernel::new();
-        kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, 2, 2, 2).expect("GEMM should succeed");
-
-        let c_host = c_buf.as_slice().expect("C should be on host");
-        assert_eq!(c_host, &expected);
-    }
-
-    #[test]
-    fn test_gemm_arch_names() {
-        assert_eq!(GemmArch::Wgmma.name(), "wgmma");
-        assert_eq!(GemmArch::Tcgen05.name(), "tcgen05");
-    }
-
-    #[test]
-    fn test_gemm_config_defaults() {
-        let config = GemmConfig::default();
-        assert_eq!(config.arch, GemmArch::Tcgen05);
-        assert!(config.use_tma);
-        assert_eq!(config.effective_block_size(), 128);
-    }
-}

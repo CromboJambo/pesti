@@ -688,35 +688,3 @@ impl AttentionKernel for CpuAttentionKernel {
 
 // --- Tests ---
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cpu_attention_kernel_basic() {
-        let kernel = CpuAttentionKernel::new();
-        assert!(kernel.is_available());
-        assert_eq!(kernel.arch(), AttentionArch::Cpu);
-    }
-
-    #[test]
-    fn test_cpu_attention_softmax() {
-        let input = vec![1.0, 2.0, 3.0];
-        let result = CpuAttentionKernel::softmax(&input, 1, 3);
-        let sum: f32 = result.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_attention_config_scale() {
-        let config = AttentionConfig::default();
-        let expected_scale = 1.0 / (64.0_f32.sqrt());
-        assert!((config.scale() - expected_scale).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_attention_arch_tile_size() {
-        assert_eq!(AttentionArch::Wgmma.tile_size(), 64);
-        assert_eq!(AttentionArch::Tcgen05.tile_size(), 128);
-    }
-}

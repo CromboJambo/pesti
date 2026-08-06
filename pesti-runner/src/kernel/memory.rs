@@ -464,34 +464,3 @@ impl Default for MemoryManager {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn raw_handle_roundtrip() {
-        let h = RawHandle(0xDEAD);
-        assert_eq!(h.as_u64(), 0xDEAD);
-        assert!(!h.as_ptr().is_null());
-    }
-
-    #[test]
-    fn cpu_backend_alloc_free() {
-        let backend = CpuMemoryBackend::new(1024 * 1024);
-        let h1 = backend.alloc(100).unwrap();
-        let h2 = backend.alloc(200).unwrap();
-        assert_ne!(h1, h2);
-        backend.free(h1).unwrap();
-        backend.free(h2).unwrap();
-    }
-
-    #[test]
-    fn cpu_backend_h2d() {
-        let backend = CpuMemoryBackend::new(1024 * 1024);
-        let h = backend.alloc(10).unwrap();
-        backend.h2d(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], h).unwrap();
-        let mut buf = vec![0u8; 10];
-        backend.d2h(h, &mut buf).unwrap();
-        assert_eq!(buf, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    }
-}

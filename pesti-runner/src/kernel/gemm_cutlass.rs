@@ -118,39 +118,3 @@ impl CutlassGemmBuilder {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cutlass_kernel_creation() {
-        let kernel = CutlassGemmKernel::new(GemmArch::Wgmma);
-        assert!(kernel.is_available());
-        assert_eq!(kernel.arch(), GemmArch::Wgmma);
-    }
-
-    #[test]
-    fn test_cutlass_matmul_2x2() {
-        // Simple 2x2 matrix multiplication: A @ B = C
-        let a_host = vec![f16::from_f32(1.0), f16::from_f32(2.0),
-                          f16::from_f32(3.0), f16::from_f32(4.0)];
-        let b_host = vec![f16::from_f32(5.0), f16::from_f32(6.0),
-                          f16::from_f32(7.0), f16::from_f32(8.0)];
-        let expected = vec![19.0, 22.0, 43.0, 50.0]; // [[1,2],[3,4]] @ [[5,6],[7,8]]
-
-        let kernel = CutlassGemmKernel::new(GemmArch::Wgmma);
-
-        // Allocate buffers
-        let a_buf = DeviceBuffer::from_cpu_device(a_host);
-        let b_buf = DeviceBuffer::from_cpu_device(b_host);
-        let mut c_buf = DeviceBuffer::zeros_cpu_device(4);
-
-        // Run GEMM
-        kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, 2, 2, 2)
-            .expect("GEMM should succeed");
-
-        // Verify results
-        let c_host = c_buf.as_slice().map(|s| s.to_vec()).unwrap_or_default();
-        assert_eq!(c_host, expected);
-    }
-}

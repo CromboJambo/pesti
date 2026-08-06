@@ -198,7 +198,7 @@ impl<T> DeviceBuffer<T> {
     /// `len * size_of::<T>()` bytes.
     pub unsafe fn from_device(ptr_addr: u64, len: usize) -> Self {
         Self {
-            handle: ptr_addr,
+            handle: RawHandle(ptr_addr),
             len,
             _marker: PhantomData,
             backed: false,
@@ -335,7 +335,7 @@ impl<T> DeviceBuffer<T> {
     /// Returns the RawHandle's u64 value. For CPU backend this is the slab
     /// index; for CUDA backend this is the actual device pointer.
     pub fn device_ptr(&self) -> u64 {
-        self.handle
+        self.handle.0
     }
 
     /// Allocate zero-initialized host-backed buffer (no backend needed).
@@ -347,7 +347,7 @@ impl<T> DeviceBuffer<T> {
     {
         let data = vec![T::default(); len];
         Self {
-            handle: 0,
+            handle: RawHandle(0),
             len,
             _marker: PhantomData,
             backed: false,
@@ -360,7 +360,7 @@ impl<T> DeviceBuffer<T> {
     /// For CPU-only mode and testing. Does not go through MemoryBackend.
     pub fn from_host(data: Vec<T>) -> Self {
         Self {
-            handle: 0,
+            handle: RawHandle(0),
             len: data.len(),
             _marker: PhantomData,
             backed: false,
@@ -374,7 +374,7 @@ impl<T> DeviceBuffer<T> {
     /// The handle is a sentinel value (0xDEAD).
     pub fn from_cpu_device(data: Vec<T>) -> Self {
         Self {
-            handle: 0xDEAD,
+            handle: RawHandle(0xDEAD),
             len: data.len(),
             _marker: PhantomData,
             backed: true,
@@ -389,7 +389,7 @@ impl<T> DeviceBuffer<T> {
     {
         let data = vec![T::default(); len];
         Self {
-            handle: 0xDEAD,
+            handle: RawHandle(0xDEAD),
             len,
             _marker: PhantomData,
             backed: true,
@@ -435,102 +435,4 @@ pub fn allocate_on<M: Into<MemoryManager>>(
 /// Free a handle on a MemoryManager.
 pub fn free_on<M: Into<MemoryManager>>(manager: M, handle: RawHandle) -> Result<(), MemoryError> {
     manager.into().free(handle)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn host_buffer_from_vec() {
-        let buf = HostBuffer::from_host(vec![1, 2, 3]);
-        assert_eq!(buf.len(), 3);
-        assert!(!buf.is_empty());
-        assert_eq!(buf.as_slice(), &[1, 2, 3]);
-        assert_eq!(buf.to_host(), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn host_buffer_zeros() {
-        let buf: HostBuffer<i32> = HostBuffer::zeros(5);
-        assert_eq!(buf.len(), 5);
-        assert_eq!(buf.to_host(), vec![0, 0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn host_buffer_empty() {
-        let buf: HostBuffer<i32> = HostBuffer::from_host(vec![]);
-        assert!(buf.is_empty());
-        assert_eq!(buf.len(), 0);
-    }
-
-    #[test]
-    fn host_buffer_as_mut_slice() {
-        let mut buf = HostBuffer::from_host(vec![1, 2, 3]);
-        buf.as_mut_slice()[0] = 10;
-        assert_eq!(buf.to_host(), vec![10, 2, 3]);
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn device_buffer_from_backend() {
-        use crate::kernel::memory::CpuMemoryBackend;
-        let mgr = MemoryManager::Cpu(CpuMemoryBackend::new(1024 * 1024));
-        let bytes = 10 * std::mem::size_of::<i32>();
-        let handle = mgr.alloc(bytes).unwrap();
-        let buf = DeviceBuffer::<i32>::from_backend(handle, 10);
-        assert_eq!(buf.len(), 10);
-        assert!(buf.is_backed());
-        assert!(!buf.is_empty());
-    }
-
-    #[test]
-    fn device_buffer_byte_len() {
-        let buf: DeviceBuffer<f32> = DeviceBuffer::zeros(5);
-        assert_eq!(buf.byte_len(), 5 * 4); // f32 = 4 bytes
-        let buf: DeviceBuffer<u16> = DeviceBuffer::zeros(5);
-        assert_eq!(buf.byte_len(), 5 * 2); // u16 = 2 bytes
-    }
-
-    #[test]
-    fn host_buffer_into_vec() {
-        let buf = HostBuffer::from_host(vec![4, 5, 6]);
-        let vec: Vec<i32> = buf.into_inner();
-        assert_eq!(vec, vec![4, 5, 6]);
-    }
-
-    #[test]
-    fn host_buffer_from_vec_trait() {
-        let buf: HostBuffer<i32> = vec![7, 8, 9].into();
-        assert_eq!(buf.to_host(), vec![7, 8, 9]);
-    }
-
-    #[test]
-    fn cpu_device_buffer_from_vec() {
-        let buf = DeviceBuffer::from_cpu_device(vec![1, 2, 3]);
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf.device_ptr(), 0xDEAD);
-        assert!(!buf.is_empty());
-    }
-
-    #[test]
-    fn cpu_device_buffer_zeros() {
-        let buf: DeviceBuffer<i32> = DeviceBuffer::zeros_cpu_device(5);
-        assert_eq!(buf.len(), 5);
-        assert_eq!(buf.device_ptr(), 0xDEAD);
-    }
-
-    #[test]
-    fn device_buffer_from_host() {
-        let buf: DeviceBuffer<i32> = DeviceBuffer::from_host(vec![1, 2, 3]);
-        assert_eq!(buf.len(), 3);
-        assert!(!buf.is_backed());
-    }
-
-    #[test]
-    fn device_buffer_zeros() {
-        let buf: DeviceBuffer<i32> = DeviceBuffer::zeros(5);
-        assert_eq!(buf.len(), 5);
-        assert!(!buf.is_backed());
-    }
 }

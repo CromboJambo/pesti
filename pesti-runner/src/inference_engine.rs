@@ -12,10 +12,14 @@ use tracing::warn;
 // Import GEMM trait to ensure CpuGemmKernel methods are in scope
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::gemm_stub::GemmKernel;
+#[cfg(feature = "cuda")]
+use crate::kernel::gemm::GemmKernel;
 
 // Import AttentionKernel trait and its Error type to ensure CpuAttentionKernel methods are in scope
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::{attention_stub, AttentionKernel};
+#[cfg(feature = "cuda")]
+use crate::kernel::attention::AttentionKernel;
 
 /// Inference engine for tensor computation.
 pub struct InferenceEngine {
