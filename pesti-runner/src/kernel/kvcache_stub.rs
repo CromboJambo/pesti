@@ -59,6 +59,11 @@ impl Kvcache {
         0 // Stub - actual sequence length tracking not implemented
     }
 
+    /// Whether this cache is on device memory.
+    pub fn is_device(&self) -> bool {
+        false // Always false for stub
+    }
+
     pub fn write_kv_at(
         &mut self,
         _pos: usize,

@@ -287,7 +287,7 @@ impl MistralRsBackend {
                 None
             }
             Self::Cpu => {
-                Some(Box::new(crate::kernel::CpuAttentionKernel::new()))
+                Some(Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)))
             }
         }
     }

@@ -47,6 +47,32 @@ impl Kvcache {
     /// `on_device` — whether to allocate on device (Device variant) or host (Host variant).
     ///
     /// Total elements: `num_heads * head_dim * 2 * max_seq`.
+    #[cfg(feature = "cuda")]
+    pub fn new_with_backend(
+        backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        max_seq: usize,
+        on_device: bool,
+    ) -> Self {
+        let total = num_heads * head_dim * 2 * max_seq;
+        let buffer = if on_device {
+            DeviceBuffer::zeros_device(&*backend, total).unwrap()
+        } else {
+            DeviceBuffer::zeros(total)
+        };
+        Self {
+            buffer,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            seq_len: 0,
+            is_device: on_device,
+        }
+    }
+
     pub fn new(num_heads: usize, num_kv_heads: usize, head_dim: usize, max_seq: usize, on_device: bool) -> Self {
         let total = num_heads * head_dim * 2 * max_seq;
         Self {

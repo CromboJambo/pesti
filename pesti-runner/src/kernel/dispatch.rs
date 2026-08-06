@@ -139,7 +139,7 @@ impl DispatchContext {
             memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-            cpu_attention: CpuAttentionKernel::new(),
+            cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
         }
     }
 
@@ -153,7 +153,7 @@ impl DispatchContext {
             memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-            cpu_attention: CpuAttentionKernel::new(),
+            cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
         }
     }
 
@@ -165,7 +165,7 @@ impl DispatchContext {
             memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
-            cpu_attention: CpuAttentionKernel::new(),
+            cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
         }
     }
 
@@ -470,6 +470,7 @@ impl DispatchContext {
             block_size: 0,
             rope_base: 10000.0,
             max_pos: 32768,
+            scale: 1.0 / (head_dim as f32).sqrt(),
         };
 
         // Convert query to device buffer
