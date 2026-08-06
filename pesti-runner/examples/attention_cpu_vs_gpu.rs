@@ -78,10 +78,11 @@ fn run_benchmark(
     }
     let cpu_time = cpu_start.elapsed() / cpu_loops;
     let cpu_output_f32: Vec<f32> = cpu_output.to_host();
-    let cpu_tok_s = (query_len * num_heads * head_dim) as f32 / cpu_time.as_secs_f64() as f32;
+    // tok/s = query positions processed per second
+    let cpu_tok_s = query_len as f32 / cpu_time.as_secs_f32();
 
     println!(
-        "  CPU:  {:.2}ms/iter ({} iters), {:.1} elem/s",
+        "  CPU:  {:.2}ms/iter ({} iters), {:.1} tok/s",
         cpu_time.as_secs_f64() * 1000.0,
         cpu_loops,
         cpu_tok_s
@@ -163,10 +164,11 @@ fn run_benchmark(
         let _ = attn_kernel.forward(&q_gpu_buf, &kvc_device, &kvc_device, None, &gpu_config)?;
     }
     let gpu_time = gpu_start.elapsed() / gpu_loops;
-    let gpu_tok_s = (query_len * num_heads * head_dim) as f32 / gpu_time.as_secs_f64() as f32;
+    // tok/s = query positions processed per second
+    let gpu_tok_s = query_len as f32 / gpu_time.as_secs_f32();
 
     println!(
-        "  GPU:  {:.2}ms/iter ({} iters), {:.1} elem/s",
+        "  GPU:  {:.2}ms/iter ({} iters), {:.1} tok/s",
         gpu_time.as_secs_f64() * 1000.0,
         gpu_loops,
         gpu_tok_s
