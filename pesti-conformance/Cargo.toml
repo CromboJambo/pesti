@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 pesti-runner = { path = "../pesti-runner" }
-pesti-gguf = { path = "../pesti-gguf" }
+pesti-gguf = { path = "../pesti-gguf", version = "0.1.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 clap = { version = "4.4", features = ["derive"] }
 tempfile = "3.9"

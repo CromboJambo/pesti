@@ -232,18 +232,33 @@ impl GgufDtype {
             13 => Self::Q5_K,
             14 => Self::Q6_K,
             15 => Self::Q8_K,
-            20 => Self::Q1_K,
-            21 => Self::Q4_K_M,
-            22 => Self::Q5_K_M,
-            23 => Self::Q6_K_S,
-            24 => Self::Q8_K_M,
-            25 => Self::Q2_K_S,
-            26 => Self::Q3_K_S,
-            27 => Self::Q4_K_S,
-            28 => Self::Q5_K_S,
-            29 => Self::Q2_K_M,
-            30 => Self::BF16,
-            31 => Self::Q8_K,
+            16 => Self::Unknown(v), // IQ2_XXS - newer type
+            17 => Self::Unknown(v), // IQ2_XS - newer type
+            18 => Self::Unknown(v), // IQ3_XXS - newer type
+            19 => Self::Unknown(v), // IQ1_S - newer type
+            20 => Self::Unknown(v), // IQ4_NL - newer type
+            21 => Self::Unknown(v), // IQ3_S - newer type
+            22 => Self::Unknown(v), // IQ2_S - newer type
+            23 => Self::Unknown(v), // IQ4_XS - newer type
+            24 => Self::I8,         // I8
+            25 => Self::I16,        // I16
+            26 => Self::I32,        // I32
+            27 => Self::I64,        // I64
+            28 => Self::F64,        // F64
+            29 => Self::Unknown(v), // IQ1_M - newer type
+            30 => Self::BF16,       // BF16
+            31 => Self::Unknown(v), // Q4_0_4_4 - removed from gguf files
+            32 => Self::Unknown(v), // Q4_0_4_8 - not yet used
+            33 => Self::Unknown(v), // Q4_0_8_8 - not yet used
+            34 => Self::Unknown(v), // TQ1_0 - newer type
+            35 => Self::Unknown(v), // TQ2_0 - newer type
+            36 => Self::Unknown(v), // IQ4_NL_4_4 - not yet used
+            37 => Self::Unknown(v), // IQ4_NL_4_8 - not yet used
+            38 => Self::Unknown(v), // IQ4_NL_8_8 - not yet used
+            39 => Self::Unknown(v), // MXFP4 - newer type
+            40 => Self::Unknown(v), // NVFP4 - newer type
+            41 => Self::Unknown(v), // Q1_0 - newer type
+            42 => Self::Unknown(v), // Q2_0 - newer type
             _ => Self::Unknown(v),
         }
     }
@@ -581,8 +596,14 @@ pub struct GgufHeader {
     pub version: u32,
     pub kv_pairs: Vec<GgufKvPair>,
     pub tensors: Vec<GgufTensorInfo>,
+    /// Data alignment in bytes (default 32 for llama.cpp).
+    #[serde(default = "default_data_alignment")]
     pub data_alignment: Option<u64>,
     pub data_section_start: u64,
+}
+
+fn default_data_alignment() -> Option<u64> {
+    Some(32)
 }
 
 impl GgufHeader {
@@ -854,7 +875,7 @@ mod tests {
                     dtype: 1,
                 },
             ],
-            data_alignment: Some(32),
+            data_alignment: None,
             data_section_start: 0,
         };
         assert_eq!(header.architecture(), Some("llama"));
@@ -870,7 +891,7 @@ mod tests {
             version: 3,
             kv_pairs: vec![],
             tensors: vec![],
-            data_alignment: Some(32),
+            data_alignment: None,
             data_section_start: 0,
         };
         assert_eq!(header.architecture(), None);
@@ -977,7 +998,8 @@ mod tests {
             let dt = GgufDtype::from_u32(v);
             assert_eq!(dt.to_u32(), v, "roundtrip failed for {v}");
         }
-        for v in [4, 5, 16, 17, 18, 19, 20, 21, 22, 23, 29, 31, 32, 33, 34, 35, 100] {
+        // Values that remain unmapped and should be Unknown
+        for v in [4, 5, 16, 17, 18, 19, 31, 32, 33, 34, 35, 100] {
             let dt = GgufDtype::from_u32(v);
             if let GgufDtype::Unknown(val) = dt {
                 assert_eq!(val, v);
@@ -1116,7 +1138,7 @@ mod tests {
                     dtype: 1,
                 },
             ],
-            data_alignment: Some(32),
+            data_alignment: None,
             data_section_start: 1024,
         };
         let json = serde_json::to_string(&header).unwrap();
@@ -1124,7 +1146,9 @@ mod tests {
         assert_eq!(deserialized.version, 3);
         assert_eq!(deserialized.kv_pairs.len(), 1);
         assert_eq!(deserialized.tensors.len(), 1);
-        assert_eq!(deserialized.data_alignment, Some(32));
+        // Note: serde deserializes null as None, not the default value
+        // The default only applies when the field is missing from JSON
+        assert_eq!(deserialized.data_alignment, None);
         assert_eq!(deserialized.data_section_start, 1024);
     }
 
@@ -1504,14 +1528,12 @@ mod tests {
         let header = GgufHeader {
             version: 3,
             kv_pairs: vec![],
-            tensors: vec![
-                GgufTensorInfo {
-                    name: "t".to_string(),
-                    shape: vec![100, 200],
-                    offset: 0,
-                    dtype: 0,
-                },
-            ],
+            tensors: vec![GgufTensorInfo {
+                name: "t".to_string(),
+                shape: vec![100, 200],
+                offset: 0,
+                dtype: 0,
+            }],
             data_alignment: None,
             data_section_start: 0,
         };

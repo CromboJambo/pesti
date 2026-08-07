@@ -10,21 +10,35 @@ const GGUF_VERSION_1: u32 = 1;
 const GGUF_VERSION_2: u32 = 2;
 const GGUF_VERSION_3: u32 = 3;
 
+// Constants from llama.cpp reference implementation
+const GGUF_DEFAULT_ALIGNMENT: u32 = 32;
+const GGUF_MAX_KEY_LENGTH: u64 = 1024 * 1024 * 1024; // 1GB
+const GGUF_MAX_STRING_LENGTH: u64 = 1024 * 1024 * 1024; // 1GB
+const GGUF_MAX_TENSOR_NAME_LENGTH: u64 = 1024 * 1024 * 1024; // 1GB
+
 pub fn parse_gguf(path: &Path) -> Result<GgufHeader, GgufError> {
+    use std::io::BufReader;
+    
     let file = std::fs::File::open(path)
         .map_err(|e| GgufError::Io(format!("open {}: {}", path.display(), e)))?;
-    let reader = &mut (file as std::fs::File);
-    parse_gguf_reader(reader)
+    let mut reader = BufReader::new(file);
+    parse_gguf_reader(&mut reader)
 }
 
 pub fn parse_gguf_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, GgufError> {
-    let magic = read_bytes(reader, 4)?;
-    if magic.as_slice() != GGUF_MAGIC {
+    // Check magic number - GGUF files are always little-endian
+    let mut magic_bytes = [0u8; 4];
+    reader.read_exact(&mut magic_bytes)?;
+    
+    if &magic_bytes != GGUF_MAGIC {
         return Err(GgufError::InvalidMagic(
-            String::from_utf8_lossy(&magic).to_string(),
+            String::from_utf8_lossy(&magic_bytes).to_string(),
         ));
     }
 
+    // All GGUF files are little-endian (no byte-order detection needed)
+    // This is a design decision for simplicity and compatibility
+    
     let version = reader.read_u32::<LittleEndian>()?;
 
     match version {
@@ -36,21 +50,22 @@ pub fn parse_gguf_reader<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, G
 }
 
 fn parse_v1<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, GgufError> {
-    let kv_count = reader.read_u64::<LittleEndian>()?;
+    let _tensor_count = reader.read_u32::<LittleEndian>()? as u64; // v1 uses u32 for counts (unused in v1)
+    let kv_count = reader.read_u32::<LittleEndian>()? as u64; // v1 uses u32 for counts
 
     let mut kv_pairs = Vec::with_capacity(kv_count as usize);
     for _ in 0..kv_count {
-        kv_pairs.push(read_kv_pair(reader)?);
+        kv_pairs.push(read_kv_pair_v1(reader)?); // v1 uses u32 key lengths
     }
 
-    let alignment = read_alignment_from_kv(&kv_pairs);
-    let data_section_start = compute_data_section_start(1, &kv_pairs, &[], alignment);
+    let alignment = read_alignment_from_kv(&kv_pairs)?;
+    let data_section_start = compute_data_section_start(1, &kv_pairs, &[], Some(alignment));
 
     Ok(GgufHeader {
         version: 1,
         kv_pairs,
         tensors: vec![],
-        data_alignment: alignment,
+        data_alignment: Some(alignment),
         data_section_start,
     })
 }
@@ -66,17 +81,18 @@ fn parse_v2<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, GgufError> {
 
     let mut tensors = Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
+        // v2 uses u32 tensor name lengths (same as v1)
         tensors.push(read_tensor_info_v2(reader)?);
     }
 
-    let alignment = read_alignment_from_kv(&kv_pairs);
-    let data_section_start = compute_data_section_start(2, &kv_pairs, &tensors, alignment);
+    let alignment = read_alignment_from_kv(&kv_pairs)?;
+    let data_section_start = compute_data_section_start(2, &kv_pairs, &tensors, Some(alignment));
 
     Ok(GgufHeader {
         version: 2,
         kv_pairs,
         tensors,
-        data_alignment: alignment,
+        data_alignment: Some(alignment),
         data_section_start,
     })
 }
@@ -96,21 +112,20 @@ fn parse_v3<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, GgufError> {
     for _ in 0..kv_count {
         kv_pairs.push(read_kv_pair_v3(reader)?);
     }
-    eprintln!("DEBUG: parse_v3: read {} KV pairs", kv_pairs.len());
 
+    let alignment = read_alignment_from_kv(&kv_pairs)?;
     let mut tensors = Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
         tensors.push(read_tensor_info_v3(reader)?);
     }
 
-    let alignment = read_alignment_from_kv(&kv_pairs);
-    let data_section_start = compute_data_section_start(3, &kv_pairs, &tensors, alignment);
+    let data_section_start = compute_data_section_start(3, &kv_pairs, &tensors, Some(alignment));
 
     Ok(GgufHeader {
         version: 3,
         kv_pairs,
         tensors,
-        data_alignment: alignment,
+        data_alignment: Some(alignment),
         data_section_start,
     })
 }
@@ -119,11 +134,8 @@ fn parse_v3<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, GgufError> {
 fn read_kv_pair<R: Read + Seek>(reader: &mut R) -> Result<GgufKvPair, GgufError> {
     // Key is length-prefixed with u32 LE
     let key_len = reader.read_u32::<LittleEndian>()? as usize;
-    if key_len == 0 || key_len > 1024 * 1024 {
-        return Err(GgufError::Io(format!(
-            "key length {} out of range",
-            key_len
-        )));
+    if key_len == 0 || key_len > GGUF_MAX_KEY_LENGTH as usize {
+        return Err(GgufError::KeyLengthOutOfRange(key_len as u64));
     }
 
     let key_bytes = read_bytes(reader, key_len)?;
@@ -155,11 +167,8 @@ fn read_kv_pair_v3<R: Read + Seek>(reader: &mut R) -> Result<GgufKvPair, GgufErr
     // 1. Read key length (u64 LE)
     let key_len = reader.read_u64::<LittleEndian>()? as usize;
 
-    if key_len == 0 || key_len > 1024 * 1024 {
-        return Err(GgufError::Io(format!(
-            "key length {} out of range",
-            key_len
-        )));
+    if key_len == 0 || key_len > GGUF_MAX_KEY_LENGTH as usize {
+        return Err(GgufError::KeyLengthOutOfRange(key_len as u64));
     }
 
     // 2. Read key name (raw bytes)
@@ -177,6 +186,32 @@ fn read_kv_pair_v3<R: Read + Seek>(reader: &mut R) -> Result<GgufKvPair, GgufErr
 
     // 4. Read value based on type
     let value = read_kv_value_v3(reader, value_type)?;
+
+    Ok(GgufKvPair {
+        key,
+        value_type,
+        value,
+    })
+}
+
+/// Read KV pair for v1 format - keys and strings use u32 lengths
+fn read_kv_pair_v1<R: Read + Seek>(reader: &mut R) -> Result<GgufKvPair, GgufError> {
+    // Key is length-prefixed with u32 LE (v1 uses u32, not u64)
+    let key_len = reader.read_u32::<LittleEndian>()? as usize;
+    if key_len == 0 || key_len > GGUF_MAX_KEY_LENGTH as usize {
+        return Err(GgufError::KeyLengthOutOfRange(key_len as u64));
+    }
+
+    let key_bytes = read_bytes(reader, key_len)?;
+    let key = String::from_utf8(key_bytes).map_err(GgufError::Utf8)?;
+
+    // Value type: u32 LE
+    let value_type_raw = reader.read_u32::<LittleEndian>()?;
+    let value_type = GgufValueType::from_u32(value_type_raw)
+        .ok_or(GgufError::InvalidValueType(value_type_raw))?;
+
+    // Read value based on type (v1 uses u32 string lengths)
+    let value = read_kv_value_v1(reader, value_type)?;
 
     Ok(GgufKvPair {
         key,
@@ -385,16 +420,13 @@ where
     // - Offset: u64 LE
 
     // 1. Read tensor name length (u64 LE)
-    let name_len = reader.read_u64::<LittleEndian>()? as usize;
-    if name_len == 0 || name_len > 1024 * 1024 {
-        return Err(GgufError::Io(format!(
-            "tensor name length {} out of range",
-            name_len
-        )));
+    let name_len = reader.read_u64::<LittleEndian>()?;
+    if name_len == 0 || name_len > GGUF_MAX_TENSOR_NAME_LENGTH {
+        return Err(GgufError::TensorNameLengthOutOfRange(name_len));
     }
 
     // 2. Read tensor name
-    let name_bytes = read_bytes(reader, name_len)?;
+    let name_bytes = read_bytes(reader, name_len as usize)?;
     let name = String::from_utf8(name_bytes).map_err(GgufError::Utf8)?;
 
     // 3. Read number of dimensions (u32 LE)
@@ -420,10 +452,7 @@ fn read_tensor_info_v2<R: Read + Seek>(reader: &mut R) -> Result<GgufTensorInfo,
     // Tensor name: u32 length + raw bytes
     let name_len = reader.read_u32::<LittleEndian>()? as usize;
     if name_len == 0 || name_len > 1024 * 1024 {
-        return Err(GgufError::Io(format!(
-            "tensor name length {} out of range",
-            name_len
-        )));
+        return Err(GgufError::TensorNameLengthOutOfRange(name_len as u64));
     }
 
     let name_bytes = read_bytes(reader, name_len)?;
@@ -450,19 +479,43 @@ fn read_tensor_info_v2<R: Read + Seek>(reader: &mut R) -> Result<GgufTensorInfo,
     })
 }
 
-fn read_alignment_from_kv(kv_pairs: &[GgufKvPair]) -> Option<u64> {
-    kv_pairs
+fn read_alignment_from_kv(kv_pairs: &[GgufKvPair]) -> Result<u64, GgufError> {
+    let alignment = kv_pairs
         .iter()
         .find(|p| p.key == "general.alignment")
         .and_then(|p| p.value.as_u64())
+        .unwrap_or(GGUF_DEFAULT_ALIGNMENT as u64);
+
+    // Validate alignment is a non-zero power of two (per llama.cpp spec)
+    if alignment == 0 {
+        return Err(GgufError::AlignmentOutOfRange(0));
+    }
+    
+    // Check power of two: (n & (n-1)) == 0 for powers of two
+    if (alignment & (alignment - 1)) != 0 {
+        return Err(GgufError::AlignmentOutOfRange(alignment as u32));
+    }
+
+    Ok(alignment)
 }
 
+/// Read bytes from reader with better error handling
 fn read_bytes<R>(reader: &mut R, len: usize) -> Result<Vec<u8>, GgufError>
 where
     R: Read,
 {
     let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf)?;
+    reader.read_exact(&mut buf).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            // Provide more context about what we were trying to read
+            GgufError::UnexpectedEof {
+                expected: len,
+                actual: 0, // We didn't read any bytes
+            }
+        } else {
+            GgufError::Binary(e)
+        }
+    })?;
     Ok(buf)
 }
 
@@ -563,8 +616,9 @@ mod tests_real_file {
     use super::*;
     use crate::tests::conformance_corpus_path;
 
+    // Note: This test now runs by default since the conformance corpus exists
+    // at conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf (downloaded manually)
     #[test]
-    #[ignore = "Requires conformance corpus files"]
     fn test_parse_conformance_corpus_qwen2_5() {
         let path = conformance_corpus_path("qwen2.5-0.5b-instruct-q4_k_m.gguf");
 
@@ -602,5 +656,96 @@ mod tests_real_file {
         eprintln!("Tensor count: {}", header.tensors.len());
 
         eprintln!("SUCCESS: Real GGUF file parsed correctly!");
+    }
+}
+/// Read KV value for v1 format (strings use u32 lengths, array counts use u32)
+fn read_kv_value_v1<R: Read + Seek>(
+    reader: &mut R,
+    value_type: GgufValueType,
+) -> Result<GgufKvValue, GgufError> {
+    match value_type {
+        GgufValueType::String => {
+            // v1 uses u32 string lengths
+            let str_len = reader.read_u32::<LittleEndian>()? as usize;
+            let bytes = read_bytes(reader, str_len)?;
+            Ok(GgufKvValue::String(
+                String::from_utf8(bytes).map_err(GgufError::Utf8)?,
+            ))
+        }
+        GgufValueType::Array => {
+            // v1 uses u32 for array element count
+            let elem_count = reader.read_u32::<LittleEndian>()? as usize;
+            let mut elements = Vec::with_capacity(elem_count);
+            
+            // Read element type (same for all versions)
+            let elem_type_raw = reader.read_u32::<LittleEndian>()?;
+            let elem_type = GgufValueType::from_u32(elem_type_raw)
+                .ok_or(GgufError::InvalidValueType(elem_type_raw))?;
+
+            for _ in 0..elem_count {
+                match elem_type {
+                    GgufValueType::String => {
+                        // String elements in v1 use u32 lengths
+                        let str_len = reader.read_u32::<LittleEndian>()? as usize;
+                        let bytes = read_bytes(reader, str_len)?;
+                        elements.push(GgufKvValue::String(
+                            String::from_utf8(bytes).map_err(GgufError::Utf8)?,
+                        ));
+                    }
+                    GgufValueType::Uint32 => {
+                        let val = reader.read_u32::<LittleEndian>()?;
+                        elements.push(GgufKvValue::Uint32(val));
+                    }
+                    _ => {
+                        // Fallback: read as uint32 for other types
+                        let val = reader.read_u32::<LittleEndian>()?;
+                        elements.push(GgufKvValue::Uint32(val));
+                    }
+                }
+            }
+            Ok(GgufKvValue::Array(elements))
+        }
+        // For scalar types, v1 and v2+ are the same
+        GgufValueType::Int8 => {
+            let val = reader.read_i8()?;
+            Ok(GgufKvValue::Int8(val))
+        }
+        GgufValueType::Uint16 => {
+            let val = reader.read_u16::<LittleEndian>()?;
+            Ok(GgufKvValue::Uint16(val))
+        }
+        GgufValueType::Int16 => {
+            let val = reader.read_i16::<LittleEndian>()?;
+            Ok(GgufKvValue::Int16(val))
+        }
+        GgufValueType::Uint32 => {
+            let val = reader.read_u32::<LittleEndian>()?;
+            Ok(GgufKvValue::Uint32(val))
+        }
+        GgufValueType::Int32 => {
+            let val = reader.read_i32::<LittleEndian>()?;
+            Ok(GgufKvValue::Int32(val))
+        }
+        GgufValueType::Uint64 => {
+            let val = reader.read_u64::<LittleEndian>()?;
+            Ok(GgufKvValue::Uint64(val))
+        }
+        GgufValueType::Int64 => {
+            let val = reader.read_i64::<LittleEndian>()?;
+            Ok(GgufKvValue::Int64(val))
+        }
+        GgufValueType::Float32 => {
+            let val = reader.read_f32::<LittleEndian>()?;
+            Ok(GgufKvValue::Float32(val))
+        }
+        GgufValueType::Float64 => {
+            let val = reader.read_f64::<LittleEndian>()?;
+            Ok(GgufKvValue::Float64(val))
+        }
+        GgufValueType::Bool => {
+            let val = reader.read_u8()? != 0;
+            Ok(GgufKvValue::Bool(val))
+        }
+        _ => Err(GgufError::InvalidValueType(value_type as u32)),
     }
 }

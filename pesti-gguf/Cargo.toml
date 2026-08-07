@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["gguf", "llm", "model", "parser"]
 categories = ["encoding", "science"]
 
+# Marketing fields for crates.io
+authors = ["crombo"]
+
 [dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -24,3 +27,8 @@ half = { version = "2.7.1", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.24.0"
+criterion = "0.5"
+
+[[bench]]
+name = "pesti_gguf_benchmarks"
+harness = false
