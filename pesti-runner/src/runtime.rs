@@ -28,16 +28,12 @@ use tracing::{debug, info, warn};
 
 #[cfg(feature = "cuda")]
 use crate::device::DeviceType;
-#[cfg(not(feature = "cuda"))]
-use crate::device_stub::LocalDevice as DeviceType;
 use crate::error::Result;
 use crate::llama::{GenerationResult, LlamaRunner, SamplingConfig, StreamingResult, TokenInfo};
 use crate::model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
 use crate::registry::{DiscoveredModel, ModelDiscovery, ModelEntry, ModelFormat, Registry};
 #[cfg(feature = "cuda")]
 use crate::transformer::{LlamaConfig, LlamaModel};
-#[cfg(not(feature = "cuda"))]
-use crate::transformer_stub::{LlamaConfig, LlamaModel};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -335,7 +331,7 @@ impl Runtime {
     ///
     /// This uses the transformer-based inference engine, not llama.cpp.
     /// The prompt must be tokenized first using the model's tokenizer.
-    pub fn generate_rust(&self, prompt_tokens: &[u32], max_tokens: usize, temp: f32) -> Result<Vec<u32>> {
+    pub fn generate_rust(&self, _prompt_tokens: &[u32], _max_tokens: usize, _temp: f32) -> Result<Vec<u32>> {
         let model = self.runner.try_read().map_err(|e| {
             crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e))
         })?;
@@ -357,13 +353,13 @@ impl Runtime {
             seed: Some(42),
         };
         #[cfg(not(feature = "cuda"))]
-        let sampling_config = crate::transformer_stub::SamplingConfig {
+        let _sampling_config = crate::transformer_stub::SamplingConfig {
             temperature: 0.7,
             top_k: 50,
             top_p: 0.95,
             seed: 42,
         };
-        let mut rng = StdRng::seed_from_u64(42);
+        let _rng = StdRng::seed_from_u64(42);
 
         // Stub - actual implementation only exists with CUDA
         let _model = model;

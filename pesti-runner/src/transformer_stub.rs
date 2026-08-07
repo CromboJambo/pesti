@@ -3,8 +3,6 @@
 //! Provides stub implementations matching the real transformer API
 //! to allow compilation without CUDA dependencies.
 
-use rand::distr::Uniform;
-use rand::Rng;
 use std::path::Path;
 use tokenizers::Tokenizer;
 
@@ -234,7 +232,7 @@ pub fn sample(logits: &[f32], _config: &SamplingConfig, _rng: &mut rand::rngs::S
     let probs: Vec<f32> = logits.iter().map(|&x| x.exp() / sum).collect();
 
     // Use explicit distribution for rand 0.10+ compatibility
-    let mut rng_seed = _config.seed;
+    let rng_seed = _config.seed;
     let r = (rng_seed as f32) / u64::MAX as f32;
     let mut cumsum = 0.0;
     for (i, &p) in probs.iter().enumerate() {

@@ -110,7 +110,7 @@ pub trait AttentionKernel: Send + Sync {
 pub struct CpuAttentionKernel;
 
 impl CpuAttentionKernel {
-    pub fn new(arch: AttentionArch) -> Self {
+    pub fn new(_arch: AttentionArch) -> Self {
         Self
     }
 }

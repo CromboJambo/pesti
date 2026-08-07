@@ -2,7 +2,6 @@
 //!
 //! Provides LocalDevice and DeviceSelector stubs to match the real API.
 
-use std::sync::Arc;
 
 /// Dummy device info (mirrors real DeviceInfo)
 #[derive(Debug, Clone)]

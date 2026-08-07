@@ -10,8 +10,6 @@ use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
 use crate::kernel::DeviceBuffer;
-#[cfg(not(feature = "cuda"))]
-use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{AttentionArch, AttentionConfig};
 #[cfg(not(feature = "cuda"))]
@@ -20,7 +18,6 @@ use crate::kernel::attention_stub::{AttentionArch, AttentionConfig};
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
-use half::f16;
 
 /// Configuration for a transformer model.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

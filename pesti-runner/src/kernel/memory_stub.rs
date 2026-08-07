@@ -1,6 +1,5 @@
 //! Stub memory module for CPU-only builds.
 
-use crate::kernel::device_buf::DeviceBuffer;
 
 /// Dummy MemoryBackend trait
 pub trait MemoryBackend {

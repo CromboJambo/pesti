@@ -7,7 +7,6 @@ use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
-use std::sync::Arc;
 use tracing::warn;
 
 // Import GEMM trait to ensure CpuGemmKernel methods are in scope
@@ -18,7 +17,7 @@ use crate::kernel::gemm::GemmKernel;
 
 // Import AttentionKernel trait and its Error type to ensure CpuAttentionKernel methods are in scope
 #[cfg(not(feature = "cuda"))]
-use crate::kernel::{attention_stub, AttentionKernel};
+use crate::kernel::AttentionKernel;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::AttentionKernel;
 

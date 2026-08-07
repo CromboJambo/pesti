@@ -93,7 +93,7 @@ impl Kvcache {
         &self,
         _start_pos: usize,
         _seq_len: usize,
-    ) -> Result<KvcacheSlice, KvError> {
+    ) -> Result<KvcacheSlice<'_>, KvError> {
         Err(KvError::NotAvailable)
     }
 

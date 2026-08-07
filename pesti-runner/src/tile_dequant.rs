@@ -192,7 +192,7 @@ pub fn dequantize_q4_0_tile(data: &[u8], start_idx: usize, tile_size: usize) -> 
     }
     
     let mut result = Vec::with_capacity(tile_size);
-    let elements_processed = start_idx;
+    let _elements_processed = start_idx;
     
     for block in 0..num_blocks {
         let base = block * 18;
@@ -220,7 +220,7 @@ pub fn dequantize_q4_0_tile(data: &[u8], start_idx: usize, tile_size: usize) -> 
 }
 
 /// Dequantize a tile of Q4_K weights (up to TILE_SIZE elements)
-pub fn dequantize_q4_k_tile(data: &[u8], start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
+pub fn dequantize_q4_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
     let num_full_blocks = tile_size / 16;
     let remaining = tile_size % 16;
     // Q4_K: full blocks are 28 bytes, partial block is only 4 bytes (d + delta)
@@ -276,11 +276,11 @@ pub fn dequantize_q4_k_tile(data: &[u8], start_idx: usize, tile_size: usize) -> 
         let base = num_full_blocks * 28;
         
         let d = f16::from_le_bytes([data[base], data[base + 1]]).to_f32();
-        let delta = f16::from_le_bytes([data[base + 2], data[base + 3]]).to_f32();
+        let _delta = f16::from_le_bytes([data[base + 2], data[base + 3]]).to_f32();
         
         // For partial blocks in Q4_K: only d and delta are present, no qs/h values
         // The dequantization formula is: result[i] = d (since there's no quantized value)
-        for i in 0..remaining {
+        for _i in 0..remaining {
             if result.len() >= tile_size {
                 break;
             }
@@ -293,7 +293,7 @@ pub fn dequantize_q4_k_tile(data: &[u8], start_idx: usize, tile_size: usize) -> 
 }
 
 /// Dequantize a tile of Q8_0 weights (up to TILE_SIZE elements)
-pub fn dequantize_q8_0_tile(data: &[u8], start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
+pub fn dequantize_q8_0_tile(data: &[u8], _start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
     let num_blocks = (tile_size + 31) / 32;
     let expected_size = num_blocks * 34;
     
@@ -330,7 +330,7 @@ pub fn dequantize_q8_0_tile(data: &[u8], start_idx: usize, tile_size: usize) -> 
 ///
 /// Q6_K block layout: 42 bytes per 16 elements.
 /// See `dequantize_q6_k_block` for the per-block format.
-pub fn dequantize_q6_k_tile(data: &[u8], start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
+pub fn dequantize_q6_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
     let num_blocks = (tile_size + 15) / 16;
     let expected_size = num_blocks * 42;
 

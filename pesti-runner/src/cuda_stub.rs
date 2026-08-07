@@ -4,7 +4,7 @@
 
 #[cfg(not(feature = "cuda"))]
 pub mod stub {
-    use std::sync::Arc;
+    
 
     /// Dummy CudaContext for CPU builds
     #[derive(Clone)]
