@@ -67,10 +67,9 @@ impl InferenceEngine {
 
         #[cfg(feature = "cuda")]
         {
-            use crate::cuda_runtime::{enumerate_devices, is_available, CudaRuntime};
+            use crate::cuda_runtime::{is_available, CudaRuntime};
             use crate::kernel::{
-                AttentionArch, AttentionConfig, AttentionKernel,
-                CudaAttentionKernelBuilder, CudaGemmKernelBuilder, GemmArch, GemmError,
+                AttentionArch, CudaAttentionKernelBuilder, CudaGemmKernelBuilder, GemmArch,
             };
 
             // Try to initialize CUDA only if the caller requested a CUDA device.

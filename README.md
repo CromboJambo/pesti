@@ -15,189 +15,80 @@
 ```
 **Portable Execution Substrate for Transformer Inference**
 
-A high-performance Rust inference engine for LLMs.
+A learning scaffold for understanding LLM inference internals. Not a product, not a competitor—just my way of climbing onto the real codebase later.
 
-⚠️ **Warning**: This is a learning project with intentional chaos. 
-You'll find more bugs than features, but the GPU kernels actually work.
+## Why This Exists
 
-## Overview
+> "I can't read Llama. I can't even read Llama RS. But I can read this."
 
-PESTI is a modular inference engine that delivers **~217-222 tok/s** on CPU and optimized GPU paths for models up to 2B parameters. Built with:
+PESTI is built to understand what happens at every layer:
+- GGUF v3 parsing from scratch (not wrapping llama.cpp)
+- Transformer primitives in pure Rust (RMSNorm, RoPE, SwiGLU, attention)
+- Backend abstraction for pluggable execution (CPU only, CUDA stub)
 
-- **Native Rust 2024** with `unsafe` code only where necessary (forbidden by default)
-- **CUDA tensor core kernels** (WGMMA, CUTLASS GEMM) via `cudarc`
-- **Full GGUF v3 support** for all K-family quantizations (Q2_K through Q8_K)
-- **Chunked batch processing** to minimize FFI overhead
-- **Feature-gated architecture** for CPU-only and GPU-accelerated builds
+## What It's Not
 
-## Quick Start
+- ❌ A competitor to llama.cpp (GPU path is TODO, not done)
+- ❌ A production-ready inference engine (forward pass is pre-work)
+- ❌ A framework for others to use (it's my learning scaffold)
+
+## What It Is
+
+- ✅ A way to understand GGUF internals byte-by-byte
+- ✅ A sandbox to experiment with quantization and CUDA kernels (pre-work)
+- ✅ Proof that I can build systems-level software without a CS degree
+
+## Current Status
+
+**Version:** v0.1.5 (August 2026)  
+**Focus:** CPU inference stable, GPU/forward pass are pre-work/stubs
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| GGUF v3 parsing | ✅ Complete | All K-family quantizations verified |
+| CPU inference | ✅ Stable | ~217-222 tok/s on TinyLlama (aspirational, unverified) |
+| Backend abstraction | ✅ Complete | Cpu, CUDA stub, llama.cpp FFI paths |
+| GPU kernels | ⏳ Pre-work | CUTLASS GEMM wrapper done, WGMMA attention is TODO |
+| Forward pass | ⏳ Pre-work | CPU path works, GPU path is feature-gated stub |
+| End-to-end inference | ✅ CPU only | GPU path untested |
+
+## Quick Start (CPU Only)
 
 ```bash
-# Clone the repository
+# Clone and build (CPU only, CUDA optional but untested)
 git clone https://github.com/CromboJambo/pesti.git
 cd pesti
-
-# Build with CUDA acceleration (requires NVIDIA GPU, sm_89+)
-cargo build --package pesti-runner --features cuda
+cargo build --package pesti-runner
 
 # Run inference on a GGUF model
-cargo run --package pesti-runner --example infer -- \
-  --model models/tinyllama-1.1b-q4_k_m.gguf \
+cargo run --package pesti-runner --example infer \
+  --model conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf \
   --prompt "Once upon a time" \
   --tokens 50
 ```
 
-## Architecture
+## The Honest Benchmark
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    PESTI Runner                              │
-├─────────────────────────────────────────────────────────────┤
-│  InferenceEngine (dispatch layer)                           │
-│  ├─ GPU Path: CudaGemmKernel (WGMMA/cublas)                │
-│  ├─ GPU Path: CudaAttentionKernel (WGMMA PTX kernel)       │
-│  └─ CPU Fallback: CpuGemmKernel + CpuAttentionKernel       │
-├─────────────────────────────────────────────────────────────┤
-│  GGUF Weight Loader                                         │
-│  ├─ Dequantization: Q4_K, Q5_K, Q6_K, Q8_K (pure Rust)    │
-│  └─ Reverse inference for dtype mismatch detection          │
-├─────────────────────────────────────────────────────────────┤
-│  Transformer Modules                                        │
-│  ├─ RoPE position-corrected forward pass                  │
-│  ├─ RMSNorm with fused scaling                              │
-│  ├─ Linear layers (GEMM-optimized)                         │
-│  └─ KV cache (O(N) autoregressive decode)                 │
-└─────────────────────────────────────────────────────────────┘
-```
+**Aspirational (based on llama.cpp baseline, unverified):**
+- Q3_K_M: ~218 tok/s
+- Q4_K_M: ~217 tok/s
+- Q5_K_M: ~221 tok/s
+- Q8_0: ~222 tok/s
 
-## Performance
+*Note: These numbers appear in README but no measurement logs exist. The actual benchmark script exists but hasn't been run recently.*
 
-### CPU Benchmark (TinyLlama-1.1B, 4 threads)
+## Why Rust?
 
-| Quantization | Speed (tok/s) |
-|--------------|---------------|
-| Q3_K_M       | 218.5         |
-| Q4_K_M       | 216.8         |
-| Q5_K_M       | 221.6         |
-| Q8_0         | 221.8         |
-
-**Key insight**: Performance varies by <3% across all quantization levels—compute-bound inference dominates over dequantization cost for small models.
-
-### GPU Benchmark (RTX 5060 Ti, sm_120)
-
-- **WGMMA attention kernel**: Consumer Blackwell optimized
-- **CUTLASS GEMM**: Ada Lovelace tensor cores (sm_8.9+)
-- Target: ~6-8 tok/s (baseline), with future optimization for higher throughput
-
-## Feature Status
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| GGUF Parser | ✅ 100% | All 29+ quantization types supported |
-| K-Family Conformance | ✅ 8/8 | Byte-exact match within tolerance |
-| WGMMA Attention Kernel | ✅ Implemented | sm_12.0 (RTX 50-series) |
-| CUTLASS GEMM | ✅ Implemented | sm_8.9+ (Ada Lovelace) |
-| CPU Fallback | ✅ Production | `--no-default-features` supported |
-| RoPE Correctness | ✅ Fixed | Position bug resolved in v0.1.5 |
-| tcgen05 Path | ⏳ Stub | Datacenter Blackwell (sm_100) needs TMA |
-
-## Recent Changes (v0.1.5)
-
-### Complete K-Family Conformance (8/8 Passing) ✅
-
-- **Q4_K/Q5_K dequantization overflow fixed**: Split `qs` into `qs_low` + `qs_high` u32 values
-- **Q6_K logic corrected**: Proper 8-byte block structure handling
-- **Optional output layer detection**: Graceful handling of Q2_K/Q3_K models without LM head
-
-### RoPE Position Bug Fix
-
-- Fixed `forward_layers` to use `start_pos` instead of `start_pos + layer_idx`
-- Ensures correct rotary position embedding across all layers
-
-### Debug Spam Cleanup
-
-- Removed 24+ `eprintln!` statements from transformer, GGUF loader, and inference engine
-- Cleaner production logs with reduced I/O overhead
-
-## Project Structure
-
-```
-pesti/
-├── pesti-conformance/      # Model conformance testing suite
-├── pesti-runner/           # Core inference engine (GGUF/Safetensors)
-│   ├── src/
-│   │   ├── kernel/         # GPU/CPU attention & GEMM kernels
-│   │   ├── transformer/    # Transformer module implementations
-│   │   └── gguf_weight_loader.rs
-├── pesti-gguf/             # GGUF v3 parser & writer
-├── pesti-safetensors/      # Safetensors serialization
-├── cuda-oxide/             # CUDA device detection & runtime (cudarc wrapper)
-└── examples/               # Benchmark & inference examples
-```
-
-## Dependencies
-
-### Runtime
-
-- **Rust nightly 1.99+** (for `std::simd` features)
-- **CUDA 12.05+** (for GPU acceleration)
-- **NVIDIA GPU**: sm_8.9+ recommended (Ada Lovelace or newer)
-
-### Build
-
-```toml
-[workspace.dependencies]
-cudarc = "0.19.4"        # CUDA runtime & cuBLAS
-gemm = "0.19.0"          # BLAS operations
-rayon = "1.10.0"         # Parallelism
-safetensors = "0.7.0"    # Model serialization
-```
-
-## Development Workflow
-
-### Feature Gating
-
-```bash
-# CPU-only build (no CUDA)
-cargo build --package pesti-runner --no-default-features
-
-# GPU-accelerated build (requires CUDA toolkit)
-cargo build --package pesti-runner --features cuda
-
-# With mistral.rs backend (experimental)
-cargo build --package pesti-runner --features cuda,mistralrs
-```
-
-### Testing
-
-```bash
-# Run all tests
-cargo test --workspace
-
-# K-family conformance suite
-cd pesti-conformance && cargo test
-
-# Performance benchmark
-cargo run --package pesti-runner --example cpu_attention_bench
-```
-
-## Contributing
-
-PESTI follows a **working in public** philosophy:
-
-- Linear development on `main` branch (no feature branches)
-- Many small commits (25+) showing iterative progress
-- Technical transparency via engineering notes and benchmarks
-- Open to PRs for kernel optimizations, bug fixes, and documentation
-
-See [docs/](docs/) for architecture deep-dives and session summaries.
+Because it's the language I can reason in better than Python or TypeScript.
+Not because "Rust is best" but because "Rust lets me hold the architecture
+in my head."
 
 ## License
 
-**AGPL-3.0-or-later** — free for open-source and commercial use with copyleft provisions.
+AGPL-3.0-or-later (because I want to understand the ecosystem, not own it)
 
 ---
 
-**Version**: 0.1.5 (in progress)  
-**Status**: Production-ready CPU path, GPU kernels functional but end-to-end verification pending  
-**Repository**: [github.com/nousresearch/pesti](https://github.com/CromboJambo/pesti)
+*This is a learning project. If you find bugs, file issues. If you want to
+contribute, PRs welcome. If you just want to use it as a reference for your
+own work, that's fine too.*

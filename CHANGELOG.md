@@ -69,33 +69,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## WGMMA Attention Kernel Implementation (Phase 4d) ✅
+### CPU Inference Engine (Phase 1 Complete) ✅
 
-**Status**: PTX kernel fully wired and functional - no longer a placeholder.
+**Status**: Pure Rust transformer primitives implemented and working.
 
 #### Implementation Details
 
-- **Kernel launch logic** (`pesti-runner/src/kernel/attention.rs:407-466`)
-  - Implemented actual `cuda_core::launch_kernel()` call (previously returned zeros)
-  - Proper parameter passing with aligned arrays to prevent dangling pointers
-  - Grid dimensions calculated as `(seq_k.div_ceil(64), seq_q.div_ceil(64), 1)`
-  - Block size: 128 threads per block (4 warps)
-  - Scale and beta values stored in local variables for lifetime safety
-
-- **Architecture support**
-  - `AttentionArch::Wgmma`: Consumer Blackwell (sm_12.0, RTX 5060 Ti/5090) - fully functional
-  - `AttentionArch::Tcgen05`: Datacenter Blackwell (sm_100, B200) - stub returns NotAvailable (TODO: implement TMA descriptors)
-
-- **Runtime logging**
-  - Logs successful kernel launches with grid/block dimensions and scale factor
-  - Example output: `[WGMMA] Launched attention kernel: Q[1] x K[256] -> S[1x256]`
+- **Transformer primitives** in `pesti-runner/src/kernel/`:
+  - RMSNorm: Normalization before attention
+  - RoPE: Rotary position embeddings
+  - SwiGLU: Activation function for feed-forward
+  - Multi-head attention: Self-attention mechanism
+- **Autoregressive generation loop** with Top-P/Top-K sampling
+- **Backend abstraction layer**: `InferenceEngine` routes between CPU, CUDA stub, llama.cpp FFI
 
 #### Files Modified
 
-- `pesti-runner/src/kernel/attention.rs`: Implemented WGMMA launch path (lines 407-466)
-- `pesti-runner/src/model.rs`: Refactored model structure to support CpuModel backend
+- `pesti-runner/src/kernel/`: All transformer primitives
+- `pesti-runner/src/model.rs`: Model struct with per-layer KV cache allocation
+- `pesti-runner/src/inference_engine.rs`: Dispatch layer for pluggable backends
 
 ---
+
+### GPU Integration (⏳ Pre-work/Stubs)
+
+**Status**: CUTLASS GEMM wrapper exists, but forward pass is feature-gated stub.
+
+#### What's Done
+
+- **CUTLASS GEMM wrapper** (`pesti-runner/src/kernel/gemm_cutlass.rs`)
+  - High-performance FP16 tensor core operations via `cudarc::cublas`
+  - Architecture-aware dispatch (WGMMA for sm_8.9, tcgen05 stub)
+  - 2/2 unit tests passing (verified with RTX 4070 Ti SUPER)
+
+#### What's Pre-work (Not Done)
+
+- **WGMMA attention kernel** (`pesti-runner/src/kernel/attention.rs:398-401`)
+  - Code shows `// TODO: Add PTX module and tensor core parameters`
+  - Currently returns zeros, not functional
+  - Estimated effort: 4-6 hours
+
+- **GPU forward pass** (`pesti-runner/src/transformer_stub.rs`)
+  - Feature-gated stub (`#[cfg(feature = "cuda")] pub mod transformer_stub`)
+  - CPU forward pass works, GPU path untested
+  - Byte-exact comparison between CPU and GPU pending
+
+- **End-to-end GPU inference**
+  - CUTLASS GEMM verified, but WGMMA attention is TODO stub
+  - Full forward pass with real model not yet tested
+  - Estimated effort: 8-12 hours
+
+#### Files Modified
+
+- `pesti-runner/src/kernel/gemm_cutlass.rs`: CUTLASS wrapper implementation
+- `pesti-runner/src/transformer_stub.rs`: Feature-gated GPU forward pass stub
+- `pesti-runner/src/model.rs`: CUDA device discovery and memory management
+
+---
+
+### Benchmark Claims (Aspirational, Unverified)
+
+**Status**: Numbers appear in README but no measurement logs exist.
+
+#### Claimed Performance
+
+| Quantization | Speed (tok/s) | Status |
+|--------------|---------------|--------|
+| Q3_K_M | ~218 | Aspirational (based on llama.cpp baseline) |
+| Q4_K_M | ~217 | Aspirational |
+| Q5_K_M | ~221 | Aspirational |
+| Q8_0 | ~222 | Aspirational |
+
+#### Reality Check
+
+- ❌ No actual measurement logs in git history
+- ❌ Benchmark script exists but hasn't been run recently
+- ❌ Numbers are based on llama.cpp baseline, not PESTI measurement
+- ✅ Plausible for TinyLlama on CPU, but unverified
+
+#### Fix Needed
+
+- Run `cargo run --example comprehensive_benchmark` and capture output to `docs/benchmark-results.md`
+- Update README to say "Measured: X tok/s" or "Aspirational: ~X tok/s (unverified)"
+
+---
+
+### Known Engineering Gaps
+
+#### ⚠️ Conformance Crate Compilation Errors
+
+**Status**: Tests claim "8/8 passing" but don't compile end-to-end.
+
+- `cargo test --workspace` fails with:
+  ```
+  error[E0599]: no method named `forward` found for reference `&TransformerLayer`
+     --> pesti-conformance/src/lib.rs:285:28
+  ```
+- **Fix needed**: Either implement missing `forward` methods or mark tests as `#[ignore]`
+
+#### ⚠️ Hardcoded Paths
+
+**Status**: 15+ `/home/crombo/projects/pesti/...` references in test files.
+
+- Will break on someone else's machine
+- **Fix pattern**: Use `env!("CARGO_MANIFEST_DIR")` instead
+
+#### ⚠️ Documentation vs Code Mismatch
+
+**Status**: ROADMAP.md claims "WGMMA complete" but code shows TODO stub.
+
+- **Fix needed**: Update ROADMAP.md to reflect pre-work status (✅ → ⏳)
 
 ## [0.1.4] - 2026-08-03
 
