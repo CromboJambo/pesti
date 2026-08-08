@@ -11,6 +11,7 @@
 
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
+use crate::kernel::softmax::{SoftmaxKernel, SoftmaxKernelBuilder};
 use half::f16;
 
 /// Attention architecture selector.
@@ -400,16 +401,19 @@ impl CudaAttentionKernelBuilder {
 pub struct GemmBasedAttentionKernel {
     gemm_kernel: CudaGemmKernel,
     backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>,
+    softmax_kernel: Box<dyn SoftmaxKernel>,
 }
 
 impl GemmBasedAttentionKernel {
     pub fn new(
         gemm_kernel: CudaGemmKernel,
         backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>,
+        softmax_kernel: Box<dyn SoftmaxKernel>,
     ) -> Self {
         Self {
             gemm_kernel,
             backend,
+            softmax_kernel,
         }
     }
 }
@@ -465,41 +469,11 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         let mut scores_host = scores_buffer
             .to_host_vec(backend)
             .map_err(|e| AttentionError::Transfer(e))?;
-        let mut softmax_scores = vec![0.0f32; scores_host.len()];
-
-        // Apply scale and softmax per head
-        for qs in 0..query_seq_len {
-            for h in 0..num_heads {
-                let start = (qs * num_heads + h) * n;
-
-                // Apply scaling
-                let mut max_val = f32::NEG_INFINITY;
-                for s in 0..n {
-                    let idx = start + s;
-                    scores_host[idx] *= config.scale;
-                    if scores_host[idx] > max_val {
-                        max_val = scores_host[idx];
-                    }
-                }
-
-                // Compute softmax
-                let mut sum = 0.0f32;
-                for s in 0..n {
-                    let idx = start + s;
-                    let exp_val = (scores_host[idx] - max_val).exp();
-                    softmax_scores[idx] = exp_val;
-                    sum += exp_val;
-                }
-
-                // Normalize
-                if sum > 0.0 {
-                    for s in 0..n {
-                        let idx = start + s;
-                        softmax_scores[idx] /= sum;
-                    }
-                }
-            }
-        }
+        
+        // Use softmax kernel (CPU or GPU depending on feature flags)
+        let softmax_scores = self.softmax_kernel
+            .forward(&scores_host)
+            .map_err(|e| AttentionError::Softmax(e))?;
 
         // Step 3: S @ V -> output [query_seq_len, num_heads, head_dim]
         // S: [query_seq_len * num_heads, cache_seq_len] (softmax scores)
@@ -580,6 +554,9 @@ pub enum AttentionError {
 
     #[error("transfer error: {0}")]
     Transfer(#[from] crate::kernel::device_buf::DeviceBufferError),
+    
+    #[error("softmax error: {0}")]
+    Softmax(#[from] crate::kernel::softmax::SoftmaxError),
 
     #[error("unsupported architecture: {0}")]
     UnsupportedArch(String),

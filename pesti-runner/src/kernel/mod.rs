@@ -17,6 +17,7 @@
 //!   tma_bridge.rs   - Bridge to cuda-oxide 128-byte TmaDescriptor + host-side creation
 //!   kvcache.rs      - KV cache with TMA descriptor support
 //!   attention.rs    - Attention kernel trait, config, CPU fallback
+//!   softmax.rs      - Softmax kernel trait, CPU/CUDA implementations
 //! ```
 //!
 //! ## Build Pipeline
@@ -94,6 +95,8 @@ pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
 pub mod rope;
 #[cfg(feature = "cuda")]
+pub mod softmax;
+#[cfg(feature = "cuda")]
 pub mod tma_bridge;
 #[cfg(feature = "cuda")]
 pub mod tma_descriptor;
@@ -143,3 +146,5 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]
 pub use tma_descriptor::TmaDescriptor;
+#[cfg(feature = "cuda")]
+pub use softmax::{SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
