@@ -8,6 +8,7 @@
 use crate::error::Result;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
+use crate::model_loader::GgufHeaderExt;
 #[cfg(feature = "cuda")]
 use crate::kernel::DeviceBuffer;
 #[cfg(feature = "cuda")]
@@ -48,18 +49,16 @@ impl Default for ModelConfig {
 impl ModelConfig {
     /// Create a model config from loaded GGUF weights.
     pub fn from_gguf(header: &pesti_gguf::types::GgufHeader) -> Result<Self> {
-        let embed_dim = header.embedding_length().ok_or_else(|| {
-            RunnerError::MissingHeaderField("embedding_length".to_string())
-        })? as usize;
-        let num_heads = header.attention_head_count().ok_or_else(|| {
-            RunnerError::MissingHeaderField("attention_head_count".to_string())
-        })? as usize;
-        let num_kv_heads = header.attention_head_count_kv().unwrap_or(num_heads as u32) as usize;
-        let num_layers = header.block_count().unwrap_or(32) as usize;
+        let embed_dim = header.get_kv_u32("embedding_length")
+            .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))? as usize;
+        let num_heads = header.get_kv_u32("attention.head_count")
+            .ok_or_else(|| RunnerError::MissingHeaderField("attention_head_count".to_string()))? as usize;
+        let num_kv_heads = header.get_kv_u32("attention.head_count_kv")
+            .unwrap_or(num_heads as u32) as usize;
+        let num_layers = header.get_kv_u32("block_count").unwrap_or(32) as usize;
         let head_dim = if num_heads > 0 { embed_dim / num_heads } else { 64 };
-        let max_seq = header.context_length().ok_or_else(|| {
-            RunnerError::MissingHeaderField("context_length".to_string())
-        })? as usize;
+        let max_seq = header.get_kv_u32("context_length")
+            .ok_or_else(|| RunnerError::MissingHeaderField("context_length".to_string()))? as usize;
 
         Ok(Self {
             num_layers,
@@ -279,10 +278,13 @@ impl CpuModel {
                 ))
             })?;
 
-        // Get vocab size from tokens array (number of tokens)
-        let vocab_size = weights.header.get_kv_array("tokenizer.ggml.tokens")
-            .map(|arr| arr.len())
-            .unwrap_or(32000); // Default fallback
+        // Get vocab size from KV metadata or default to 32000
+        let vocab_size = weights.header
+        .kv_pairs
+        .iter()
+        .find(|kv| kv.key == "tokenizer.ggml.vocab_size")
+        .and_then(|kv| kv.value.as_u32())
+            .unwrap_or(32000) as usize;
 
         // Load token embeddings (various naming conventions: Llama = tok_embeddings, Qwen = token_embd)
         let token_embeddings = match weights.tensors.get("token_embd.weight")

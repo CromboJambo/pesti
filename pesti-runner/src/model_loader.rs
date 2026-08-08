@@ -7,6 +7,39 @@ use pesti_safetensors::error::SafetensorsSchemaError;
 use std::path::Path;
 use tracing::debug;
 
+/// Extension trait for GgufHeader to provide convenient metadata access.
+/// This bridges the gap between the external pesti-gguf crate and our needs.
+pub trait GgufHeaderExt {
+    fn attention_head_count_kv(&self) -> Option<u32>;
+    fn rope_dimension_count(&self) -> Option<i32>;
+    fn normalization_epsilon(&self) -> Option<f32>;
+}
+
+impl GgufHeaderExt for GgufHeader {
+    fn attention_head_count_kv(&self) -> Option<u32> {
+        self.get_kv_u32("attention.head_count_kv")
+            .or_else(|| self.get_kv_u32("attention.head_count"))
+    }
+
+    fn rope_dimension_count(&self) -> Option<i32> {
+        self.get_kv_u32("rope.dimension_count")
+            .map(|v| v as i32)
+    }
+
+    fn normalization_epsilon(&self) -> Option<f32> {
+        self.kv_pairs
+            .iter()
+            .find(|kv| kv.key == "attention.layer_norm_epsilon")
+            .and_then(|kv| kv.value.as_f32())
+            .or_else(|| {
+                self.kv_pairs
+                    .iter()
+                    .find(|kv| kv.key == "norm_eps")
+                    .and_then(|kv| kv.value.as_f32())
+            })
+    }
+}
+
 /// Model loader that consumes WeightManifest from safetensors DB.
 ///
 /// loads tensors for inference engine consumption.
@@ -138,12 +171,12 @@ impl ModelLoader {
                     "Q5_1" => GgufDtype::Q5_1,
                     "Q8_0" => GgufDtype::Q8_0,
                     "Q8_1" => GgufDtype::Q8_1,
-                    "Q2_K" => GgufDtype::Q2_K,
-                    "Q3_K" => GgufDtype::Q3_K,
-                    "Q4_K" => GgufDtype::Q4_K,
-                    "Q5_K" => GgufDtype::Q5_K,
-                    "Q6_K" => GgufDtype::Q6_K,
-                    "Q8_K" => GgufDtype::Q8_K,
+                    "Q2_K" => GgufDtype::Q2K,
+                    "Q3_K" => GgufDtype::Q3K,
+                    "Q4_K" => GgufDtype::Q4K,
+                    "Q5_K" => GgufDtype::Q5K,
+                    "Q6_K" => GgufDtype::Q6K,
+                    "Q8_K" => GgufDtype::Q8K,
                     "BF16" => GgufDtype::BF16,
                     _ => GgufDtype::Unknown(0),
                 })
@@ -153,13 +186,13 @@ impl ModelLoader {
     /// Extract raw tensor bytes from a GGUF file by tensor name.
     pub fn extract_gguf_tensor(path: &Path, tensor_name: &str) -> Result<Vec<u8>, RunnerError> {
         let header = Self::load_gguf_header(path)?;
-        let tensor = header.get_tensor(tensor_name).ok_or_else(|| {
+        let tensor = header.tensors.iter().find(|t| t.name == tensor_name).ok_or_else(|| {
             RunnerError::Gguf(pesti_gguf::GgufError::InvalidTensor(format!(
                 "tensor '{tensor_name}' not found"
             )))
         })?;
 
-        let size = tensor.stored_size() as usize;
+        let size = tensor.stored_size()? as usize;
         pesti_gguf::parser::extract_tensor_bytes_from_path(path, tensor.offset, size)
             .map_err(RunnerError::Gguf)
     }
@@ -186,22 +219,28 @@ impl ModelLoader {
 
     /// Get attention head count from a GGUF header.
     pub fn gguf_attention_head_count(header: &GgufHeader) -> Option<u32> {
-        header.attention_head_count()
+        header.get_kv_u32("attention.head_count")
     }
 
     /// Get attention head count KV from a GGUF header.
     pub fn gguf_attention_head_count_kv(header: &GgufHeader) -> Option<u32> {
-        header.attention_head_count_kv()
+        header.get_kv_u32("attention.head_count_kv")
     }
 
     /// Get rope dimension count from a GGUF header.
     pub fn gguf_rope_dimension_count(header: &GgufHeader) -> Option<i32> {
-        header.rope_dimension_count()
+        header.get_kv_u32("rope.dimension_count").map(|v| v as i32)
     }
 
     /// Get normalization epsilon from a GGUF header.
     pub fn gguf_normalization_epsilon(header: &GgufHeader) -> Option<f32> {
-        header.normalization_epsilon()
+        header.kv_pairs.iter().find_map(|kv| {
+            if kv.key == "attention.layer_norm_epsilon" || kv.key == "norm_eps" {
+                kv.value.as_f32()
+            } else {
+                None
+            }
+        })
     }
 }
 
