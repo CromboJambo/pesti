@@ -10,6 +10,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(test)]
+mod integration_tests;
+
 /// Error type for conformance testing.
 #[derive(Debug)]
 pub enum ConformanceError {
