@@ -51,7 +51,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | Q6_K | ✅ PASSING | 0.0e0 |
 | Q8_0 | ✅ PASSING | 0.0e0 |
 | **Total** | **8/8 (100%)** | - |
----
+|---|
+
+### GPU Softmax with Feature Gating 🆕
+
+**New capability**: Optional CUDA-accelerated softmax computation for attention kernels.
+
+#### Implementation Details
+
+- **`pesti-runner/src/kernel/softmax.rs`** - Core softmax implementation
+  - `CpuSoftmaxKernel`: Numerically stable CPU softmax (max subtraction)
+  - `CudaSoftmaxKernel`: GPU backend via cudarc (feature-gated)
+  - `SoftmaxKernel` trait: Abstracts over backends
+  - `SoftmaxKernelBuilder`: Factory for automatic backend selection
+
+- **Feature gating**: Entire module behind `#[cfg(feature = "cuda")]`
+  - CPU-only builds: Only softmax CPU implementation compiled in
+  - CUDA builds: Both backends available, builder chooses automatically
+  - No breaking changes to existing code
+
+- **Integration with attention**: Updated `GemmBasedAttentionKernel`
+  - Uses softmax kernel for scores normalization step
+  - Maintains clean abstraction layer
+  - Enables future fused GPU kernels without API changes
+
+#### Engineering Decisions
+
+- **Numerical stability**: Max subtraction prevents overflow for large logits (e.g., [1000, 1001, 1002])
+- **Optional feature**: Keeps codebase buildable without CUDA dependencies
+- **Extensible**: Trait abstraction allows easy addition of ROCm, etc.
+- **Tested**: Unit tests verify CPU implementation correctness
+
+#### Usage
+
+```rust
+// CPU-only or auto-detect based on features
+let kernel = SoftmaxKernelBuilder::auto();
+
+// Use in attention computation
+let probs = kernel.forward(&logits)?;
+```
 
 ### Engineering Decision Records (EDR) - August 2026
 
