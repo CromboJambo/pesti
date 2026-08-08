@@ -236,7 +236,7 @@ fn test_dispatch_vs_cpu_output() {
     let weights = load_gguf_weights(&gguf_path).expect("Failed to load GGUF weights");
     println!("Loaded {} tensors", weights.tensors.len());
 
-    let mut cpu_model = CpuModel::load_gguf(&gguf_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(&gguf_path).expect("Failed to load GGUF");
     let mut dispatch_model = CpuModel::load_gguf(&gguf_path).expect("Failed to load GGUF");
     dispatch_model.enable_dispatch();
 
@@ -280,7 +280,7 @@ fn test_dispatch_conformance_real_model() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -361,7 +361,7 @@ fn test_dispatch_conformance_q8_0() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -442,7 +442,7 @@ fn test_dispatch_conformance_q2_k() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -523,7 +523,7 @@ fn test_dispatch_conformance_q3_k() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -604,7 +604,7 @@ fn test_dispatch_conformance_q4_0() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -685,7 +685,7 @@ fn test_dispatch_conformance_q5_k() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -766,7 +766,7 @@ fn test_dispatch_conformance_q6_k() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
@@ -869,7 +869,7 @@ fn test_dispatch_conformance_f16_model() {
     println!("Model: {}", model_path.display());
 
     // Load CPU baseline
-    let mut cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
+    let cpu_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
 
     // Load dispatch model
     let mut dispatch_model = CpuModel::load_gguf(model_path).expect("Failed to load GGUF");
