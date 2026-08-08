@@ -52,13 +52,12 @@ fn main() {
     if let Some(arch) = header.architecture() {
         println!("  architecture: {}", arch);
     }
-    if let Some(ft) = header.file_type() {
+    if let Some(ft) = header.get_kv_str("general.file_type") {
         println!("  file type: {}", ft);
     }
     println!();
 
-    // Print common config
-    let config = header.to_config_map();
+    // Print common config using KV pair accessors
     let common_keys = [
         "llama.context_length",
         "llama.embedding_length",
@@ -84,30 +83,10 @@ fn main() {
 
     println!("  config:");
     for key in &common_keys {
-        if let Some(val) = config.get(*key) {
-            let display = match val {
-                pesti_gguf::GgufKvValue::String(s) => s.clone(),
-                pesti_gguf::GgufKvValue::Uint32(v) => v.to_string(),
-                pesti_gguf::GgufKvValue::Uint64(v) => v.to_string(),
-                pesti_gguf::GgufKvValue::Int32(v) => v.to_string(),
-                pesti_gguf::GgufKvValue::Int64(v) => v.to_string(),
-                pesti_gguf::GgufKvValue::Float32(v) => v.to_string(),
-                pesti_gguf::GgufKvValue::Bool(b) => b.to_string(),
-                pesti_gguf::GgufKvValue::Array(arr) => {
-                    format!("[{}]", arr.iter().map(|v| {
-                        match v {
-                            pesti_gguf::GgufKvValue::String(s) => s.clone(),
-                            pesti_gguf::GgufKvValue::Uint32(v) => v.to_string(),
-                            pesti_gguf::GgufKvValue::Int32(v) => v.to_string(),
-                            pesti_gguf::GgufKvValue::Float32(v) => v.to_string(),
-                            pesti_gguf::GgufKvValue::Bool(b) => b.to_string(),
-                            _ => v.type_name().to_string(),
-                        }
-                    }).collect::<Vec<_>>().join(", "))
-                }
-                _ => val.type_name().to_string(),
-            };
-            println!("    {}: {}", key, display);
+        if let Some(val) = header.get_kv_str(key) {
+            println!("    {}: {}", key, val);
+        } else if let Some(val) = header.get_kv_u32(key) {
+            println!("    {}: {}", key, val);
         }
     }
     println!();
@@ -132,7 +111,11 @@ fn main() {
             let dtype = pesti_gguf::GgufDtype::from_u32(tensor.dtype);
             println!(
                 "    {:60}  [{}]  dtype={:<6}  stored={:>12}  offset={}",
-                tensor.name, shape_str, dtype.name(), tensor.stored_size(), tensor.offset
+                tensor.name,
+                shape_str,
+                dtype.name(),
+                tensor.stored_size().unwrap_or(0),
+                tensor.offset
             );
         }
         println!();
@@ -140,9 +123,14 @@ fn main() {
 
     // Extract specific tensor if requested
     if let Some(tensor_name) = &args.extract {
-        if let Some(tensor) = header.get_tensor(tensor_name) {
-            let stored = tensor.stored_size();
-            println!("  extracting {} ({} bytes stored, {} dequantized)...", tensor_name, stored, tensor.element_count());
+        if let Some(tensor) = header.tensors.iter().find(|t| t.name == *tensor_name) {
+            let stored = tensor.stored_size().unwrap_or(0);
+            println!(
+                "  extracting {} ({} bytes stored, {} dequantized)...",
+                tensor_name,
+                stored,
+                tensor.element_count()
+            );
             match pesti_gguf::parser::extract_tensor_bytes_from_path(
                 &args.gguf_path,
                 tensor.offset,

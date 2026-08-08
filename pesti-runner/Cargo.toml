@@ -33,7 +33,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 pesti-plug-in = { path = "../llm-plug-in" }
 pesti-safetensors = { path = "../pesti-safetensors" }
-pesti-gguf = { path = "../pesti-gguf" }
+pesti-gguf = { workspace = true }
 ggml-quants = "0.1"
 encoding_rs = "0.8"
 gemm.workspace = true

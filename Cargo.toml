@@ -4,7 +4,6 @@ members = [
     "pesti-runner",
     "llm-plug-in",
     "pesti-safetensors",
-    "pesti-gguf",
     "pesti-gguf-cli",
     "cuda-oxide",
 ]
@@ -29,6 +28,9 @@ authors = ["PESTI Contributors"]
 description = "Portable Execution Substrate for Transformer Inference"
 
 [workspace.dependencies]
+# GGUF parser
+pesti-gguf = "0.2"
+
 # LLM inference (FFI path)
 llama-cpp-2 = "0.1.146"
 

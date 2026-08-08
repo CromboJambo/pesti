@@ -20,9 +20,10 @@ path-absolutize.workspace = true
 sha2.workspace = true
 hex.workspace = true
 safetensors.workspace = true
-pesti-gguf = { path = "../pesti-gguf" }
+pesti-gguf = { workspace = true }
 bytemuck = "1.14"
 byteorder.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
