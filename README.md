@@ -1,158 +1,154 @@
-# pesti-gguf
+# PESTI
 
-[![Crates.io](https://img.shields.io/crates/v/pesti-gguf.svg)](https://crates.io/crates/pesti-gguf)
-[![Docs.rs](https://docs.rs/pesti-gguf/badge.svg)](https://docs.rs/pesti-gguf)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+```
+▄▄▄▄▄▄▄▄▄▄     ▄▄▄▄▄▄▄▄▄         ▄▄▄▄▄     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄
+█████ ▀█████▄  █████ ▀████▄   ▄▓▓▓▓▀▓▓▓▓▄  ▐▓█▓█▀▓███▓▀▓▓█▓▌ █▓█▓█
+▓███▓  ▐█▓██▓▌ ▓█▓█▓  ▐▓█▓▓▌ ▐▓▓▓▓▌ ▐▓▓▓▓▌ ▐▓▓▓▌ ▓▓▓▓▓ ▐▓▓▓▌ ▓▓▓▓▓
+▓▓▓▓▓   ▓▓▓▓▓▓ ▓▓▓▓▓   ▒▓▒▒░ ▓▒▓▒▒   ▒▒▓▒▓ ▀     ▒▓▒▓▓     ▀ ▓▓▓▒▓
+▓▓▓▒▓   ▒▒▒▒▒▒ ▒▓▓▒▓         ▓▒▓▓▒▄              ▒▒▒▒▓       ▓▒▓▓▒
+▒▓▒▓▒ ▄▒▒▒▒▒▒▌ ░▓▒▓▒▓▒       ▀▀▀▓▒▓▒░▒▒▀▄        ▒░▒▓▒       ░▒░▓▒
+▓░▓▒▒▓▒▒▒░▒░▀  ░░▒░░   ░░░░░        ▀░▒░▒▒       ░░░░░       ░░░░░
+░▀█░▀          ▀░▀░░   ▀░▀░▀ ░░▀░░   ▀░░░▄       ░░░▀░       ▀░▀░░
+  ▀               ▀     ▀     ▀  ▀   ▒▀ ▀░       ▀ ▀          ▀  ▀
+▓ ▓▄▀          ▄▓ ▄▓   ▓ ▄▓▄ ▓▄ ▓▄   ▓▄▄▓▓       █ ▄▓        ▓▄ ▓▄
+▒▄▒▒▒          ▒▒▄░▒  ▓▒▒▒▒▓ ▄▒▓▒▄  ▄▄▒▒▒▒       ▓▓▓▒▒       ▄▒▓▒▄
+░░░░░          ░░░▒░▄░░░░░░▀ ▀▄░░░░░░░░░▄▀      ▄▒▒▒░░▄      ░░░░░
+```
 
-**Memory-safe, zero-undefined-behavior GGUF parser for Rust.**
+**Portable Execution Substrate for Transformer Inference**
 
-## Why pesti-gguf?
+A learning scaffold for understanding LLM inference internals. Not a product, not a competitor—just my way of climbing onto the real codebase later.
 
-Most GGUF parsers are written in C++ (llama.cpp) or Python (gguf). They work great—but if you're building an LLM tool in Rust, you currently have to:
+## Why This Exists
 
-1. **Link against llama.cpp** (50+ MB of dependencies, CUDA quirks)
-2. **Cross the FFI boundary** (performance overhead, panic risks)
-3. **Deal with raw pointers** (no compile-time safety guarantees)
+Most LLM inference engines (llama.cpp, candle, burn) are **production-ready** but hard to learn from if you're new to:
+- GGUF binary format internals
+- GPU tensor core kernels (WGMMA, tcgen05)
+- Quantization math (Q4_K, Q5_K, Q8_K dequantization)
+- Attention kernel optimization
 
-`pesti-gguf` gives you:
+PESTI gives you:
 
-✅ **Zero dependencies** - Pure Rust, no C++ runtime needed  
-✅ **Type-safe errors** - Structured `Result` instead of error codes  
-✅ **Async-ready** - Works seamlessly with `tokio` and other runtimes  
-✅ **WASM-compatible** - Parse GGUF in the browser without 50MB WASM blobs  
-✅ **Production-tested** - Parses real models (Qwen2.5, Llama 3, etc.)
+✅ **Learning-first design** - Every component documented with "why" not just "how"  
+✅ **Progressive complexity** - CPU → GEMM proxy → fused kernels  
+✅ **Honest roadmap** - No benchmark chasing, just understanding  
+✅ **Feature-gated builds** - Compile without CUDA for pure Rust learning  
+
+## What's Inside
+
+### Phase 1: Foundations ✅
+- **[pesti-gguf](https://crates.io/crates/pesti-gguf)** - Full K-family quantization support (external crate)
+- **CPU inference engine** (`pesti-runner`) - Pure Rust transformer primitives
+- **Conformance testing** - Byte-exact dequantization verification
+
+### Phase 2: GPU Integration 🆕 (Working via GEMM Proxy)
+- **CUTLASS integration** via `cudarc` - Battle-tested NVIDIA kernels
+- **GEMM-based attention** - Q @ K^T → softmax → S @ V
+- **GPU softmax kernel** - Optional CUDA acceleration with feature gating
+- **End-to-end verification** - Real GGUF model inference
+
 
 ## Quick Start
 
-```rust
-use pesti_gguf::parse_gguf;
+```bash
+# Clone the workspace
+git clone https://github.com/crombojambo/pesti.git
+cd pesti
 
-fn main() -> Result<(), pesti_gguf::GgufError> {
-    // Parse a GGUF file and get full metadata
-    let header = parse_gguf("qwen2.5-3b-instruct-q4_k_m.gguf")?;
-    
-    println!("Architecture: {}", header.kv_pairs[0].value);
-    println!("Tensors: {}", header.tensors.len());
-    
-    // Access tensor shapes, dtypes, offsets with full type safety
-    for tensor in &header.tensors {
-        println!("{}: {} elements", tensor.name, tensor.shape.iter().product::<u64>());
-    }
-    
-    Ok(())
-}
+# Run CPU-only inference (no CUDA needed)
+cargo run --package pesti-runner --example cpu_baseline
+
+# Run GPU-enabled inference (requires CUDA 12.5+)
+cargo run --package pesti-runner --example e2e_gpu_inference --features cuda
+
+# Verify K-family quantization conformance
+cargo test --package pesti-conformance
 ```
 
-## Performance
+## Dependencies
 
-**Measured on M2 MacBook Pro (averaged over 3 runs):**
+The workspace depends on the external **pesti-gguf** crate:
 
-| Model | File Size | Parse Time | Throughput |
-|-------|-----------|------------|------------|
-| **0.5B Q4_K_M** | 468 MB | **36.7ms** | **12.8 GB/s** |
-| **3B Q4_K_M** | 2.0 GB | **33.4ms** | **60.9 GB/s** |
+- **[pesti-gguf](https://crates.io/crates/pesti-gguf)** v0.2.1 - GGUF parser (external dependency)
+- **cudarc** - CUDA runtime bindings (optional, feature-gated)
+- **half**, **num-traits**, **serde** - Core numeric & serialization types
 
-### Comparison with Alternatives
-
-| Parser | 3B Model Time | Memory | Dependencies |
-|--------|---------------|--------|--------------|
-| **pesti-gguf** | **~33ms** | ~5MB | None |
-| llama.cpp + FFI | ~60ms | ~8MB | C++ runtime, CUDA libs |
-| Python gguf (hirox) | ~180ms | ~15MB | Python runtime |
-
-*Note: pesti-gguf is **2x faster than llama.cpp FFI** and **5x faster than Python** for parsing GGUF metadata.*
-
-## Features
-
-- ✅ **Full v1/v2/v3 support** - Parses all GGUF format versions
-- ✅ **Version-aware parsing** - Auto-detects format version and adapts
-- ✅ **Comprehensive error types** - `InvalidMagic`, `UnsupportedVersion`, `AlignmentMismatch`, etc.
-- ✅ **Byte-order detection** - Handles little-endian GGUF files correctly
-- ✅ **Alignment validation** - Enforces `general.alignment` for quantized models
-- ✅ **Serde integration** - Serialize/deserialize headers to/from JSON
-- ✅ **Real-file tested** - Verified against Qwen2.5 conformance corpus
-
-## Use Cases
-
-### 1. Rust-Native Inference Servers
-```rust
-// No FFI boundary, no C++ runtime needed
-async fn load_model(model_path: &str) -> Result<Model, GgufError> {
-    let header = parse_gguf(model_path)?;
-    // Direct access to tensor metadata for custom loading logic
-    Ok(Model::from_header(header))
-}
-```
-
-### 2. Model Catalog Services
-```rust
-// Fast metadata extraction for indexing
-fn index_model(path: &Path) -> Result<ModelMetadata, GgufError> {
-    let header = parse_gguf(path)?;
-    Ok(ModelMetadata {
-        architecture: get_architecture(&header.kv_pairs)?,
-        tensor_count: header.tensors.len(),
-        quantization: get_quantization_type(&header)?,
-        // ...
-    })
-}
-```
-
-### 3. WASM Browser Tools
-```rust
-// Parse GGUF in the browser without downloading llama.cpp WASM
-#[wasm_bindgen]
-pub fn inspect_model(wasm_bytes: &[u8]) -> JsValue {
-    let header = parse_gguf_from_memory(wasm_bytes).unwrap();
-    serde_wasm_bindgen::to_value(&header).unwrap()
-}
-```
-
-### 4. CI/CD Validation Pipelines
-```rust
-// Check model compatibility before deployment
-fn validate_model(path: &Path) -> Result<(), GgufError> {
-    let header = parse_gguf(path)?;
-    
-    // Validate required keys exist
-    assert!(header.kv_pairs.iter().any(|p| p.key == "general.architecture"));
-    
-    // Check tensor count is reasonable
-    assert!(header.tensors.len() > 0);
-    
-    Ok(())
-}
-```
-
-## Comparison with Alternatives
-
-| Feature | pesti-gguf | llama.cpp (FFI) | Python gguf |
-|---------|------------|-----------------|-------------|
-| **Memory safety** | ✅ Compile-time guarantees | ❌ Runtime UB possible | ⚠️ GC overhead |
-| **Error handling** | ✅ Structured `Result` | ❌ Error codes | ⚠️ Exceptions |
-| **Dependencies** | ✅ None | ❌ C++ runtime | ❌ Python |
-| **WASM support** | ✅ Native | ❌ Complex | ❌ Slow |
-| **Async-ready** | ✅ Yes | ⚠️ Requires wrapper | ❌ No |
-| **Type safety** | ✅ Full Rust types | ❌ Raw pointers | ⚠️ Loose typing |
-
-## Installation
+### Adding pesti-gguf to your project
 
 ```bash
-cargo add pesti-gguf
+cargo add pesti-gguf@0.2.1
 ```
 
-## Documentation
+Or directly from crates.io:
 
-- [API Docs](https://docs.rs/pesti-gguf)
-- [Performance Benchmarks](./PERFORMANCE.md)
-- [Conformance Tests](./CONFORMANCE.md)
+```bash
+cargo add https://crates.io/crates/pesti-gguf
+```
 
-## License
+## Project Structure
 
-AGPL-3.0-or-later (see [LICENSE](LICENSE))
+```
+pesti/
+├── Cargo.toml                 # Workspace root
+├── README.md                  # This file
+├── CHANGELOG.md               # Version history & decisions
+├── ROADMAP.md                 # Honest learning journey
+│
+├── pesti-gguf/                # GGUF parser crate (external dependency) → [crates.io](https://crates.io/crates/pesti-gguf)
+├── pesti-runner/              # Main inference engine
+│   ├── src/
+│   │   ├── kernel/            # GPU primitives (GEMM, attention, softmax)
+│   │   ├── transformer/       # CPU inference primitives
+│   │   └── inertia.rs         # GPU unavailability handling
+│   └── examples/              # CPU & GPU examples
+│
+├── pesti-conformance/         # Quantization verification tests
+├── references/                # Architecture docs & EDRs
+│   ├── gpu-softmax.md        # New: GPU softmax implementation guide
+│   └── cuda-reintegration-checklist.md
+│
+└── benchmarks/               # Performance measurements (Python scripts)
+```
+
+## Engineering Decisions
+
+See [CHANGELOG.md](./CHANGELOG.md) for full details. Key decisions:
+
+### EDR-001: Consumer GPU Architecture Choice ✅
+**Selected**: GEMM-based attention via `cudarc::cublas`  
+**Why**: Works on RTX 4070 Ti SUPER (Ada Lovelace) right now, proven path via llama.cpp
+
+### EDR-002: CUTLASS vs Custom PTX ✅
+**Selected**: Integrate CUTLASS via cudarc  
+**Why**: NVIDIA's reference implementation, saves 8-12 hours of PTX debugging
+
+### EDR-003: K-Family Quantization Fix ✅
+**Fixed**: Q4_K/Q5_K/Q8_K dequantization overflow  
+**Result**: Conformance improved from 2/8 (25%) → 8/8 (100%)
+
+### EDR-004: GPU Softmax with Feature Gating 🆕 (New)
+**Selected**: Optional CUDA-accelerated softmax via `SoftmaxKernel` trait  
+**Why**: Keeps codebase buildable without CUDA, enables future fused kernels
+
+## What This Is NOT
+
+❌ A roadmap to beat llama.cpp at benchmarks  
+❌ A product launch timeline  
+❌ A way to become famous in the Rust/LLM space  
+
+## What This IS
+
+✅ My learning scaffold for understanding LLM inference  
+✅ Proof that I can build systems-level software  
+✅ A vehicle to eventually navigate llama.cpp with confidence  
+
+## Status & Updates
+
+- **Last updated**: August 2026
+- **Branch**: `main` → origin/main (ahead 7, behind 0)
+- **Conformance**: 8/8 K-family quantizations passing (100%)
+- **GPU support**: Working via GEMM proxy (Q @ K^T → softmax → S @ V)
 
 ---
 
-**Built for Rust developers who care about memory safety, performance, and ergonomics.**
-
-*Not affiliated with `ggml-org/llama.cpp`—just inspired by their excellent GGUF spec.*
+*This roadmap will change as I learn more. If it looks perfect, it's lying.*
