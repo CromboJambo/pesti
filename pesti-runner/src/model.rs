@@ -8,7 +8,6 @@
 use crate::error::Result;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
-use crate::model_loader::GgufHeaderExt;
 #[cfg(feature = "cuda")]
 use crate::kernel::DeviceBuffer;
 #[cfg(feature = "cuda")]

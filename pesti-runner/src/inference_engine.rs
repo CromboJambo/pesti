@@ -2,7 +2,6 @@
 //!
 //! actual tensor computation layer. separate from PESTI host.
 
-use std::sync::Arc;
 
 use crate::error::RunnerError;
 use candle_core::backend::BackendDevice;

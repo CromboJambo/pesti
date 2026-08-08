@@ -117,7 +117,7 @@ impl WorkType {
     fn estimate_bytes(&self) -> usize {
         // Rough estimate: params + potential input data references
         match self {
-            Self::Gemm { m, n, k, .. } => {
+            Self::Gemm { m, n, k: _, .. } => {
                 // C matrix size (f32) is the dominant factor
                 (*m as usize) * (*n as usize) * 4
             }

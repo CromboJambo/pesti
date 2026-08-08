@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Model: {}", model_path);
     
     // Load model on CPU
-    let cpu_device = Device::Cpu;
+    let _cpu_device = Device::Cpu;
     
     let start = Instant::now();
     let _model_cpu = pesti_runner::LlamaRunner::builder(model_path)
