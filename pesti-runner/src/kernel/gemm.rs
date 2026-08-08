@@ -7,9 +7,15 @@
 //!
 //! The differentiator: proving tcgen05 matmul works for LLM workloads
 //! with non-matrix layouts (KV cache updates: M:1×K, K:N×K shapes).
+//!
+//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use crate::kernel::device_buf::DeviceBuffer;
+use crate::cuda_shim::{CudaFunction, CudaModule};
+use crate::cuda_runtime::{IntoResult, CudaRuntime};
+use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
+use std::sync::Arc;
 
 /// Tensor core architecture selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -187,27 +193,24 @@ impl GemmKernel for CpuGemmKernel {
     }
 }
 
-// --- GPU Implementation (Real cuda-oxide backed) ---
+// --- GPU Implementation (Real cudarc backed) ---
 
 #[cfg(feature = "cuda")]
-use std::sync::Arc;
-
-#[cfg(feature = "cuda")]
-/// CUDA implementation for GEMM kernel using cuda-oxide.
+/// CUDA implementation for GEMM kernel using cudarc.
 pub struct CudaGemmKernel {
     arch: GemmArch,
-    context: Arc<cuda_core::CudaContext>,
-    stream: Arc<cuda_core::CudaStream>,
-    module: Arc<cuda_core::CudaModule>,
-    function: cuda_core::CudaFunction,
+    context: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
+    module: Arc<CudaModule>,
+    function: CudaFunction,
 }
 
 #[cfg(feature = "cuda")]
 /// Builder for CudaGemmKernel that handles PTX loading and kernel resolution.
 pub struct CudaGemmKernelBuilder {
     arch: GemmArch,
-    context: Arc<cuda_core::CudaContext>,
-    stream: Arc<cuda_core::CudaStream>,
+    context: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
     device_info: crate::cuda_runtime::CudaDeviceInfo,
 }
 
@@ -215,8 +218,8 @@ pub struct CudaGemmKernelBuilder {
 impl CudaGemmKernelBuilder {
     pub fn new(
         arch: GemmArch,
-        context: Arc<cuda_core::CudaContext>,
-        stream: Arc<cuda_core::CudaStream>,
+        context: Arc<CudaContext>,
+        stream: Arc<CudaStream>,
         device_info: crate::cuda_runtime::CudaDeviceInfo,
     ) -> Self {
         Self {
@@ -255,10 +258,8 @@ impl CudaGemmKernelBuilder {
         };
 
         // Load module from PTX source
-        let module = self
-            .context
-            .load_module_from_ptx_src(ptx_src)
-            .map_err(|e| GemmError::Cuda(format!("module load failed: {e}")))?;
+        let module = CudaModule::load_from_ptx(&self.context, ptx_src)
+            .map_err(|e| GemmError::Cuda(format!("module load failed: {e:?}")))?;
 
         // Resolve kernel function
         let kernel_name = match self.arch {
@@ -268,7 +269,7 @@ impl CudaGemmKernelBuilder {
         };
         let function = module
             .load_function(kernel_name)
-            .map_err(|e| GemmError::Cuda(format!("function load failed: {}", e)))?;
+            .map_err(|e| GemmError::Cuda(format!("function load failed: {e:?}")))?;
 
         Ok(CudaGemmKernel {
             arch: self.arch,
@@ -282,13 +283,13 @@ impl CudaGemmKernelBuilder {
 
 #[cfg(feature = "cuda")]
 impl CudaGemmKernel {
-    /// Get the cuda-oxide context for external operations
-    pub fn context(&self) -> &Arc<cuda_core::CudaContext> {
+    /// Get the cudarc context for external operations
+    pub fn context(&self) -> &Arc<CudaContext> {
         &self.context
     }
 
-    /// Get the cuda-oxide stream
-    pub fn stream(&self) -> &Arc<cuda_core::CudaStream> {
+    /// Get the cudarc stream
+    pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
     }
 
@@ -304,7 +305,7 @@ impl CudaGemmKernel {
         n: usize,
         k: usize,
     ) -> Result<(), GemmError> {
-        use crate::cuda_runtime::CudaRuntime;
+        use cudarc::driver::sys;
 
         // Kernel signature (gemm_mma_sync.ptx):
         //   gemm_mma_kernel(f32 alpha, u64 A, u64 B, f32 beta,
@@ -322,15 +323,15 @@ impl CudaGemmKernel {
         let mut m_v: u32 = m as u32;
         let mut n_v: u32 = n as u32;
         let mut k_v: u32 = k as u32;
-        let mut params: [*mut libc::c_void; 8] = [
-            &mut alpha_v as *mut f32 as *mut libc::c_void,
-            &mut a_v as *mut u64 as *mut libc::c_void,
-            &mut b_v as *mut u64 as *mut libc::c_void,
-            &mut beta_v as *mut f32 as *mut libc::c_void,
-            &mut c_v as *mut u64 as *mut libc::c_void,
-            &mut m_v as *mut u32 as *mut libc::c_void,
-            &mut n_v as *mut u32 as *mut libc::c_void,
-            &mut k_v as *mut u32 as *mut libc::c_void,
+        let mut params: [*mut std::ffi::c_void; 8] = [
+            &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
+            &mut a_v as *mut u64 as *mut std::ffi::c_void,
+            &mut b_v as *mut u64 as *mut std::ffi::c_void,
+            &mut beta_v as *mut f32 as *mut std::ffi::c_void,
+            &mut c_v as *mut u64 as *mut std::ffi::c_void,
+            &mut m_v as *mut u32 as *mut std::ffi::c_void,
+            &mut n_v as *mut u32 as *mut std::ffi::c_void,
+            &mut k_v as *mut u32 as *mut std::ffi::c_void,
         ];
 
         // mma.sync kernel: one warp (32 threads) per 16x8 output tile.
@@ -339,15 +340,16 @@ impl CudaGemmKernel {
 
         // Launch: grid, block, shared_mem_bytes, stream, params
         unsafe {
-            cuda_core::launch_kernel_on_stream(
-                &self.function,
+            use crate::cuda_shim::launch_kernel;
+            launch_kernel(
+                self.function.cu_function(),
                 grid,
                 block,
                 0, // shared_mem_bytes
-                self.stream.as_ref(),
+                self.stream.cu_stream(),
                 &mut params,
             )
-            .map_err(|e| GemmError::LaunchFailed(format!("kernel launch failed: {e}")))?;
+            .map_err(|e| GemmError::LaunchFailed(format!("kernel launch failed: {e:?}")))?;
         }
 
         Ok(())
@@ -407,3 +409,63 @@ pub enum GemmError {
 }
 
 // --- Tests ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gemm_arch_name() {
+        assert_eq!(GemmArch::Wgmma.name(), "wgmma");
+        assert_eq!(GemmArch::Tcgen05.name(), "tcgen05");
+        assert_eq!(GemmArch::Mma.name(), "mma.sync");
+    }
+
+    #[test]
+    fn test_gemm_config_default() {
+        let config = GemmConfig::default();
+        assert_eq!(config.arch, GemmArch::Mma);
+        assert!(config.use_tma);
+        assert_eq!(config.block_size, 0);
+    }
+
+    #[test]
+    fn test_cpu_gemm_kernel() {
+        let kernel = CpuGemmKernel::new();
+        assert!(kernel.is_available());
+        assert_eq!(kernel.arch(), GemmArch::Mma);
+    }
+
+    #[test]
+    fn test_cpu_gemm_matmul_identity() {
+        let kernel = CpuGemmKernel::new();
+        let m = 2usize;
+        let n = 2usize;
+        let k = 2usize;
+
+        // Identity matrix test: A * I = A
+        let a = DeviceBuffer::from_host(vec![
+            f16::from_f32(1.0),
+            f16::from_f32(2.0),
+            f16::from_f32(3.0),
+            f16::from_f32(4.0),
+        ]);
+        let b = DeviceBuffer::from_host(vec![
+            f16::from_f32(1.0),
+            f16::from_f32(0.0),
+            f16::from_f32(0.0),
+            f16::from_f32(1.0),
+        ]);
+        let mut c = DeviceBuffer::zeros(m * n);
+
+        kernel
+            .matmul(1.0, &a, &b, 0.0, &mut c, m, n, k)
+            .unwrap();
+
+        let c_host = c.to_host();
+        assert!((c_host[0] - 1.0).abs() < 0.01);
+        assert!((c_host[1] - 2.0).abs() < 0.01);
+        assert!((c_host[2] - 3.0).abs() < 0.01);
+        assert!((c_host[3] - 4.0).abs() < 0.01);
+    }
+}

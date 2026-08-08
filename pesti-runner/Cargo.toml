@@ -2,7 +2,7 @@
 name = "pesti-runner"
 publish = false
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "LLM inference engine: tensor computation, model loading, tokenizer, device backend, external runner bridge"
@@ -12,7 +12,7 @@ default = []
 # Production-grade GPU kernels via mistral.rs (requires CUDA toolchain)
 mistralrs = ["dep:mistralrs"]
 # CUDA GPU backend (requires CUDA 12.5+ and NVIDIA GPU)
-cuda = ["dep:cudarc", "dep:cuda-device", "dep:cuda-host", "dep:cuda-core", "dep:intel-mkl-src", "candle-core/cuda", "candle-nn/cuda"]
+cuda = ["dep:cudarc", "dep:intel-mkl-src", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 candle-core.workspace = true
@@ -57,12 +57,11 @@ llama-cpp-2.workspace = true
 llama-cpp-sys-2 = "0.1.146"
 nvml-wrapper = "0.12"
 
-# Optional GPU dependencies (enabled via `cuda` feature)
+# CUDA support via cudarc (stable-compatible)
 cudarc = { workspace = true, optional = true }
+
+# MKL for CPU acceleration
 intel-mkl-src = { workspace = true, optional = true }
-cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-device", optional = true }
-cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-host", optional = true }
-cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", package = "cuda-core", optional = true }
 
 # Production-grade GPU kernels (optional, enabled via `mistralrs` feature)
 mistralrs = { version = "0.8", optional = true }

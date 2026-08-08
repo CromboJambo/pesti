@@ -1,17 +1,14 @@
 //! PTX builder for GEMM kernels.
 //!
-//! Bridges cuda-oxide kernel definitions with the inference engine.
-//! Manages PTX compilation, kernel loading, and launch configuration.
+//! Bridges PTX kernel definitions with the inference engine.
+//! Manages PTX loading, kernel registration, and launch configuration.
 //!
-//! Build pipeline:
-//! 1. Kernel source (cuda-oxide #[kernel] attribute)
-//! 2. `cargo oxide build` → PTX binary
-//! 3. GemmBuilder loads PTX and configures launches
-//!
-//! The builder supports both WGMMA (sm_120) and tcgen05 (sm_100) architectures.
+//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use super::device_buf::DeviceBuffer;
 use super::gemm::{GemmArch, GemmConfig, GemmError, GemmKernel};
+use crate::cuda_shim::{CudaFunction, CudaModule};
+use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
 use std::sync::Arc;
 
@@ -116,25 +113,16 @@ impl GemmBuilder {
     }
 
     /// Register a tcgen05 GEMM kernel PTX.
-    ///
-    /// tcgen05 uses 128x128x16 tiles with tensor memory (TMEM).
-    /// Recommended for sm_100+ (Blackwell B200 / RTX 5090).
     pub fn with_tcgen05(self, ptx: PtxSource) -> Self {
         self.add_ptx(ptx)
     }
 
     /// Register a WGMMA GEMM kernel PTX.
-    ///
-    /// WGMMA uses 64x64x64 tiles with shared memory.
-    /// Recommended for sm_120 (consumer Blackwell RTX 5060 Ti / 5090).
     pub fn with_wgmma(self, ptx: PtxSource) -> Self {
         self.add_ptx(ptx)
     }
 
     /// Build a GEMM kernel from the registered PTX sources.
-    ///
-    /// Returns a CpuGemmKernel if no PTX sources are registered (CPU fallback).
-    /// Returns the best-matching GPU kernel if PTX sources are available.
     pub fn build(self) -> Box<dyn GemmKernel> {
         if self.ptx_sources.is_empty() {
             return Box::new(super::gemm::CpuGemmKernel::new());
@@ -194,26 +182,22 @@ impl GemmBuilder {
 /// GEMM kernel built from PTX source.
 ///
 /// Holds the PTX source and configuration, ready for launch.
-/// Wraps a cuda-oxide LoadedModule and CudaFunction for actual kernel execution.
 pub struct KernelFromPtx {
     source: PtxSource,
     config: GemmConfig,
     /// Loaded PTX module (None = GPU unavailable, fall back to CPU).
-    module: Option<Arc<cuda_core::CudaModule>>,
+    module: Option<Arc<CudaModule>>,
     /// Kernel function handle (None = GPU unavailable).
-    function: Option<cuda_core::CudaFunction>,
+    function: Option<CudaFunction>,
     /// CUDA context/stream for this kernel.
-    ctx: Option<Arc<cuda_core::CudaContext>>,
-    stream: Option<Arc<cuda_core::CudaStream>>,
+    ctx: Option<Arc<CudaContext>>,
+    stream: Option<Arc<CudaStream>>,
     /// Whether GPU path is available.
     gpu_available: bool,
 }
 
 impl KernelFromPtx {
     /// Create a KernelFromPtx from a PTX source.
-    ///
-    /// Attempts to load the PTX into a CUDA context. If CUDA is unavailable,
-    /// falls back gracefully by setting gpu_available = false.
     pub fn from_source(source: PtxSource, config: GemmConfig) -> Result<Self, GemmError> {
         // Try to initialize CUDA and load PTX
         let (ctx, module, function, stream) = match Self::try_load_gpu(&source) {
@@ -241,36 +225,30 @@ impl KernelFromPtx {
         source: &PtxSource,
     ) -> Result<
         (
-            Arc<cuda_core::CudaContext>,
-            Arc<cuda_core::CudaModule>,
-            cuda_core::CudaFunction,
-            Arc<cuda_core::CudaStream>,
+            Arc<CudaContext>,
+            Arc<CudaModule>,
+            CudaFunction,
+            Arc<CudaStream>,
         ),
         GemmError,
     > {
-        // Initialize CUDA
-        unsafe {
-            cuda_core::init(0).map_err(|_| GemmError::LaunchFailed("CUDA init failed".into()))?;
-        };
-
         // Create context for device 0
-        let ctx = cuda_core::CudaContext::new(0)
-            .map_err(|e| GemmError::LaunchFailed(format!("CUDA context creation failed: {e}")))?;
+        let ctx = CudaContext::new(0)
+            .map_err(|e| GemmError::LaunchFailed(format!("CUDA context creation failed: {e:?}")))?;
 
         // Load PTX from source string
-        let module = ctx
-            .load_module_from_ptx_src(&source.ptx)
-            .map_err(|e| GemmError::LaunchFailed(format!("PTX load failed: {e}")))?;
+        let module = CudaModule::load_from_ptx(&ctx, &source.ptx)
+            .map_err(|e| GemmError::LaunchFailed(format!("PTX load failed: {e:?}")))?;
 
         // Get kernel function
         let function = module
             .load_function(&source.kernel_name)
-            .map_err(|e| GemmError::LaunchFailed(format!("Function lookup failed: {e}")))?;
+            .map_err(|e| GemmError::LaunchFailed(format!("Function lookup failed: {e:?}")))?;
 
         // Create stream
         let stream = ctx
             .new_stream()
-            .map_err(|e| GemmError::LaunchFailed(format!("Stream creation failed: {e}")))?;
+            .map_err(|e| GemmError::LaunchFailed(format!("Stream creation failed: {e:?}")))?;
 
         Ok((ctx, module, function, stream))
     }
@@ -335,86 +313,25 @@ impl GemmKernel for KernelFromPtx {
                 ctx.bind_to_thread()
                     .map_err(|e| GemmError::LaunchFailed(e.to_string()))?;
 
-                // Convert device buffers to cuda-core format
-                let dev_a = if a.is_backed() {
-                    let buf = unsafe {
-                        cuda_core::DeviceBuffer::from_raw_parts(
-                            a.device_ptr() as cuda_core::sys::CUdeviceptr,
-                            a.len(),
-                            ctx.clone(),
-                        )
-                    };
-                    Arc::new(buf)
-                } else {
-                    let buf = cuda_core::DeviceBuffer::from_host(
-                        stream,
-                        a.as_slice().ok_or_else(|| GemmError::BufferSizeMismatch {
-                            expected: a_expected,
-                            got: 0,
-                        })?,
-                    )
-                    .map_err(|e| GemmError::LaunchFailed(format!("H2D alloc failed: {e}")))?;
-                    Arc::new(buf)
-                };
-
-                let dev_b = if b.is_backed() {
-                    let buf = unsafe {
-                        cuda_core::DeviceBuffer::from_raw_parts(
-                            b.device_ptr() as cuda_core::sys::CUdeviceptr,
-                            b.len(),
-                            ctx.clone(),
-                        )
-                    };
-                    Arc::new(buf)
-                } else {
-                    let buf = cuda_core::DeviceBuffer::from_host(
-                        stream,
-                        b.as_slice().ok_or_else(|| GemmError::BufferSizeMismatch {
-                            expected: b_expected,
-                            got: 0,
-                        })?,
-                    )
-                    .map_err(|e| GemmError::LaunchFailed(format!("H2D alloc failed: {e}")))?;
-                    Arc::new(buf)
-                };
-
-                let mut dev_c = if c.is_backed() {
-                    let buf = unsafe {
-                        cuda_core::DeviceBuffer::from_raw_parts(
-                            c.device_ptr() as cuda_core::sys::CUdeviceptr,
-                            c.len(),
-                            ctx.clone(),
-                        )
-                    };
-                    Arc::new(buf)
-                } else {
-                    let buf = cuda_core::DeviceBuffer::from_host(
-                        stream,
-                        c.as_mut_slice()
-                            .ok_or_else(|| GemmError::BufferSizeMismatch {
-                                expected: c_expected,
-                                got: 0,
-                            })?,
-                    )
-                    .map_err(|e| GemmError::LaunchFailed(format!("H2D alloc failed: {e}")))?;
-                    Arc::new(buf)
-                };
-
                 // Calculate grid/block dimensions
                 let (grid_x, grid_y, block_size) = self.get_launch_config(m, n);
 
-                // Build kernel parameters (pointers to buffers)
-                // Note: alpha/beta are passed as scalar values, not pointers
+                // Build kernel parameters
                 let m_val = m as u32;
                 let n_val = n as u32;
                 let k_val = k as u32;
+                let mut alpha_v = alpha;
+                let mut beta_v = beta;
+                let mut a_v: u64 = a.device_ptr();
+                let mut b_v: u64 = b.device_ptr();
+                let mut c_v: u64 = c.device_ptr();
 
-                let mut kernel_params: Vec<*mut std::ffi::c_void> = vec![
-                    &alpha as *const f32 as *mut std::ffi::c_void,
-                    &dev_a as *const _ as *mut std::ffi::c_void,
-                    &dev_b as *const _ as *mut std::ffi::c_void,
-                    &beta as *const f32 as *mut std::ffi::c_void,
-                    &mut dev_c as *mut _ as *mut std::ffi::c_void,
+                let mut kernel_params: [*mut std::ffi::c_void; 8] = [
+                    &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
+                    &mut a_v as *mut u64 as *mut std::ffi::c_void,
+                    &mut b_v as *mut u64 as *mut std::ffi::c_void,
+                    &mut beta_v as *mut f32 as *mut std::ffi::c_void,
+                    &mut c_v as *mut u64 as *mut std::ffi::c_void,
                     &m_val as *const u32 as *mut std::ffi::c_void,
                     &n_val as *const u32 as *mut std::ffi::c_void,
                     &k_val as *const u32 as *mut std::ffi::c_void,
@@ -422,7 +339,8 @@ impl GemmKernel for KernelFromPtx {
 
                 // Launch kernel
                 unsafe {
-                    cuda_core::launch_kernel(
+                    use crate::cuda_shim::launch_kernel;
+                    launch_kernel(
                         func.cu_function(),
                         (grid_x, grid_y, 1),
                         (block_size, 1, 1),
@@ -430,24 +348,13 @@ impl GemmKernel for KernelFromPtx {
                         stream.cu_stream(),
                         &mut kernel_params,
                     )
-                    .map_err(|e| GemmError::LaunchFailed(format!("Kernel launch failed: {e}")))?;
+                    .map_err(|e| GemmError::LaunchFailed(format!("Kernel launch failed: {e:?}")))?;
                 }
 
                 // Synchronize
                 stream
                     .synchronize()
-                    .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e}")))?;
-
-                // Copy result back if c was a host buffer
-                if !c.is_backed() {
-                    if let Ok(host_c) = dev_c.to_host_vec(stream) {
-                        if let Some(slice) = c.as_mut_slice() {
-                            for (i, val) in host_c.iter().enumerate().take(slice.len()) {
-                                slice[i] = *val;
-                            }
-                        }
-                    }
-                }
+                    .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
 
                 return Ok(());
             }

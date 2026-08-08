@@ -205,8 +205,8 @@ impl CudaAttentionKernelBuilder {
     pub fn new(
         _arch: AttentionArch,
         _config: AttentionConfig,
-        _context: std::sync::Arc<cuda_core::CudaContext>,
-        _stream: std::sync::Arc<cuda_core::CudaStream>,
+        _context: std::sync::Arc<cudarc::driver::safe::CudaContext>,
+        _stream: std::sync::Arc<cudarc::driver::safe::CudaStream>,
     ) -> Self {
         Self
     }

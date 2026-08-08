@@ -419,8 +419,8 @@ impl CudaAttentionKernelBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         arch: AttentionArch,
-        _context: std::sync::Arc<cuda_core::CudaContext>,
-        _stream: std::sync::Arc<cuda_core::CudaStream>,
+        _context: std::sync::Arc<cudarc::driver::safe::CudaContext>,
+        _stream: std::sync::Arc<cudarc::driver::safe::CudaStream>,
         _device_info: crate::cuda_runtime::CudaDeviceInfo,
     ) -> Self {
         Self { arch }

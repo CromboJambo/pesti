@@ -12,6 +12,10 @@
 //! RawHandle is a u64 newtype. For CPU it's a slab index, for CUDA it's the
 //! device pointer cast to u64. The backend impl knows how to interpret it.
 
+use cudarc::driver::result::{self, DriverError};
+use cudarc::driver::safe::CudaStream;
+use cudarc::driver::sys;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 /// Opaque handle to memory managed by a MemoryBackend.
@@ -48,6 +52,12 @@ pub enum MemoryError {
 
     #[error("sync failed: {0}")]
     Sync(String),
+}
+
+impl From<DriverError> for MemoryError {
+    fn from(e: DriverError) -> Self {
+        MemoryError::Cuda(format!("{e:?}"))
+    }
 }
 
 /// Byte-level memory backend.
@@ -201,15 +211,15 @@ impl MemoryBackend for CpuMemoryBackend {
     }
 }
 
-/// CUDA-backed memory using cuda-oxide runtime.
+/// CUDA-backed memory using cudarc sys calls.
 pub struct CudaMemoryBackend {
-    stream: std::sync::Arc<cuda_core::CudaStream>,
+    stream: Arc<CudaStream>,
     device_info: crate::cuda_runtime::CudaDeviceInfo,
     enabled: bool,
 }
 
 impl CudaMemoryBackend {
-    pub fn new(stream: std::sync::Arc<cuda_core::CudaStream>) -> Self {
+    pub fn new(stream: Arc<CudaStream>) -> Self {
         // Try to get device info from the stream's context
         let device_info = crate::cuda_runtime::CudaDeviceInfo {
             ordinal: 0,
@@ -219,26 +229,15 @@ impl CudaMemoryBackend {
             free_memory: 0,
         };
 
-        // Try to initialize CUDA driver
-        let enabled = unsafe {
-            match cuda_core::init(0) {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!(error = %e, "CUDA init failed (backend disabled)");
-                    false
-                }
-            }
-        };
-
         Self {
             stream,
             device_info,
-            enabled,
+            enabled: true,
         }
     }
 
     pub fn with_device_info(
-        stream: std::sync::Arc<cuda_core::CudaStream>,
+        stream: Arc<CudaStream>,
         device_info: crate::cuda_runtime::CudaDeviceInfo,
     ) -> Self {
         Self {
@@ -286,10 +285,9 @@ impl MemoryBackend for CudaMemoryBackend {
     fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
         if !self.enabled {
             tracing::info!("CUDA backend disabled, falling back to host allocation");
-            // Fallback: allocate on CPU and copy (for testing)
             return Err(MemoryError::AllocationFailed {
                 requested: bytes,
-                max: 0, // Signal that GPU is unavailable
+                max: 0,
             });
         }
 
@@ -309,63 +307,68 @@ impl MemoryBackend for CudaMemoryBackend {
             });
         }
 
-        let ptr = unsafe { cuda_core::memory::malloc_async(self.stream.cu_stream(), bytes) }
-            .map_err(|e| {
-                tracing::warn!(error = %e, "cuMemAllocAsync failed");
-                MemoryError::Cuda(format!("cuMemAllocAsync: {}", e))
-            })?;
+        // Allocate device memory using sys call
+        let mut dptr: sys::CUdeviceptr = 0;
+        unsafe {
+            sys::cuMemAlloc_v2(&mut dptr, bytes)
+                .result()
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "cuMemAlloc_v2 failed");
+                    MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
+                })?;
+        }
 
-        Ok(RawHandle(ptr as u64))
+        Ok(RawHandle(dptr))
     }
 
     fn free(&self, handle: RawHandle) -> Result<(), MemoryError> {
-        let ptr = handle.as_u64() as cuda_core::sys::CUdeviceptr;
+        let ptr = handle.as_u64();
         if ptr == 0 {
             return Ok(());
         }
-        unsafe { cuda_core::memory::free_async(ptr, self.stream.cu_stream()) }
-            .map_err(|e| MemoryError::Cuda(format!("cuMemFreeAsync failed: {e}")))
+        unsafe {
+            sys::cuMemFree_v2(ptr)
+                .result()
+                .map_err(|e| MemoryError::Cuda(format!("cuMemFree_v2 failed: {e:?}")))
+        }
     }
 
     fn h2d(&self, src: &[u8], dst: RawHandle) -> Result<(), MemoryError> {
-        let dst_ptr = dst.as_u64() as cuda_core::sys::CUdeviceptr;
+        let dst_ptr = dst.as_u64();
         unsafe {
-            cuda_core::memory::memcpy_htod_async::<u8>(
-                dst_ptr,
-                src.as_ptr(),
-                src.len(),
-                self.stream.cu_stream(),
-            )
+            sys::cuMemcpyHtoD_v2(dst_ptr, src.as_ptr() as *const std::ffi::c_void, src.len())
+                .result()
+                .map_err(|e| MemoryError::Transfer(format!("H2D copy failed: {e:?}")))
         }
-        .map_err(|e| MemoryError::Transfer(format!("H2D copy failed: {e}")))
     }
 
     fn d2h(&self, src: RawHandle, dst: &mut [u8]) -> Result<(), MemoryError> {
-        let src_ptr = src.as_u64() as cuda_core::sys::CUdeviceptr;
+        let src_ptr = src.as_u64();
         unsafe {
-            cuda_core::memory::memcpy_dtoh_async::<u8>(
-                dst.as_mut_ptr(),
+            sys::cuMemcpyDtoH_v2(
+                dst.as_mut_ptr() as *mut std::ffi::c_void,
                 src_ptr,
                 dst.len(),
-                self.stream.cu_stream(),
             )
+            .result()
+            .map_err(|e| MemoryError::Transfer(format!("D2H copy failed: {e:?}")))
         }
-        .map_err(|e| MemoryError::Transfer(format!("D2H copy failed: {e}")))
     }
 
     fn d2d(&self, src: RawHandle, dst: RawHandle, bytes: usize) -> Result<(), MemoryError> {
-        let src_ptr = src.as_u64() as cuda_core::sys::CUdeviceptr;
-        let dst_ptr = dst.as_u64() as cuda_core::sys::CUdeviceptr;
+        let src_ptr = src.as_u64();
+        let dst_ptr = dst.as_u64();
         unsafe {
-            cuda_core::memory::memcpy_dtod_async(dst_ptr, src_ptr, bytes, self.stream.cu_stream())
+            sys::cuMemcpyDtoD_v2(dst_ptr, src_ptr, bytes)
+                .result()
+                .map_err(|e| MemoryError::Transfer(format!("D2D copy failed: {e:?}")))
         }
-        .map_err(|e| MemoryError::Transfer(format!("D2D copy failed: {e}")))
     }
 
     fn sync(&self) -> Result<(), MemoryError> {
         self.stream
             .synchronize()
-            .map_err(|e| MemoryError::Cuda(format!("Stream sync failed: {e}")))
+            .map_err(|e| MemoryError::Cuda(format!("Stream sync failed: {e:?}")))
     }
 }
 
@@ -381,28 +384,10 @@ impl MemoryManager {
     /// Create a MemoryManager, preferring CUDA if available.
     pub fn new() -> Self {
         if crate::cuda_runtime::is_available() {
-            unsafe {
-                match cuda_core::init(0) {
-                    Ok(_) => match cuda_core::CudaContext::new(0) {
-                        Ok(ctx) => match ctx.new_stream() {
-                            Ok(stream) => {
-                                let rt = crate::cuda_runtime::CudaRuntime::for_default_device();
-                                match rt {
-                                    Ok(cuda_rt) => {
-                                        let device_info = cuda_rt.device_info().clone();
-                                        return Self::Cuda(CudaMemoryBackend::with_device_info(
-                                            stream.clone(),
-                                            device_info,
-                                        ));
-                                    }
-                                    Err(_) => {}
-                                }
-                            }
-                            Err(_) => {}
-                        },
-                        Err(_) => {}
-                    },
-                    Err(_) => {}
+            if let Ok(rt) = crate::cuda_runtime::CudaRuntime::for_default_device() {
+                if let Ok(stream) = rt.new_stream() {
+                    let device_info = rt.device_info().clone();
+                    return Self::Cuda(CudaMemoryBackend::with_device_info(stream, device_info));
                 }
             }
         }
@@ -410,7 +395,7 @@ impl MemoryManager {
     }
 
     /// Try to create a MemoryManager with explicit CUDA.
-    pub fn with_cuda(stream: std::sync::Arc<cuda_core::CudaStream>) -> Self {
+    pub fn with_cuda(stream: Arc<CudaStream>) -> Self {
         Self::Cuda(CudaMemoryBackend::new(stream))
     }
 

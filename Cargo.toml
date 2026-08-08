@@ -6,7 +6,7 @@ members = [
     "pesti-safetensors",
     "pesti-gguf-cli",
 ]
-exclude = ["test_ggml_quants"]
+exclude = ["test_ggml_quants", "cuda-oxide"]
 resolver = "2"
 
 [workspace.lints.rust]

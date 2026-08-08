@@ -1,12 +1,15 @@
 //! Inference engine for tensor computation.
 //!
-//! actual tensor computation layer. separate from PESTI host.
+//! Actual tensor computation layer. Separate from PESTI host.
+//!
+//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use crate::error::RunnerError;
 use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
+use std::sync::Arc;
 use tracing::warn;
 
 // Import InertiaManager for computational inertia support
@@ -35,7 +38,7 @@ pub struct InferenceEngine {
     cuda_runtime: Option<Arc<crate::cuda_runtime::CudaRuntime>>,
     /// CUDA stream for async operations.
     #[cfg(feature = "cuda")]
-    stream: Option<Arc<cuda_core::CudaStream>>,
+    stream: Option<Arc<cudarc::driver::safe::CudaStream>>,
     /// Memory manager for allocating device/host buffers.
     memory_manager: crate::kernel::MemoryManager,
     /// Backup CPU GEMM kernel for runtime fallback.
@@ -322,7 +325,7 @@ impl InferenceEngine {
 
     /// Get the CUDA stream for device operations.
     #[cfg(feature = "cuda")]
-    fn get_stream(&self) -> Option<&Arc<cuda_core::CudaStream>> {
+    fn get_stream(&self) -> Option<&Arc<cudarc::driver::safe::CudaStream>> {
         self.stream.as_ref()
     }
 
@@ -504,64 +507,31 @@ impl InferenceEngine {
             }
             Err(e) => {
                 // GPU failed — try CPU fallback
-                warn!(
-                    error = %e,
-                    "Attention: GPU kernel failed, falling back to CPU"
-                );
-                let num_heads = config.num_heads;
-                let head_dim = config.head_dim;
-                let seq = key_cache.seq_len();
+                warn!(error = %e, "Attention: GPU kernel failed, falling back to CPU");
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|e: crate::kernel::AttentionError| {
-                        // Map kernel error to runner error (using the generic one from error.rs)
-                        let detail = match e {
-                            crate::kernel::AttentionError::LaunchFailed(msg) => {
-                                crate::error::AttentionError::LaunchFailed(msg)
-                            }
-                            crate::kernel::AttentionError::NotAvailable => {
-                                crate::error::AttentionError::NotAvailable
-                            }
-                            _ => crate::error::AttentionError::LaunchFailed(e.to_string()),
-                        };
-                        RunnerError::Attention {
-                            num_heads,
-                            head_dim,
-                            seq,
-                            detail,
-                        }
-                    })
+                    .map_err(|e| RunnerError::Tensor(format!("Attention CPU fallback failed: {e}")))
             }
         }
     }
 
-    /// Get the attention kernel's target architecture.
-    pub fn attention_arch(&self) -> crate::kernel::AttentionArch {
-        self.attention.arch()
+    /// Get a description of the backend.
+    pub fn backend_description(&self) -> String {
+        if self.gpu_available() {
+            let desc = self.gemm.arch().name();
+            format!("GPU ({desc})")
+        } else {
+            "CPU".to_string()
+        }
     }
 
-    /// Check if the attention kernel is available on this system.
+    /// Check if attention kernel is available.
     pub fn attention_available(&self) -> bool {
         self.attention.is_available()
     }
 
-    /// List available CUDA devices.
-    #[cfg(feature = "cuda")]
-    pub fn list_devices() -> Result<Vec<crate::cuda_runtime::CudaDeviceInfo>, RunnerError> {
-        crate::cuda_runtime::enumerate_devices().map_err(|e| RunnerError::Device(e.to_string()))
-    }
-
-    /// Get a description of the active inference backend.
-    pub fn backend_description(&self) -> String {
-        #[cfg(feature = "cuda")]
-        if self.gpu_gemm {
-            return format!(
-                "GPU ({})",
-                self.full_device_info()
-                    .unwrap_or_else(|_| "unknown".to_string())
-            );
-        }
-
-        "CPU (reference)".to_string()
+    /// Get attention architecture.
+    pub fn attention_arch(&self) -> crate::kernel::AttentionArch {
+        self.attention.arch()
     }
 }

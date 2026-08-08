@@ -1,14 +1,14 @@
 //! CUDA runtime: context management, device enumeration, compute capability detection.
 //!
-//! Wraps cuda-oxide's `CudaContext` to provide a stable interface for the inference
+//! Wraps `cudarc` to provide a stable interface for the inference
 //! engine's GPU path. Handles initialization, device discovery, and error propagation.
+//!
+//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use cuda_core::{CudaContext, IntoResult};
+use cudarc::driver::safe::{CudaContext, CudaStream};
+use cudarc::driver::sys;
 use std::sync::Arc;
-use tracing::{debug, warn};
-
-// Re-export cuda_bindings through cuda_core
-use cuda_core::sys as cuda_sys;
+use tracing::warn;
 
 /// Error type for CUDA runtime operations.
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +33,12 @@ pub enum CudaError {
 
     #[error("CUDA not available on this system")]
     NotAvailable,
+}
+
+impl From<cudarc::driver::result::DriverError> for CudaError {
+    fn from(e: cudarc::driver::result::DriverError) -> Self {
+        CudaError::DriverError(format!("{e:?}"))
+    }
 }
 
 /// Information about a single CUDA device.
@@ -74,12 +80,12 @@ impl CudaDeviceInfo {
     }
 }
 
-/// A live CUDA context for a specific device.
+/// A live CUDA runtime for a specific device.
 ///
 /// Wraps `Arc<CudaContext>` and tracks the device ordinal for routing.
 #[derive(Debug, Clone)]
 pub struct CudaRuntime {
-    /// The underlying cuda-oxide context.
+    /// The underlying cudarc context.
     ctx: Arc<CudaContext>,
     /// Device ordinal.
     ordinal: usize,
@@ -94,82 +100,34 @@ impl CudaRuntime {
     /// device properties. Returns `CudaError::NotAvailable` if the device
     /// cannot be found or the driver fails to initialize.
     pub fn new(ordinal: usize) -> Result<Self, CudaError> {
-        // Initialize CUDA driver
-        unsafe {
-            cuda_core::init(0).map_err(|e| CudaError::NotInitialized(e.to_string()))?;
-        };
-
-        // Get device handle
-        let cu_device = unsafe {
-            let mut device = std::mem::MaybeUninit::uninit();
-            cuda_sys::cuDeviceGet(device.as_mut_ptr(), ordinal as i32)
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable { ordinal })?;
-            device.assume_init()
-        };
+        // Create context for the specified device
+        let ctx = CudaContext::new(ordinal)
+            .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))?;
 
         // Get device name
-        let mut name_buf = [0i8; 256];
-        unsafe {
-            cuda_sys::cuDeviceGetName(name_buf.as_mut_ptr(), name_buf.len() as i32, cu_device)
-        };
-        let name: String = name_buf
-            .iter()
-            .take_while(|&&c| c != 0)
-            .map(|&c| c as u8)
-            .collect::<Vec<u8>>()
-            .into_iter()
-            .map(|b| b as char)
-            .collect();
+        let name = ctx.name()
+            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
         // Get compute capability
-        let mut major = std::mem::MaybeUninit::uninit();
-        let mut minor = std::mem::MaybeUninit::uninit();
-        unsafe {
-            cuda_sys::cuDeviceGetAttribute(
-                major.as_mut_ptr(),
-                cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-                cu_device,
-            )
-            .result()
-            .map_err(|_| CudaError::DeviceUnavailable { ordinal })?;
-            cuda_sys::cuDeviceGetAttribute(
-                minor.as_mut_ptr(),
-                cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-                cu_device,
-            )
-            .result()
-            .map_err(|_| CudaError::DeviceUnavailable { ordinal })?;
-        }
-        let (major, minor) = unsafe { (major.assume_init(), minor.assume_init()) };
+        let (major, minor) = ctx.compute_capability()
+            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
-        // Retain primary context and bind it to this thread BEFORE querying
-        // device memory: cuMemGetInfo_v2 requires a current context.
-        let ctx =
-            CudaContext::new(ordinal).map_err(|e| CudaError::ContextCreation(e.to_string()))?;
-
-        // Get memory info (valid only after a context is current on this thread)
-        let (free_memory, total_memory) = unsafe {
-            let mut free: usize = 0;
-            let mut total: usize = 0;
-            cuda_sys::cuMemGetInfo_v2(&mut free, &mut total)
-                .result()
-                .map_err(|_| CudaError::DeviceUnavailable { ordinal })?;
-            (free as u64, total as u64)
-        };
+        // Get memory info
+        let (free_memory, total_memory) = ctx.mem_get_info()
+            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
         let device_info = CudaDeviceInfo {
             ordinal,
             name: name.clone(),
             compute_capability: (major, minor),
-            total_memory,
-            free_memory,
+            total_memory: total_memory as u64,
+            free_memory: free_memory as u64,
         };
 
-        debug!(
+        tracing::debug!(
             ordinal,
             name = %device_info.name,
-            cc = "%d.%d", major, minor,
+            cc = format!("{}.{}", major, minor),
             "CUDA runtime: initialized device"
         );
 
@@ -185,7 +143,7 @@ impl CudaRuntime {
         Self::new(0)
     }
 
-    /// Returns the underlying cuda-oxide context.
+    /// Returns the underlying cudarc context.
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.ctx
     }
@@ -201,22 +159,22 @@ impl CudaRuntime {
     }
 
     /// Create a new non-blocking stream in this context.
-    pub fn new_stream(&self) -> Result<Arc<cuda_core::CudaStream>, CudaError> {
-        self.ctx
-            .new_stream()
-            .map_err(|e| CudaError::ContextCreation(e.to_string()))
+    pub fn new_stream(&self) -> Result<Arc<CudaStream>, CudaError> {
+        self.ctx.new_stream()
+            .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))
     }
 
     /// Synchronize the context (blocks until all pending work completes).
     pub fn synchronize(&self) -> Result<(), CudaError> {
-        self.ctx
-            .synchronize()
-            .map_err(|e| CudaError::ContextCreation(e.to_string()))
+        // cudarc streams handle synchronization
+        self.ctx.synchronize()
+            .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))
     }
 
     /// Check if this runtime is still valid (context not destroyed).
     pub fn is_valid(&self) -> bool {
-        !self.ctx.cu_ctx().is_null()
+        // cudarc handles this via Arc strong count
+        Arc::strong_count(&self.ctx) > 0
     }
 }
 
@@ -290,109 +248,38 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
         }
     }
 
-    // Fallback to driver API if NVML fails or returns empty
+    // Fallback to cudarc context API
     #[cfg(feature = "cuda")]
     {
-        unsafe {
-            cuda_core::init(0).map_err(|_| CudaError::NotAvailable)?;
-        };
+        let mut devices = Vec::new();
+        let mut ordinal = 0;
 
-        let mut device_count: i32 = 0;
-        unsafe {
-            cuda_sys::cuDeviceGetCount(&mut device_count)
-                .result()
-                .map_err(|_| CudaError::NotAvailable)?;
-        };
+        loop {
+            match CudaContext::new(ordinal) {
+                Ok(ctx) => {
+                    let name = ctx.name().unwrap_or_default();
+                    let cc = ctx.compute_capability().unwrap_or((0, 0));
+                    let (free, total) = ctx.mem_get_info().unwrap_or((0, 0));
 
-        if device_count == 0 {
-            return Ok(Vec::new());
+                    devices.push(CudaDeviceInfo {
+                        ordinal,
+                        name,
+                        compute_capability: cc,
+                        total_memory: total as u64,
+                        free_memory: free as u64,
+                    });
+                    ordinal += 1;
+                }
+                Err(_) => break,
+            }
         }
 
-        let mut devices = Vec::with_capacity(device_count as usize);
-
-        for ordinal in 0..device_count {
-            // Get device handle
-            let cu_device = match unsafe {
-                let mut device = std::mem::MaybeUninit::uninit();
-                cuda_sys::cuDeviceGet(device.as_mut_ptr(), ordinal)
-                    .result()
-                    .map_err(|_| CudaError::DeviceUnavailable {
-                        ordinal: ordinal as usize,
-                    })?;
-                Ok::<i32, CudaError>(device.assume_init())
-            } {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!(ordinal, "CUDA device enumeration skipped: {e}");
-                    continue;
-                }
-            };
-
-            // Get device name
-            let mut name_buf = [0i8; 256];
-            unsafe {
-                cuda_sys::cuDeviceGetName(name_buf.as_mut_ptr(), name_buf.len() as i32, cu_device)
-            };
-            let name: String = name_buf
-                .iter()
-                .take_while(|&&c| c != 0)
-                .map(|&c| c as u8)
-                .collect::<Vec<u8>>()
-                .into_iter()
-                .map(|b| b as char)
-                .collect();
-
-            // Get compute capability
-            let (major, minor) = {
-                let mut m = std::mem::MaybeUninit::uninit();
-                let mut n = std::mem::MaybeUninit::uninit();
-                unsafe {
-                    cuda_sys::cuDeviceGetAttribute(
-                        m.as_mut_ptr(),
-                        cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-                        cu_device,
-                    )
-                    .result()
-                    .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
-                    cuda_sys::cuDeviceGetAttribute(
-                        n.as_mut_ptr(),
-                        cuda_sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-                        cu_device,
-                    )
-                    .result()
-                    .map_err(|_| CudaError::DeviceUnavailable { ordinal: ordinal as usize })?;
-                    (m.assume_init(), n.assume_init())
-                }
-            };
-
-            // Get memory info
-            let (free_memory, total_memory) = unsafe {
-                let mut free: usize = 0;
-                let mut total: usize = 0;
-                cuda_sys::cuMemGetInfo_v2(&mut free, &mut total)
-                    .result()
-                    .map_err(|_| CudaError::DeviceUnavailable {
-                        ordinal: ordinal as usize,
-                    })?;
-                (free as u64, total as u64)
-            };
-
-            devices.push(CudaDeviceInfo {
-                ordinal: ordinal as usize,
-                name,
-                compute_capability: (major, minor),
-                total_memory,
-                free_memory,
-            });
+        if !devices.is_empty() {
+            return Ok(devices);
         }
-
-        Ok(devices)
     }
 
-    #[cfg(not(feature = "cuda"))]
-    {
-        Ok(Vec::new())
-    }
+    Ok(Vec::new())
 }
 
 /// Select the best device for a model of the given size.
@@ -446,16 +333,18 @@ pub fn is_available() -> bool {
         }
     }
 
-    // Fallback to driver API if NVML fails
-    enumerate_devices().is_ok() && !enumerate_devices().unwrap_or_default().is_empty()
+    // Fallback to cudarc
+    enumerate_devices().map(|d| !d.is_empty()).unwrap_or(false)
 }
 
 /// Get the number of CUDA devices.
 pub fn device_count() -> usize {
     let mut count: i32 = 0;
-    match unsafe { cuda_sys::cuDeviceGetCount(&mut count).result() } {
-        Ok(_) => count as usize,
-        Err(_) => 0,
+    let result = unsafe { sys::cuDeviceGetCount(&mut count) };
+    if result == sys::CUresult::CUDA_SUCCESS {
+        count as usize
+    } else {
+        0
     }
 }
 
@@ -467,11 +356,11 @@ pub fn device_count() -> usize {
 ///
 /// Wraps `cuMemAlloc_v2` to provide a safe interface for GPU buffer allocation.
 pub fn allocate_device_memory(size_in_bytes: usize) -> Result<*mut u8, CudaError> {
-    let mut dptr: u64 = 0;
+    let mut dptr: sys::CUdeviceptr = 0;
     unsafe {
-        cuda_sys::cuMemAlloc_v2(&mut dptr, size_in_bytes)
+        sys::cuMemAlloc_v2(&mut dptr, size_in_bytes)
             .result()
-            .map_err(|e| CudaError::DriverError(format!("{:?}", e)))?;
+            .map_err(|e| CudaError::DriverError(format!("{e:?}")))?;
         Ok(dptr as *mut u8)
     }
 }
@@ -481,9 +370,9 @@ pub fn allocate_device_memory(size_in_bytes: usize) -> Result<*mut u8, CudaError
 /// Wraps `cuMemFree_v2` to release previously allocated GPU buffers.
 pub fn free_device_memory(ptr: *mut u8) -> Result<(), CudaError> {
     unsafe {
-        cuda_sys::cuMemFree_v2(ptr as u64)
+        sys::cuMemFree_v2(ptr as sys::CUdeviceptr)
             .result()
-            .map_err(|e| CudaError::DriverError(format!("{:?}", e)))?;
+            .map_err(|e| CudaError::DriverError(format!("{e:?}")))?;
         Ok(())
     }
 }
@@ -496,14 +385,15 @@ pub fn copy_host_to_device(
     src_host_ptr: *const u8,
     size_in_bytes: usize,
 ) -> Result<(), CudaError> {
+    use std::ffi::c_void;
     unsafe {
-        cuda_sys::cuMemcpyHtoD_v2(
-            dst_device_ptr as u64,
-            src_host_ptr as *const std::os::raw::c_void,
+        sys::cuMemcpyHtoD_v2(
+            dst_device_ptr as sys::CUdeviceptr,
+            src_host_ptr as *const c_void,
             size_in_bytes,
         )
         .result()
-        .map_err(|e| CudaError::DriverError(format!("{:?}", e)))?;
+        .map_err(|e| CudaError::DriverError(format!("{e:?}")))?;
         Ok(())
     }
 }
@@ -516,14 +406,20 @@ pub fn copy_device_to_host(
     src_device_ptr: *const u8,
     size_in_bytes: usize,
 ) -> Result<(), CudaError> {
+    use std::ffi::c_void;
     unsafe {
-        cuda_sys::cuMemcpyDtoH_v2(
-            dst_host_ptr as *mut std::os::raw::c_void,
-            src_device_ptr as u64,
+        sys::cuMemcpyDtoH_v2(
+            dst_host_ptr as *mut c_void,
+            src_device_ptr as sys::CUdeviceptr,
             size_in_bytes,
         )
         .result()
-        .map_err(|e| CudaError::DriverError(format!("{:?}", e)))?;
+        .map_err(|e| CudaError::DriverError(format!("{e:?}")))?;
         Ok(())
     }
 }
+
+/// Trait extension for CUresult to provide `.result()` method.
+/// This mirrors cuda-oxide's `IntoResult` trait.
+/// Re-exported from cuda_shim.
+pub use crate::cuda_shim::IntoResult;

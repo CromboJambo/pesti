@@ -238,7 +238,7 @@ impl<T> DeviceBuffer<T> {
     /// Convenience: allocate device memory from a CudaStream (no full backend needed).
     #[cfg(feature = "cuda")]
     pub fn from_cuda_stream(
-        stream: &std::sync::Arc<cuda_core::CudaStream>,
+        stream: &std::sync::Arc<cudarc::driver::safe::CudaStream>,
         data: &[T],
     ) -> Result<Self, DeviceBufferError>
     where

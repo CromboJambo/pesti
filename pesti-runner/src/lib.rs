@@ -2,9 +2,13 @@
 //!
 //! Separate workspace member that eventually becomes independent.
 //! Interface boundary: consumes WeightManifest from safetensors, emits InferenceResponse to guard.
+//!
+//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
+#[cfg(feature = "cuda")]
+pub mod cuda_shim;
 #[cfg(not(feature = "cuda"))]
 pub mod cuda_stub;
 pub mod dequantize;
