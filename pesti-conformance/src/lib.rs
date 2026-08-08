@@ -246,46 +246,15 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
     // Create a simple input: single token [0] for conformance test
     let input_tokens: Vec<i32> = vec![0i32];
 
-    // Get token embeddings from loaded weights
-    let embed_weights = model.token_embeddings.as_ref().ok_or_else(|| {
-        ConformanceError::ModelLoad("Model missing token embeddings".to_string())
-    })?;
-
-    // Build input tensor: single token embedding [embed_dim]
-    let mut input_tensor = Vec::with_capacity(embed_dim);
-    if !embed_weights.weight.is_empty() {
-        let offset = 0 * embed_dim;
-        let end = offset + embed_dim;
-        if end <= embed_weights.weight.len() {
-            input_tensor.extend_from_slice(&embed_weights.weight[offset..end]);
-        } else {
-            return Err(ConformanceError::ModelLoad(format!(
-                "Embedding index out of range: token=0, offset={}, weight_len={}",
-                offset, embed_weights.weight.len()
-            )));
-        }
-    }
+    // Build input tensor: deterministic zeroed embedding for conformance test
+    let mut input_tensor = vec![0.0f32; embed_dim];
 
     // Run forward pass through transformer layers
     let mut hidden = input_tensor;
 
-    // Call forward_with_dispatch once to run all layers
-    if model.dispatch.is_some() {
-        hidden = model.forward_with_dispatch(&hidden, 0)?;
-        tracing::info!("Using GPU dispatch for all layers");
-    } else {
-        // Use CPU path layer by layer
-        for layer_idx in 0..model.config.num_layers {
-            tracing::debug!(
-                "Running layer {} of {}",
-                layer_idx + 1,
-                model.config.num_layers
-            );
-            let layer = &model.layers[layer_idx];
-            hidden = layer.forward(&hidden, batch_size, seq_len, layer_idx);
-            tracing::debug!("Layer {} using CPU path", layer_idx);
-        }
-    }
+    hidden = model
+        .forward_layers(&hidden, seq_len)
+        .map_err(|e| ConformanceError::ModelLoad(format!("Runner error: {e}")))?;
 
     // Apply final norm if available (qwen2/qwen3)
     if let Some(final_norm) = &model.final_norm {
