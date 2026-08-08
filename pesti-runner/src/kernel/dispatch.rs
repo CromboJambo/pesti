@@ -535,7 +535,7 @@ impl DispatchContext {
     /// List available devices.
     #[cfg(feature = "cuda")]
     pub fn list_devices(&self) -> Vec<crate::cuda_runtime::CudaDeviceInfo> {
-        InferenceEngine::list_devices().unwrap_or_default()
+        crate::cuda_runtime::enumerate_devices().unwrap_or_default()
     }
 }
 

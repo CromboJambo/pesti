@@ -12,7 +12,6 @@
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
 use half::f16;
-use std::simd::prelude::*;
 
 /// Attention architecture selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,26 +197,12 @@ impl AttentionKernel for CpuAttentionKernel {
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
         let mut scores = vec![0.0f32; query_seq_len * num_heads * n];
 
-        // SIMD inner product helper: process 8 elements at a time
+        // SIMD inner product helper (requires nightly Rust)
+        // For now, use scalar fallback for stable compatibility
         #[inline]
         fn simd_dot_product(q_slice: &[f32], k_slice: &[f32], head_dim: usize) -> f32 {
-            const LANES: usize = 8;
-
-            let mut sum = 0.0f32;
-            let simd_len = (head_dim / LANES) * LANES;
-
-            for i in (0..simd_len).step_by(LANES) {
-                let q_vec = f32x8::from_slice(&q_slice[i..]);
-                let k_vec = f32x8::from_slice(&k_slice[i..]);
-                sum += (q_vec * k_vec).reduce_sum();
-            }
-
-            // Handle remainder
-            for i in simd_len..head_dim {
-                sum += q_slice[i] * k_slice[i];
-            }
-
-            sum
+            // Scalar fallback - no SIMD lanes
+            q_slice.iter().zip(k_slice.iter()).map(|(a, b)| a * b).sum()
         }
 
         for qs in 0..query_seq_len {
@@ -259,7 +244,8 @@ impl AttentionKernel for CpuAttentionKernel {
         // Step 3: Softmax @ V -> output [query_seq_len, num_heads, head_dim]
         let mut output = vec![0.0f32; query_seq_len * num_heads * head_dim];
 
-        // SIMD vectorized dot product for softmax @ V (8 lanes)
+        // SIMD vectorized dot product for softmax @ V (requires nightly)
+        // For now, use scalar fallback for stable compatibility
         #[inline]
         fn simd_softmax_v_dot(
             softmax_row: &[f32],
@@ -268,31 +254,10 @@ impl AttentionKernel for CpuAttentionKernel {
             head_dim: usize,
             d: usize,
         ) -> f32 {
-            const LANES: usize = 8;
-
-            let mut sum = 0.0f32;
-            let simd_len = (n / LANES) * LANES;
-
-            for i in (0..simd_len).step_by(LANES) {
-                let s_vec = f32x8::from_slice(&softmax_row[i..]);
-                let v_start = i * head_dim + d;
-                // Load V values - note: may need to handle unaligned access for non-multiple-of-8 dims
-                let mut v_vals = [0.0f32; LANES];
-                for j in 0..LANES {
-                    if i + j < n {
-                        v_vals[j] = v_slice[v_start + j * head_dim];
-                    }
-                }
-                let v_vec = f32x8::from_array(v_vals);
-                sum += (s_vec * v_vec).reduce_sum();
-            }
-
-            // Handle remainder
-            for i in simd_len..n {
-                sum += softmax_row[i] * v_slice[i * head_dim + d];
-            }
-
-            sum
+            // Scalar fallback - no SIMD lanes
+            (0..n)
+                .map(|i| softmax_row[i] * v_slice[i * head_dim + d])
+                .sum()
         }
 
         for qs in 0..query_seq_len {

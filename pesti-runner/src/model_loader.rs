@@ -13,6 +13,9 @@ pub trait GgufHeaderExt {
     fn attention_head_count_kv(&self) -> Option<u32>;
     fn rope_dimension_count(&self) -> Option<i32>;
     fn normalization_epsilon(&self) -> Option<f32>;
+    fn vocab_size(&self) -> u32;
+    fn get_kv_f32(&self, key: &str) -> Option<f32>;
+    fn get_kv_bool(&self, key: &str) -> Option<bool>;
 }
 
 impl GgufHeaderExt for GgufHeader {
@@ -36,6 +39,26 @@ impl GgufHeaderExt for GgufHeader {
                     .find(|kv| kv.key == "norm_eps")
                     .and_then(|kv| kv.value.as_f32())
             })
+    }
+
+    fn vocab_size(&self) -> u32 {
+        self.get_kv_u32("tokenizer.ggml.vocab_size")
+            .or_else(|| self.get_kv_u32("tokenizer.ggml.tokens"))
+            .unwrap_or(32000)
+    }
+
+    fn get_kv_f32(&self, key: &str) -> Option<f32> {
+        self.kv_pairs
+            .iter()
+            .find(|kv| kv.key == key)
+            .and_then(|kv| kv.value.as_f32())
+    }
+
+    fn get_kv_bool(&self, key: &str) -> Option<bool> {
+        self.kv_pairs
+            .iter()
+            .find(|kv| kv.key == key)
+            .and_then(|kv| kv.value.as_bool())
     }
 }
 

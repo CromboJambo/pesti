@@ -70,7 +70,7 @@ impl LlamaConfig {
             .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
             as usize;
         let num_heads =
-            pesti_gguf::parser::get_kv_u32(&header, "attention.head_count").unwrap_or(32) as usize;
+            header.get_kv_u32("attention.head_count").unwrap_or(32) as usize;
 
         let num_kv_heads = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
@@ -93,9 +93,10 @@ impl LlamaConfig {
                 ModelArch::Qwen2 | ModelArch::Qwen3 => "blk.0.attn_k.weight".to_string(),
                 _ => format!("layers.0.attention.wk.weight"),
             };
-            if let Some(k_tensor) = header.get_tensor(&k_name) {
-                if k_tensor.shape.len() >= 2 {
-                    let kv_dim = k_tensor.shape[1] as usize;
+            // Use gguf_model_loader's get_tensor_byte_range helper
+            if let Some(tensor_info) = header.tensors.iter().find(|t| t.name == k_name) {
+                if tensor_info.shape.len() >= 2 {
+                    let kv_dim = tensor_info.shape[1] as usize;
                     let inferred = kv_dim / num_kv_heads;
                     if inferred > 0 && inferred != head_dim {
                         tracing::info!(
@@ -114,7 +115,10 @@ impl LlamaConfig {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
                 .get_kv_u32(&format!("{arch_str}.feed_forward_length"))
                 .unwrap_or(11008) as usize,
-            _ => header.feed_forward_length().unwrap_or(11008) as usize,
+            _ => header
+                .get_kv_u32("llama.feed_forward_length")
+                .or_else(|| header.get_kv_u32("general.architecture.ffn_size"))
+                .unwrap_or(11008) as usize,
         };
         let max_seq_len = header.context_length().unwrap_or(4096) as usize;
         let rope_base = 10000.0;
@@ -364,7 +368,7 @@ impl LlamaModel {
         let header = &weights.header;
         let config = LlamaConfig::from_gguf_header(header)?;
 
-        let vocab_size = header.vocab_size().unwrap_or(32000);
+        let vocab_size = header.vocab_size();
         let rope_config = RopeConfig::new(config.head_dim, config.rope_base, config.max_seq_len);
 
         // Load token embeddings — architecture-dependent name

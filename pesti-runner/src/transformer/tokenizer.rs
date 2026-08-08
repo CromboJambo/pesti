@@ -12,6 +12,7 @@ use tokenizers::tokenizer::{Result, Tokenizer};
 use tracing::debug;
 
 use crate::error::RunnerError;
+use crate::model_loader::GgufHeaderExt;
 
 /// GGUF tokenizer configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -47,7 +48,7 @@ impl GgufTokenizerConfig {
             .get_kv_str("tokenizer.ggml.model")
             .unwrap_or("llama")
             .to_string();
-        let vocab_size = header.vocab_size().unwrap_or(32000);
+        let vocab_size = header.vocab_size();
 
         // Load added tokens from GGUF
         let mut added_tokens = HashMap::new();
@@ -71,8 +72,7 @@ impl GgufTokenizerConfig {
             })
             .collect();
 
-        let pre_tokenizer_type = header
-            .get_kv_str("tokenizer.ggml.pre")
+        let pre_tokenizer_type = header            .get_kv_str("tokenizer.ggml.pre")
             .map(|s| s.to_string());
 
         let post_processor_type = header
