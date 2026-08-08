@@ -197,6 +197,7 @@ impl GemmKernel for CpuGemmKernel {
 
 #[cfg(feature = "cuda")]
 /// CUDA implementation for GEMM kernel using cudarc.
+#[derive(Clone)]
 pub struct CudaGemmKernel {
     arch: GemmArch,
     context: Arc<CudaContext>,
