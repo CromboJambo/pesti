@@ -11,7 +11,7 @@
 //! kernel must select GemmArch::Mma (mma.sync).
 
 use half::f16;
-use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::CudaRuntime;
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::memory::CudaMemoryBackend;
 use pesti_runner::kernel::{CudaGemmKernelBuilder, GemmArch, GemmError, GemmKernel, MemoryBackend};

@@ -7,7 +7,7 @@
 //!   cargo run --package pesti-runner --features cuda --example test_gemm_attention
 
 use half::f16;
-use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::CudaRuntime;
 use pesti_runner::kernel::Kvcache;
 use pesti_runner::kernel::attention::{AttentionConfig, AttentionKernel, GemmBasedAttentionKernel};
 use pesti_runner::kernel::device_buf::DeviceBuffer;

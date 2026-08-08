@@ -73,8 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match Device::cuda_if_available(0) {
             Ok(_) => {
-                use pesti_runner::cuda_runtime;
-                match cuda_runtime::enumerate_devices() {
+                use pesti_runner::enumerate_devices;
+                match enumerate_devices() {
                     Ok(devices) => {
                         for dev in &devices {
                             println!(

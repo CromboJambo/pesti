@@ -7,7 +7,7 @@
 //!   cargo run --package pesti-runner --features cuda --example attention_cpu_vs_gpu
 
 use half::f16;
-use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::CudaRuntime;
 use pesti_runner::kernel::Kvcache;
 use pesti_runner::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel, GemmBasedAttentionKernel,
@@ -89,7 +89,7 @@ fn run_benchmark(
     );
 
     // --- GPU benchmark ---
-    let devices = pesti_runner::cuda_runtime::enumerate_devices().unwrap_or_default();
+    let devices = pesti_runner::enumerate_devices().unwrap_or_default();
     if devices.is_empty() {
         println!("  GPU:  No CUDA devices found, skipping GPU benchmark");
         return Ok(());
