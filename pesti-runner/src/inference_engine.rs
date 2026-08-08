@@ -9,7 +9,6 @@ use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
-use std::sync::Arc;
 use tracing::warn;
 
 // Import InertiaManager for computational inertia support

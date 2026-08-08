@@ -4,7 +4,6 @@ use crate::schema::TensorMetadataRow;
 use pesti_gguf::parser::parse_gguf;
 use pesti_gguf::types::{GgufDtype, GgufHeader, GgufTensorInfo};
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::Path;
 
 /// Result of loading a GGUF model.

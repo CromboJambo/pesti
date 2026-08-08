@@ -3,12 +3,11 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use pesti_gguf::parser::parse_gguf;
-use pesti_gguf::types::{GgufDtype, GgufHeader, GgufKvPair, GgufTensorInfo};
+use pesti_gguf::types::{GgufDtype, GgufTensorInfo};
 use safetensors::serialize;
 use safetensors::tensor::{Dtype, TensorView};
 
 // Use half crate from pesti-gguf dependency
-use pesti_gguf::types as gguf_types;
 
 /// Result of a GGUF → safetensors conversion.
 pub struct GgufConversionResult {
