@@ -11,6 +11,9 @@ use candle_nn::Module;
 use half::f16;
 use tracing::warn;
 
+// Import InertiaManager for computational inertia support
+use crate::inertia::InertiaManager;
+
 // Import GEMM trait to ensure CpuGemmKernel methods are in scope
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::gemm_stub::GemmKernel;
@@ -23,7 +26,7 @@ use crate::kernel::AttentionKernel;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::AttentionKernel;
 
-/// Inference engine for tensor computation.
+/// Inference engine for tensor computation with computational inertia support.
 pub struct InferenceEngine {
     pub device: candle_core::Device,
     pub dtype: DType,
@@ -44,6 +47,8 @@ pub struct InferenceEngine {
     /// Whether a real CUDA GEMM kernel was successfully built (cuda feature).
     #[cfg(feature = "cuda")]
     gpu_gemm: bool,
+    /// Computational inertia manager: logs demand when GPU unavailable.
+    inertia_manager: InertiaManager,
 }
 
 impl InferenceEngine {
@@ -62,6 +67,7 @@ impl InferenceEngine {
                 ),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
+                inertia_manager: InertiaManager::new(1024), // default queue size
             };
         }
 
@@ -263,16 +269,17 @@ impl InferenceEngine {
                 cuda_runtime,
                 #[cfg(feature = "cuda")]
                 stream,
-                memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+                memory_manager: crate::kernel::MemoryManager::Cpu(
+                    crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+                ),
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                 #[cfg(feature = "cuda")]
                 gpu_gemm,
+                inertia_manager: InertiaManager::new(1024), // default queue size
             }
         }
     }
-
-    /// Create engine with a specific GEMM kernel.
     pub fn with_gemm(
         device: Device,
         dtype: DType,
@@ -294,11 +301,14 @@ impl InferenceEngine {
             cuda_runtime: None,
             #[cfg(feature = "cuda")]
             stream: None,
-            memory_manager: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+            memory_manager: crate::kernel::MemoryManager::Cpu(
+                crate::kernel::CpuMemoryBackend::new(1024 * 1024),
+            ),
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
             #[cfg(feature = "cuda")]
             gpu_gemm: false,
+            inertia_manager: InertiaManager::new(1024), // default queue size
         }
     }
 
@@ -356,7 +366,10 @@ impl InferenceEngine {
         n: usize,
         k: usize,
     ) -> Result<(), RunnerError> {
-        // Try GPU first
+        // TODO: Integrate computational inertia here - log demand when GPU unavailable
+        // For now, just use standard fallback behavior
+
+        // Try GPU first (normal path)
         match self.gemm.matmul(alpha, a, b, beta, c, m, n, k) {
             Ok(()) => Ok(()),
             Err(crate::kernel::GemmError::NotAvailable) => {
@@ -386,6 +399,16 @@ impl InferenceEngine {
                     })
             }
         }
+    }
+
+    /// Get pending work for execution when GPU becomes available.
+    pub fn get_pending_for_execution(&mut self) -> Vec<crate::inertia::Demand> {
+        self.inertia_manager.get_pending_for_execution()
+    }
+
+    /// Get inertia manager stats.
+    pub fn inertia_stats(&self) -> crate::inertia::InertiaStats {
+        self.inertia_manager.stats()
     }
 
     /// Get the GEMM kernel's target architecture.
