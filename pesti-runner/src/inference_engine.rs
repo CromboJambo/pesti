@@ -4,7 +4,6 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use std::sync::Arc;
 
 use crate::error::RunnerError;
 use candle_core::backend::BackendDevice;
