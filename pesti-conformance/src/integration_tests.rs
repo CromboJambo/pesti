@@ -1,6 +1,5 @@
 //! Integration tests for conformance testing against real GGUF corpus files.
 
-use super::*;
 use crate::{run_conformance, ConformanceConfig};
 use std::path::PathBuf;
 
