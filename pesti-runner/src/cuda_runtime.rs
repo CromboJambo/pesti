@@ -101,19 +101,22 @@ impl CudaRuntime {
     /// cannot be found or the driver fails to initialize.
     pub fn new(ordinal: usize) -> Result<Self, CudaError> {
         // Create context for the specified device
-        let ctx = CudaContext::new(ordinal)
-            .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))?;
+        let ctx =
+            CudaContext::new(ordinal).map_err(|e| CudaError::ContextCreation(format!("{e:?}")))?;
 
         // Get device name
-        let name = ctx.name()
+        let name = ctx
+            .name()
             .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
         // Get compute capability
-        let (major, minor) = ctx.compute_capability()
+        let (major, minor) = ctx
+            .compute_capability()
             .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
         // Get memory info
-        let (free_memory, total_memory) = ctx.mem_get_info()
+        let (free_memory, total_memory) = ctx
+            .mem_get_info()
             .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
 
         let device_info = CudaDeviceInfo {
@@ -160,14 +163,16 @@ impl CudaRuntime {
 
     /// Create a new non-blocking stream in this context.
     pub fn new_stream(&self) -> Result<Arc<CudaStream>, CudaError> {
-        self.ctx.new_stream()
+        self.ctx
+            .new_stream()
             .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))
     }
 
     /// Synchronize the context (blocks until all pending work completes).
     pub fn synchronize(&self) -> Result<(), CudaError> {
         // cudarc streams handle synchronization
-        self.ctx.synchronize()
+        self.ctx
+            .synchronize()
             .map_err(|e| CudaError::ContextCreation(format!("{e:?}")))
     }
 

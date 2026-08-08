@@ -31,12 +31,10 @@ impl CudaModule {
     /// Load a module from a PTX source string.
     pub fn load_from_ptx(ctx: &Arc<CudaContext>, ptx: &str) -> Result<Arc<Self>, DriverError> {
         ctx.bind_to_thread()?;
-        let cstring = std::ffi::CString::new(ptx).map_err(|_| {
-            DriverError(sys::CUresult::CUDA_ERROR_INVALID_VALUE)
-        })?;
-        let cu_module = unsafe {
-            result::module::load_data(cstring.as_ptr() as *const std::ffi::c_void)
-        }?;
+        let cstring = std::ffi::CString::new(ptx)
+            .map_err(|_| DriverError(sys::CUresult::CUDA_ERROR_INVALID_VALUE))?;
+        let cu_module =
+            unsafe { result::module::load_data(cstring.as_ptr() as *const std::ffi::c_void) }?;
         Ok(Arc::new(Self {
             cu_module,
             ctx: ctx.clone(),
@@ -81,14 +79,7 @@ pub unsafe fn launch_kernel(
     stream: sys::CUstream,
     params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
-    result::launch_kernel(
-        function,
-        grid_dims,
-        block_dims,
-        shared_mem,
-        stream,
-        params,
-    )
+    result::launch_kernel(function, grid_dims, block_dims, shared_mem, stream, params)
 }
 
 /// Get the raw CUstream from a CudaStream.

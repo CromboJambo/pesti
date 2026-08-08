@@ -310,12 +310,10 @@ impl MemoryBackend for CudaMemoryBackend {
         // Allocate device memory using sys call
         let mut dptr: sys::CUdeviceptr = 0;
         unsafe {
-            sys::cuMemAlloc_v2(&mut dptr, bytes)
-                .result()
-                .map_err(|e| {
-                    tracing::warn!(error = %e, "cuMemAlloc_v2 failed");
-                    MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
-                })?;
+            sys::cuMemAlloc_v2(&mut dptr, bytes).result().map_err(|e| {
+                tracing::warn!(error = %e, "cuMemAlloc_v2 failed");
+                MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
+            })?;
         }
 
         Ok(RawHandle(dptr))

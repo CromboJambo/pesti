@@ -10,9 +10,9 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use crate::kernel::device_buf::DeviceBuffer;
+use crate::cuda_runtime::{CudaRuntime, IntoResult};
 use crate::cuda_shim::{CudaFunction, CudaModule};
-use crate::cuda_runtime::{IntoResult, CudaRuntime};
+use crate::kernel::device_buf::DeviceBuffer;
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
 use std::sync::Arc;
@@ -458,9 +458,7 @@ mod tests {
         ]);
         let mut c = DeviceBuffer::zeros(m * n);
 
-        kernel
-            .matmul(1.0, &a, &b, 0.0, &mut c, m, n, k)
-            .unwrap();
+        kernel.matmul(1.0, &a, &b, 0.0, &mut c, m, n, k).unwrap();
 
         let c_host = c.to_host();
         assert!((c_host[0] - 1.0).abs() < 0.01);

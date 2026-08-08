@@ -7,9 +7,9 @@
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use crate::cuda_runtime::CudaDeviceInfo;
+use crate::cuda_shim::CudaFunction;
 use crate::kernel::attention::{AttentionArch, AttentionError};
 use crate::kernel::device_buf::DeviceBuffer;
-use crate::cuda_shim::CudaFunction;
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
 use std::sync::Arc;
