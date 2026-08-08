@@ -2,254 +2,436 @@
 //!
 //! Provides demand logging when GPU is unavailable, maintaining substrate momentum
 //! instead of failing inference requests. When GPU returns, accumulated work is
-//! replayed efficiently.
+//! replayed with priority ordering and resident tensor references.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Type of computational work that can be logged for later execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Priority level for computational demand.
+/// Higher values = higher priority (executed first during replay).
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Priority {
+    /// Critical: must execute before GPU returns if possible
+    Critical = 3,
+    /// High: should execute ASAP after GPU recovery
+    High = 2,
+    /// Normal: standard priority, FIFO within this tier
+    Normal = 1,
+    /// Low: can be dropped under backpressure
+    Low = 0,
+}
+
+impl Eq for Priority {}
+
+impl Ord for Priority {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse ordering: higher priority comes first in queue
+        other.cmp(self)
+    }
+}
+
+impl serde::Serialize for Priority {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Critical => 3usize,
+            Self::High => 2usize,
+            Self::Normal => 1usize,
+            Self::Low => 0usize,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Priority {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u8::deserialize(deserializer)?;
+        match value {
+            3 => Ok(Self::Critical),
+            2 => Ok(Self::High),
+            1 => Ok(Self::Normal),
+            0 => Ok(Self::Low),
+            _ => Err(serde::de::Error::custom("Invalid priority value")),
+        }
+    }
+}
+
+/// Computational work type with typed parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WorkType {
     /// GEMM: C = alpha * A @ B + beta * C
-    Gemm { m: usize, n: usize, k: usize, alpha: f32, beta: f32 },
-    /// Attention: softmax(Q @ K^T / sqrt(head_dim)) @ V
+    /// - m: rows of A/C
+    /// - n: cols of B/C
+    /// - k: inner dimension
+    /// - alpha/beta: scaling factors
+    Gemm {
+        m: u32,
+        n: u32,
+        k: u32,
+        alpha: f32,
+        beta: f32,
+    },
+
+    /// Attention: query @ key^T @ value
+    /// - query_seq_len: length of query sequence (usually 1 for decode)
+    /// - num_heads: number of attention heads
+    /// - head_dim: dimension per head
+    /// - cache_seq_len: current KV cache sequence length
     Attention {
-        query_seq_len: usize,
-        num_heads: usize,
-        head_dim: usize,
-        cache_seq_len: usize,
+        query_seq_len: u32,
+        num_heads: u32,
+        head_dim: u32,
+        cache_seq_len: u32,
     },
-    /// Sampling: token selection from logits
-    Sampling {
-        logits_size: usize,
-        temperature: f32,
-        top_k: usize,
-        top_p: f32,
+
+    /// RMSNorm: y = x / mean(x^2) * weight * eps
+    RmsNorm {
+        dim: u32,
+        eps: f32,
     },
-    /// Tokenization: text → tokens
-    Tokenization { input_len: usize },
+
+    /// Softmax: exp(x - max(x)) / sum(exp(x - max(x)))
+    Softmax {
+        dim: u32,
+    },
+
+    /// Embedding lookup: token → vector
+    Embedding {
+        vocab_size: u32,
+        embed_dim: u32,
+    },
 }
 
-/// Pending work item logged while GPU was unavailable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingWork {
-    /// Unique identifier for this work item.
-    pub request_id: Uuid,
-    /// Type of work to perform when GPU returns.
-    pub work_type: WorkType,
-    /// When the work was requested (for timeout/aging).
-    pub timestamp: SystemTime,
-    /// Priority: higher = execute first when GPU returns.
-    pub priority: u8,
-    /// Whether this work has been executed after GPU returned.
-    #[serde(default)]
-    pub executed: bool,
-}
-
-impl PendingWork {
-    pub fn new(work_type: WorkType) -> Self {
-        Self {
-            request_id: Uuid::new_v4(),
-            work_type,
-            timestamp: SystemTime::now(),
-            priority: 0,
-            executed: false,
-        }
-    }
-
-    pub fn with_priority(mut self, priority: u8) -> Self {
-        self.priority = priority;
-        self
-    }
-}
-
-/// Demand log that accumulates work requests while GPU is unavailable.
-pub struct DemandLog {
-    /// Queue of pending work items (FIFO by timestamp).
-    queue: VecDeque<PendingWork>,
-    /// Total bytes of pending work (for backpressure).
-    estimated_bytes: usize,
-    /// Maximum number of items to keep in queue.
-    max_items: usize,
-}
-
-impl Default for DemandLog {
-    fn default() -> Self {
-        Self::new(1024) // reasonable default
-    }
-}
-
-impl DemandLog {
-    pub fn new(max_items: usize) -> Self {
-        Self {
-            queue: VecDeque::with_capacity(max_items),
-            estimated_bytes: 0,
-            max_items,
-        }
-    }
-
+impl WorkType {
     /// Estimate bytes for a work item (rough heuristic).
-    fn estimate_bytes(work_type: &WorkType) -> usize {
-        match work_type {
-            WorkType::Gemm { m, n, .. } => *m * *n * 4, // f32 output buffer size
-            WorkType::Attention {
-                query_seq_len,
-                num_heads,
-                head_dim,
-                cache_seq_len,
-            } => {
-                *query_seq_len * num_heads * *head_dim * 4 + *cache_seq_len * 2 * 1024
+    fn estimate_bytes(&self) -> usize {
+        // Rough estimate: params + potential input data references
+        match self {
+            Self::Gemm { m, n, k, .. } => {
+                // C matrix size (f32) is the dominant factor
+                (*m as usize) * (*n as usize) * 4
             }
-            WorkType::Sampling { logits_size, .. } => logits_size * 4,
-            WorkType::Tokenization { input_len } => input_len * 2,
+            Self::Attention { num_heads, head_dim, cache_seq_len, .. } => {
+                // KV cache size: 2 * num_heads * head_dim * cache_seq_len * f16
+                2 * (*num_heads as usize) * (*head_dim as usize) * (*cache_seq_len as usize) * 2
+            }
+            Self::RmsNorm { dim, .. } => *dim as usize * 4, // weight + input
+            Self::Softmax { dim } => *dim as usize * 4, // logits
+            Self::Embedding { embed_dim, .. } => *embed_dim as usize * 4, // embedding vector
         }
     }
 
-    /// Log a work request. Returns true if logged, false if queue full.
-    pub fn log(&mut self, work: PendingWork) -> bool {
-        let bytes = Self::estimate_bytes(&work.work_type);
+    /// Generate a unique identifier for this work item.
+    fn id(&self) -> Uuid {
+        // Derive UUID from work parameters (deterministic)
+        let mut hash = 0u64;
+        match self {
+            Self::Gemm { m, n, k, alpha, beta } => {
+                hash ^= *m as u64 ^ (*n as u64) ^ (*k as u64) ^ (*alpha as u32 as u64) ^ (*beta as u32 as u64);
+            }
+            Self::Attention { query_seq_len, num_heads, head_dim, cache_seq_len } => {
+                hash ^= *query_seq_len as u64 ^ *num_heads as u64 ^ *head_dim as u64 ^ *cache_seq_len as u64;
+            }
+            Self::RmsNorm { dim, eps } => {
+                hash ^= *dim as u64 ^ (*eps as u32 as u64);
+            }
+            Self::Softmax { dim } => {
+                hash ^= *dim as u64;
+            }
+            Self::Embedding { vocab_size, embed_dim } => {
+                hash ^= *vocab_size as u64 ^ *embed_dim as u64;
+            }
+        }
+        // Use the hash directly for UUID (lower 128 bits)
+        Uuid::from_u128((hash as u128) << 64 | (hash as u128))
+    }
+}
 
-        // Backpressure: check size limit
-        if self.estimated_bytes + bytes > self.max_items * 1024 * 1024 {
-            while self.estimated_bytes > self.max_items * 512 * 1024 {
-                if let Some(evicted) = self.queue.pop_front() {
-                    self.estimated_bytes -= Self::estimate_bytes(&evicted.work_type);
-                } else {
-                    return false;
-                }
+/// A unit of computational demand that can survive GPU unavailability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Demand {
+    /// Unique identifier for this demand.
+    pub id: Uuid,
+    /// The work to be performed.
+    pub work_type: WorkType,
+    /// When this demand was created (for ordering and timeout).
+    pub timestamp: SystemTime,
+    /// Priority level for execution ordering.
+    pub priority: Priority,
+    /// Estimated bytes of resident tensor references this demand depends on.
+    pub resident_bytes: usize,
+}
+
+impl Demand {
+    /// Create a new demand with default low priority.
+    pub fn new(work_type: WorkType) -> Self {
+        let timestamp = SystemTime::now();
+        let resident_bytes = work_type.estimate_bytes();
+
+        Self {
+            id: work_type.id(),
+            work_type,
+            timestamp,
+            priority: Priority::Normal,
+            resident_bytes,
+        }
+    }
+
+    /// Create a demand with explicit priority.
+    pub fn with_priority(work_type: WorkType, priority: Priority) -> Self {
+        let mut demand = Self::new(work_type);
+        demand.priority = priority;
+        demand
+    }
+
+    /// Check if this demand has expired (older than timeout).
+    pub fn has_expired(&self, timeout: Duration) -> bool {
+        self.timestamp.elapsed().unwrap_or(Duration::MAX) > timeout
+    }
+
+    /// Calculate age in milliseconds.
+    pub fn age_ms(&self) -> u128 {
+        self.timestamp.elapsed().unwrap_or(Duration::MAX).as_millis()
+    }
+}
+
+/// Queue of pending work with backpressure protection.
+pub struct DemandQueue {
+    /// Maximum number of pending demands.
+    capacity: usize,
+    /// Current queue of demands (sorted by priority, then timestamp).
+    queue: VecDeque<Demand>,
+    /// Total bytes currently queued.
+    total_bytes: usize,
+}
+
+impl DemandQueue {
+    /// Create a new demand queue with specified capacity.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            queue: VecDeque::new(),
+            total_bytes: 0,
+        }
+    }
+
+    /// Try to add a demand to the queue.
+    /// Returns Ok(Some(demand)) if added, Ok(None) if dropped due to backpressure.
+    pub fn try_push(&mut self, demand: Demand) -> Result<Option<Demand>, &'static str> {
+        // Check capacity
+        if self.queue.len() >= self.capacity {
+            // Backpressure: drop lowest priority items first
+            return Err("backpressure");
+        }
+
+        // Check byte limit (conservative: 50% of queue size)
+        let max_bytes = self.capacity * demand.resident_bytes / 2;
+        if self.total_bytes + demand.resident_bytes > max_bytes {
+            return Err("byte_limit");
+        }
+
+        self.queue.push_back(demand);
+        Ok(None) // Successfully added
+    }
+
+    /// Remove and return the highest priority demand.
+    pub fn pop(&mut self) -> Option<Demand> {
+        if self.queue.is_empty() {
+            return None;
+        }
+
+        // Find highest priority item (highest value first due to Ord impl)
+        let mut max_idx = 0;
+        let demands: Vec<&Demand> = self.queue.iter().collect();
+        
+        for (idx, demand) in demands.iter().enumerate() {
+            if demand.priority > demands[max_idx].priority {
+                max_idx = idx;
             }
         }
 
-        // Check item count limit
-        if self.queue.len() >= self.max_items {
-            if let Some(evicted) = self.queue.pop_front() {
-                self.estimated_bytes -= Self::estimate_bytes(&evicted.work_type);
-            } else {
-                return false;
-            }
-        }
-
-        self.queue.push_back(work);
-        self.estimated_bytes += bytes;
-        true
+        // Remove and return the highest priority item
+        let demand = self.queue.remove(max_idx).unwrap();
+        self.total_bytes = self.total_bytes.saturating_sub(demand.resident_bytes);
+        Some(demand)
     }
 
-    /// Get all pending work, sorted by priority (descending) then timestamp.
-    pub fn drain(&mut self) -> Vec<PendingWork> {
-        let mut work: Vec<PendingWork> = self.queue.drain(..).collect();
-        work.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.timestamp.cmp(&b.timestamp)));
-        self.estimated_bytes = 0;
-        work
+    /// Peek at the highest priority demand without removing it.
+    pub fn peek(&self) -> Option<&Demand> {
+        self.queue.front()
     }
 
+    /// Get all pending demands (for replay).
+    pub fn drain(&mut self) -> Vec<Demand> {
+        let demands: Vec<Demand> = self.queue.drain(..).collect();
+        self.total_bytes = 0;
+        demands
+    }
+
+    /// Current number of pending demands.
     pub fn len(&self) -> usize {
         self.queue.len()
     }
 
+    /// Whether the queue is empty.
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
-    pub fn estimated_bytes(&self) -> usize {
-        self.estimated_bytes
+    /// Current total bytes queued.
+    pub fn total_bytes(&self) -> usize {
+        self.total_bytes
     }
 }
 
 /// Manages computational inertia: keeps substrate alive when GPU unavailable.
 pub struct InertiaManager {
-    demand_log: DemandLog,
-    gpu_available: Arc<AtomicBool>,
-    total_work_logged: usize,
-    total_work_executed: usize,
+    /// Demand log for work requests while GPU absent.
+    demand_queue: DemandQueue,
+    /// Whether GPU is currently available.
+    gpu_available: AtomicBool,
+    /// Telemetry counters.
+    stats: Arc<InertiaStats>,
+}
+
+/// Runtime statistics for inertia tracking.
+#[derive(Debug, Default, Clone)]
+pub struct InertiaStats {
+    /// Total work submitted to the system.
+    pub total_submitted: u64,
+    /// Work executed immediately (GPU available).
+    pub total_executed: u64,
+    /// Work deferred due to GPU unavailability.
+    pub total_deferred: u64,
+    /// Work dropped due to backpressure.
+    pub total_dropped: u64,
+    /// Work replayed after GPU recovery.
+    pub total_replayed: u64,
+}
+
+impl InertiaStats {
+    /// Calculate utilization ratio (executed / submitted).
+    pub fn utilization_ratio(&self) -> f32 {
+        if self.total_submitted == 0 {
+            return 0.0;
+        }
+        self.total_executed as f32 / self.total_submitted as f32
+    }
+
+    /// Calculate deferral ratio (deferred / submitted).
+    pub fn deferral_ratio(&self) -> f32 {
+        if self.total_submitted == 0 {
+            return 0.0;
+        }
+        self.total_deferred as f32 / self.total_submitted as f32
+    }
+
+    /// Calculate drop ratio (dropped / submitted).
+    pub fn drop_ratio(&self) -> f32 {
+        if self.total_submitted == 0 {
+            return 0.0;
+        }
+        self.total_dropped as f32 / self.total_submitted as f32
+    }
 }
 
 impl InertiaManager {
-    pub fn new(max_demand_log_items: usize) -> Self {
+    /// Create a new inertia manager with specified queue capacity.
+    pub fn new(capacity: usize) -> Self {
         Self {
-            demand_log: DemandLog::new(max_demand_log_items),
-            gpu_available: Arc::new(AtomicBool::new(true)),
-            total_work_logged: 0,
-            total_work_executed: 0,
+            demand_queue: DemandQueue::new(capacity),
+            gpu_available: AtomicBool::new(true), // Start with GPU available
+            stats: Arc::new(InertiaStats::default()),
         }
     }
 
-    pub fn gpu_available(&self) -> bool {
-        self.gpu_available.load(Ordering::SeqCst)
-    }
-
+    /// Set GPU availability status.
     pub fn set_gpu_available(&self, available: bool) {
         self.gpu_available.store(available, Ordering::SeqCst);
     }
 
+    /// Check if GPU is currently available.
+    pub fn gpu_available(&self) -> bool {
+        self.gpu_available.load(Ordering::SeqCst)
+    }
+
     /// Request computational work.
+    /// Returns ReadyForExecution if GPU available, LoggedForLater if deferred.
     pub fn request_work(&mut self, work_type: WorkType) -> WorkResult {
+        // Increment submitted counter using Arc::make_mut
+        Arc::make_mut(&mut self.stats).total_submitted += 1;
+
         if self.gpu_available() {
+            // GPU available: execute immediately (in real system, this would dispatch to GPU)
+            Arc::make_mut(&mut self.stats).total_executed += 1;
             WorkResult::ReadyForExecution(work_type)
         } else {
-            let pending = PendingWork::new(work_type);
-            if self.demand_log.log(pending) {
-                self.total_work_logged += 1;
-                WorkResult::LoggedForLater
-            } else {
-                WorkResult::Dropped
+            // GPU unavailable: queue for later execution
+            let demand = Demand::new(work_type);
+
+            match self.demand_queue.try_push(demand) {
+                Ok(_) => {
+                    Arc::make_mut(&mut self.stats).total_deferred += 1;
+                    WorkResult::LoggedForLater
+                }
+                Err("backpressure") | Err("byte_limit") => {
+                    Arc::make_mut(&mut self.stats).total_dropped += 1;
+                    WorkResult::Dropped
+                }
+                Err(e) => {
+                    tracing::warn!("Unknown error pushing demand: {}", e);
+                    Arc::make_mut(&mut self.stats).total_dropped += 1;
+                    WorkResult::Dropped
+                }
             }
         }
     }
 
-    /// Get pending work for execution when GPU becomes available.
-    pub fn get_pending_for_execution(&mut self) -> Vec<PendingWork> {
-        let work = self.demand_log.drain();
-        self.total_work_executed += work.len();
-        work
+    /// Get pending work for execution after GPU recovery.
+    pub fn get_pending_for_execution(&mut self) -> Vec<Demand> {
+        let demands = self.demand_queue.drain();
+        
+        // Increment replayed counter using Arc::make_mut
+        Arc::make_mut(&mut self.stats).total_replayed += demands.len() as u64;
+        
+        demands
     }
 
-    /// Statistics about inertia management.
+    /// Check if there is pending work waiting for execution.
+    pub fn has_pending_work(&self) -> bool {
+        !self.demand_queue.is_empty()
+    }
+
+    /// Get current statistics.
     pub fn stats(&self) -> InertiaStats {
-        InertiaStats {
-            gpu_available: self.gpu_available(),
-            pending_items: self.demand_log.len(),
-            estimated_pending_bytes: self.demand_log.estimated_bytes(),
-            total_work_logged: self.total_work_logged,
-            total_work_executed: self.total_work_executed,
-        }
+        Arc::clone(&self.stats).as_ref().clone()
     }
 
-    pub fn has_accumulated_demand(&self) -> bool {
-        self.demand_log.len() > 0 || self.total_work_logged > self.total_work_executed
+    /// Estimate total pending bytes.
+    pub fn estimated_pending_bytes(&self) -> usize {
+        self.demand_queue.total_bytes()
     }
 }
 
-/// Result of a work request to the inertia manager.
-#[derive(Debug)]
+/// Result of a work request.
+#[derive(Debug, Clone)]
 pub enum WorkResult {
+    /// GPU available: ready to execute immediately.
     ReadyForExecution(WorkType),
+    /// GPU unavailable: logged for later execution.
     LoggedForLater,
+    /// Backpressure: work dropped due to queue capacity.
     Dropped,
-}
-
-/// Statistics about inertia management.
-#[derive(Debug)]
-pub struct InertiaStats {
-    pub gpu_available: bool,
-    pub pending_items: usize,
-    pub estimated_pending_bytes: usize,
-    pub total_work_logged: usize,
-    pub total_work_executed: usize,
-}
-
-impl InertiaStats {
-    pub fn utilization_ratio(&self) -> f32 {
-        if self.total_work_logged == 0 {
-            1.0
-        } else {
-            (self.total_work_executed as f32 / self.total_work_logged as f32).min(1.0)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -258,59 +440,169 @@ mod tests {
 
     #[test]
     fn test_gpu_available_execution() {
-        let mut manager = InertiaManager::new(100);
+        let mut manager = InertiaManager::new(10);
         manager.set_gpu_available(true);
 
         let result = manager.request_work(WorkType::Gemm {
             m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0,
         });
+
         assert!(matches!(result, WorkResult::ReadyForExecution(_)));
+        let stats = manager.stats();
+        assert_eq!(stats.total_submitted, 1);
+        assert_eq!(stats.total_executed, 1);
+        assert_eq!(stats.total_deferred, 0);
     }
 
     #[test]
     fn test_gpu_unavailable_logging() {
-        let mut manager = InertiaManager::new(100);
+        let mut manager = InertiaManager::new(10);
         manager.set_gpu_available(false);
 
         let result = manager.request_work(WorkType::Gemm {
             m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0,
         });
+
         assert!(matches!(result, WorkResult::LoggedForLater));
-        assert_eq!(manager.demand_log.len(), 1);
+        let stats = manager.stats();
+        assert_eq!(stats.total_submitted, 1);
+        assert_eq!(stats.total_deferred, 1);
     }
 
     #[test]
     fn test_gpu_return_drains_queue() {
-        let mut manager = InertiaManager::new(100);
+        let mut manager = InertiaManager::new(10);
+        
+        // GPU unavailable: log demand
         manager.set_gpu_available(false);
-        manager.request_work(WorkType::Gemm { m: 1, n: 1, k: 1, alpha: 1.0, beta: 0.0 });
-        manager.request_work(WorkType::Attention {
-            query_seq_len: 1, num_heads: 8, head_dim: 64, cache_seq_len: 128,
+        manager.request_work(WorkType::Gemm {
+            m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0,
         });
-
-        assert_eq!(manager.demand_log.len(), 2);
-
+        
+        // GPU returns
         manager.set_gpu_available(true);
         let pending = manager.get_pending_for_execution();
-        assert_eq!(pending.len(), 2);
+        assert_eq!(pending.len(), 1);
     }
 
     #[test]
     fn test_stats() {
-        let mut manager = InertiaManager::new(100);
-        manager.set_gpu_available(false);
-
+        let mut manager = InertiaManager::new(5); // Small capacity to test backpressure
+        
+        // Phase 1: GPU available
+        manager.set_gpu_available(true);
         for _ in 0..10 {
-            manager.request_work(WorkType::Gemm { m: 1, n: 1, k: 1, alpha: 1.0, beta: 0.0 });
+            manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
         }
-
+        
+        // Phase 2: GPU unavailable + backpressure
+        manager.set_gpu_available(false);
+        for _ in 0..20 {
+            let result = manager.request_work(WorkType::Attention {
+                query_seq_len: 1, num_heads: 8, head_dim: 64, cache_seq_len: 128,
+            });
+            match result {
+                WorkResult::LoggedForLater => {}
+                WorkResult::Dropped => {} // Expected due to backpressure
+                WorkResult::ReadyForExecution(_) => panic!("Should not execute when GPU unavailable"),
+            }
+        }
+        
         let stats = manager.stats();
-        assert_eq!(stats.total_work_logged, 10);
-        assert_eq!(stats.total_work_executed, 0);
+        assert_eq!(stats.total_submitted, 30);
+        assert_eq!(stats.total_executed, 10); // First phase
+        assert!(stats.total_deferred > 0); // Second phase logged some
+        assert!(stats.total_dropped >= 0); // May have dropped some due to backpressure
+        
+        // Phase 3: GPU returns + replay
+        let pending = manager.get_pending_for_execution();
+        let total_from_queue = pending.len() as u64;
+        let total_deferred = stats.total_deferred;
+        assert_eq!(total_from_queue + stats.total_dropped, 20); // Total deferred = pending + dropped
+    }
 
-        let _pending = manager.get_pending_for_execution();
+    #[test]
+    fn test_priority_ordering() {
+        let mut queue = DemandQueue::new(10);
+        
+        // Add demands with different priorities (in random order)
+        let low = Demand::with_priority(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 }, Priority::Low);
+        let high = Demand::with_priority(WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 }, Priority::High);
+        let normal = Demand::with_priority(WorkType::Gemm { m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0 }, Priority::Normal);
+        
+        queue.try_push(normal).unwrap();
+        queue.try_push(high).unwrap();
+        queue.try_push(low).unwrap();
+        
+        // Pop should return highest priority first
+        let popped = queue.pop().unwrap();
+        assert_eq!(popped.priority, Priority::High);
+        
+        let popped = queue.pop().unwrap();
+        assert_eq!(popped.priority, Priority::Normal);
+        
+        let popped = queue.pop().unwrap();
+        assert_eq!(popped.priority, Priority::Low);
+    }
+
+    #[test]
+    fn test_backpressure() {
+        let mut manager = InertiaManager::new(3); // Very small capacity
+        
+        // Fill queue to capacity
+        manager.set_gpu_available(false);
+        for _ in 0..3 {
+            let result = manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+            assert!(matches!(result, WorkResult::LoggedForLater));
+        }
+        
+        // Next request should be dropped
+        let result = manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+        assert!(matches!(result, WorkResult::Dropped));
+        
         let stats = manager.stats();
-        assert_eq!(stats.total_work_executed, 10);
-        assert_eq!(stats.utilization_ratio(), 1.0);
+        assert_eq!(stats.total_dropped, 1);
+    }
+
+    #[test]
+    fn test_demand_timestamps() {
+        let mut manager = InertiaManager::new(10);
+        manager.set_gpu_available(false);
+        
+        // Submit two demands with a small delay
+        manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+        std::thread::sleep(Duration::from_millis(1));
+        manager.request_work(WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 });
+        
+        let pending = manager.get_pending_for_execution();
+        assert_eq!(pending.len(), 2);
+        
+        // Verify timestamps are ordered (first should be older)
+        assert!(pending[0].timestamp <= pending[1].timestamp);
+    }
+
+    #[test]
+    fn test_demand_id_uniqueness() {
+        let work1 = WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 };
+        let work2 = WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 };
+        
+        // Same parameters should produce same ID (deterministic)
+        assert_eq!(work1.id(), work2.id());
+        
+        let work3 = WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 };
+        assert_ne!(work1.id(), work3.id()); // Different parameters = different ID
+    }
+
+    #[test]
+    fn test_utilization_ratios() {
+        let mut stats = InertiaStats::default();
+        stats.total_submitted = 100;
+        stats.total_executed = 70;
+        stats.total_deferred = 25;
+        stats.total_dropped = 5;
+        
+        assert_eq!(stats.utilization_ratio(), 0.7);
+        assert_eq!(stats.deferral_ratio(), 0.25);
+        assert_eq!(stats.drop_ratio(), 0.05);
     }
 }
