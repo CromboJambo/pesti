@@ -10,7 +10,7 @@ cobertura.xml
 tarpaulin-report.html
 
 # Model weights / large binary blobs
-models/
+# models/  # Removed - merged into conformance-corpus/
 projects/
 state-docs/
 conformance-corpus/*.gguf
