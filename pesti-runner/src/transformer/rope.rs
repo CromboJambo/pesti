@@ -163,4 +163,3 @@ pub fn apply_rope_f16(
         }
     }
 }
-

@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "gguf-inspect", about = "Inspect GGUF model file headers and metadata")]
+#[command(
+    name = "gguf-inspect",
+    about = "Inspect GGUF model file headers and metadata"
+)]
 struct Args {
     /// Path to the GGUF file
     #[arg(name = "path")]

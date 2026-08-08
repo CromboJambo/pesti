@@ -113,7 +113,10 @@ impl SafetensorsWriter {
             let num_elements: usize = tensor.shape.iter().product();
             let size = (num_elements * element_size) as u64;
 
-            tensor_info.insert("data_offsets".to_string(), json!([current_offset, current_offset + size]));
+            tensor_info.insert(
+                "data_offsets".to_string(),
+                json!([current_offset, current_offset + size]),
+            );
 
             tensors_obj.insert(tensor.name.clone(), json!(tensor_info));
 
@@ -184,7 +187,9 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let output_path = temp_dir.join("test.safetensors");
 
-        writer.write(&output_path).expect("Failed to write SafeTensors");
+        writer
+            .write(&output_path)
+            .expect("Failed to write SafeTensors");
 
         // Verify file exists and has content
         let metadata = std::fs::metadata(&output_path).expect("Failed to get metadata");
@@ -219,7 +224,9 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let output_path = temp_dir.join("test_multi.safetensors");
 
-        writer.write(&output_path).expect("Failed to write SafeTensors");
+        writer
+            .write(&output_path)
+            .expect("Failed to write SafeTensors");
 
         let metadata = std::fs::metadata(&output_path).expect("Failed to get metadata");
         assert!(metadata.len() > 0);
@@ -246,7 +253,10 @@ mod tests {
             name: "model.embed_tokens.weight".to_string(),
             dtype: "F32".to_string(),
             shape: vec![vocab_size, embed_dim],
-            data: embedding_data.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            data: embedding_data
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
         };
         writer.add_tensor(tensor);
 
@@ -272,13 +282,17 @@ mod tests {
                 name: format!("{}.input_layernorm.weight", prefix),
                 dtype: "F32".to_string(),
                 shape: vec![embed_dim],
-                data: attn_norm_data.iter().flat_map(|v| v.to_le_bytes()).collect(),
+                data: attn_norm_data
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect(),
             };
             writer.add_tensor(tensor);
 
             // Q projection (F32)
-            let q_proj_data: Vec<f32> =
-                (0..embed_dim * embed_dim).map(|i| i as f32 * 0.001).collect();
+            let q_proj_data: Vec<f32> = (0..embed_dim * embed_dim)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.self_attn.q_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -288,8 +302,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // K projection (F32)
-            let k_proj_data: Vec<f32> =
-                (0..embed_dim * embed_dim / 4).map(|i| i as f32 * 0.001).collect();
+            let k_proj_data: Vec<f32> = (0..embed_dim * embed_dim / 4)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.self_attn.k_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -299,8 +314,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // V projection (F32)
-            let v_proj_data: Vec<f32> =
-                (0..embed_dim * embed_dim / 4).map(|i| i as f32 * 0.001).collect();
+            let v_proj_data: Vec<f32> = (0..embed_dim * embed_dim / 4)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.self_attn.v_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -310,8 +326,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // O projection (F32)
-            let o_proj_data: Vec<f32> =
-                (0..embed_dim * embed_dim).map(|i| i as f32 * 0.001).collect();
+            let o_proj_data: Vec<f32> = (0..embed_dim * embed_dim)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.self_attn.o_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -331,8 +348,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // FFN up (F32)
-            let ffn_up_data: Vec<f32> =
-                (0..embed_dim * embed_dim * 2).map(|i| i as f32 * 0.001).collect();
+            let ffn_up_data: Vec<f32> = (0..embed_dim * embed_dim * 2)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.mlp.up_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -342,8 +360,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // FFN gate (F32)
-            let ffn_gate_data: Vec<f32> =
-                (0..embed_dim * embed_dim * 2).map(|i| i as f32 * 0.001).collect();
+            let ffn_gate_data: Vec<f32> = (0..embed_dim * embed_dim * 2)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.mlp.gate_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -353,8 +372,9 @@ mod tests {
             writer.add_tensor(tensor);
 
             // FFN down (F32)
-            let ffn_down_data: Vec<f32> =
-                (0..embed_dim * embed_dim * 2).map(|i| i as f32 * 0.001).collect();
+            let ffn_down_data: Vec<f32> = (0..embed_dim * embed_dim * 2)
+                .map(|i| i as f32 * 0.001)
+                .collect();
             let tensor = SafetensorTensor {
                 name: format!("{}.mlp.down_proj.weight", prefix),
                 dtype: "F32".to_string(),
@@ -368,7 +388,9 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let output_path = temp_dir.join("test_round_trip_full.safetensors");
 
-        writer.write(&output_path).expect("Failed to write full model SafeTensors");
+        writer
+            .write(&output_path)
+            .expect("Failed to write full model SafeTensors");
 
         // Verify file exists and has content
         let metadata = std::fs::metadata(&output_path).expect("Failed to get metadata");
@@ -385,12 +407,18 @@ mod tests {
         // Verify JSON contains expected keys
         assert!(header_json.contains("model.embed_tokens.weight"));
         assert!(header_json.contains("model.layers.0.self_attn.q_proj.weight"));
-        assert!(header_json.contains(&format!("model.layers.{}.mlp.down_proj.weight", num_layers - 1)));
+        assert!(header_json.contains(&format!(
+            "model.layers.{}.mlp.down_proj.weight",
+            num_layers - 1
+        )));
 
         // Count tensors in header
         let tensor_count = header_json.matches("shape").count();
         // 1 embed + 1 norm + 32 layers * (attn_norm + q + k + v + o + ffn_norm + up + gate + down) = 2 + 32*9 = 290
-        assert_eq!(tensor_count, 290, "Should have 290 tensors (1 embed + 1 norm + 32*9 layer tensors)");
+        assert_eq!(
+            tensor_count, 290,
+            "Should have 290 tensors (1 embed + 1 norm + 32*9 layer tensors)"
+        );
 
         // Clean up
         let _ = std::fs::remove_file(output_path);

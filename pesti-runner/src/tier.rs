@@ -36,8 +36,8 @@ impl Tier {
     /// Get the default tier-up threshold (invocations before tiering up).
     pub fn tier_up_threshold(&self) -> usize {
         match self {
-            Self::CpuBaseline => 100,      // Tier up after 100 invocations
-            Self::GpuFlashAttention => 500, // Stay at GPU attention until 500
+            Self::CpuBaseline => 100,           // Tier up after 100 invocations
+            Self::GpuFlashAttention => 500,     // Stay at GPU attention until 500
             Self::GpuFullBackend => usize::MAX, // Never tier up (already max)
         }
     }
@@ -59,8 +59,8 @@ impl Tier {
     /// Get tier-up threshold by numeric ID (for helper functions).
     fn threshold_by_id(id: u32) -> usize {
         match id {
-            0 => 100,      // CPU baseline → GPU flash attention
-            1 => 500,      // GPU flash attention → full backend
+            0 => 100,        // CPU baseline → GPU flash attention
+            1 => 500,        // GPU flash attention → full backend
             _ => usize::MAX, // Already at max tier
         }
     }
@@ -165,7 +165,8 @@ impl LayerProfiler {
     pub fn record_forward(&self) -> usize {
         let count = self.call_count.fetch_add(1, Ordering::Relaxed) + 1;
 
-        if count % 50 == 0 { // Log every 50 invocations
+        if count % 50 == 0 {
+            // Log every 50 invocations
             debug!(layer = %self.layer_id, count = count, "Layer profiler: invocation recorded");
         }
 
@@ -177,4 +178,3 @@ impl LayerProfiler {
         self.call_count.load(Ordering::Relaxed)
     }
 }
-

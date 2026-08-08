@@ -1,6 +1,6 @@
 //! Minimal dequant-only test — no gemm, no Linear.
 
-use pesti_runner::tile_dequant::{dequantize_q4_k_tile, QuantDtype};
+use pesti_runner::tile_dequant::{QuantDtype, dequantize_q4_k_tile};
 
 fn main() {
     println!("=== Dequant-only Diagnostic ===\n");
@@ -27,11 +27,18 @@ fn main() {
     let blocks_needed = (elements_needed + elements_per_block - 1) / elements_per_block; // 17
     let bytes_needed = blocks_needed * bytes_per_block; // 17 * 28 = 476
 
-    println!("Tile 0: block_idx={}, blocks_needed={}, bytes_needed={}", block_idx, blocks_needed, bytes_needed);
+    println!(
+        "Tile 0: block_idx={}, blocks_needed={}, bytes_needed={}",
+        block_idx, blocks_needed, bytes_needed
+    );
 
     // Test on first row
     let row_data = &raw[0..row_bytes]; // 525 bytes
-    println!("row_data.len()={}, block_byte_offset={}", row_data.len(), block_byte_offset);
+    println!(
+        "row_data.len()={}, block_byte_offset={}",
+        row_data.len(),
+        block_byte_offset
+    );
 
     if block_byte_offset < row_data.len() {
         let block_data = &row_data[block_byte_offset..];
@@ -47,14 +54,16 @@ fn main() {
     // Now test the actual QuantizedLinear::dequantize_tile
     println!("\n--- Testing QuantizedLinear::forward (no gemm) ---");
     let ql = pesti_runner::quantized_linear::QuantizedLinear::new(
-        raw, QuantDtype::Q4_K, in_f, out_f, None,
+        raw,
+        QuantDtype::Q4_K,
+        in_f,
+        out_f,
+        None,
     );
     let x = vec![1.0f32; in_f];
 
     // Catch any panic
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ql.forward(&x, 1)
-    })) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ql.forward(&x, 1))) {
         Ok(result) => println!("forward OK: len={}", result.len()),
         Err(_) => println!("forward PANICKED"),
     }

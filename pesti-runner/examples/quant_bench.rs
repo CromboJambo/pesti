@@ -38,13 +38,28 @@ fn main() {
     let in_features = 896;
     let out_features = 4864;
     let x_ffn: Vec<f32> = (0..in_features).map(|i| (i as f32 * 0.01).sin()).collect();
-    println!("\n--- Q4_K (in={}, out={}) FFN gate ---", in_features, out_features);
-    benchmark_quant(QuantDtype::Q4_K, in_features, out_features, &x_ffn, batch_size);
+    println!(
+        "\n--- Q4_K (in={}, out={}) FFN gate ---",
+        in_features, out_features
+    );
+    benchmark_quant(
+        QuantDtype::Q4_K,
+        in_features,
+        out_features,
+        &x_ffn,
+        batch_size,
+    );
 
     println!("\n=== Benchmark Complete ===");
 }
 
-fn benchmark_quant(dtype: QuantDtype, in_features: usize, out_features: usize, x: &[f32], batch_size: usize) {
+fn benchmark_quant(
+    dtype: QuantDtype,
+    in_features: usize,
+    out_features: usize,
+    x: &[f32],
+    batch_size: usize,
+) {
     // Create fake quantized weight data
     // For Q4_0: 18 bytes per 32 elements → row_bytes = (in_features/32)*18
     // For Q8_0: 34 bytes per 32 elements → row_bytes = (in_features/32)*34

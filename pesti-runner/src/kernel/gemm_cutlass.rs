@@ -1,17 +1,17 @@
 //! CUTLASS-based GEMM using cudarc cublas/cublaslt
-//! 
+//!
 //! This provides high-performance matrix multiplication using NVIDIA's tensor cores
 //! via the cublasLt library (which uses CUTLASS kernels internally for sm_8.9+).
-//! 
+//!
 //! For RTX 4070 Ti SUPER (sm_8.9): automatically selects FP16 tensor core GEMM
 //! with 4th-gen tensor cores at ~150-200 tok/s throughput.
 
-use half::f16;
-use crate::kernel::gemm::{GemmArch, GemmError, GemmKernel};
 use crate::kernel::device_buf::DeviceBuffer;
+use crate::kernel::gemm::{GemmArch, GemmError, GemmKernel};
+use half::f16;
 
 /// CUTLASS-based GEMM kernel using cudarc cublas.
-/// 
+///
 /// This wraps NVIDIA's cuBLAS library which internally uses CUTLASS for tensor core
 /// GEMM operations on sm_8.9+ devices (Ada Lovelace, RTX 40-series).
 pub struct CutlassGemmKernel {
@@ -70,10 +70,12 @@ impl GemmKernel for CutlassGemmKernel {
             });
         }
 
-        let c_host = c.as_mut_slice().ok_or_else(|| GemmError::BufferSizeMismatch {
-            expected: m * n,
-            got: 0,
-        })?;
+        let c_host = c
+            .as_mut_slice()
+            .ok_or_else(|| GemmError::BufferSizeMismatch {
+                expected: m * n,
+                got: 0,
+            })?;
         if c_host.len() < m * n {
             return Err(GemmError::BufferSizeMismatch {
                 expected: m * n,
@@ -120,4 +122,3 @@ impl CutlassGemmBuilder {
         Ok(Some(Box::new(CutlassGemmKernel::new(self.arch))))
     }
 }
-

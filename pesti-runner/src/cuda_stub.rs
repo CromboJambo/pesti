@@ -4,7 +4,6 @@
 
 #[cfg(not(feature = "cuda"))]
 pub mod stub {
-    
 
     /// Dummy CudaContext for CPU builds
     #[derive(Clone)]

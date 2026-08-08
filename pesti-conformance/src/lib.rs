@@ -127,7 +127,11 @@ pub fn run_conformance(config: &ConformanceConfig) -> Result<ConformanceResult> 
         "Conformance complete: {}/{} passed ({:.1}%)",
         passed.len(),
         total,
-        if total > 0 { (passed.len() as f64 / total as f64) * 100.0 } else { 0.0 },
+        if total > 0 {
+            (passed.len() as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        },
     );
 
     let result = ConformanceResult {
@@ -145,10 +149,7 @@ pub fn run_conformance(config: &ConformanceConfig) -> Result<ConformanceResult> 
 }
 
 /// Run conformance test on a single model using pesti inference + optional reference comparison.
-fn run_single_model_conformance(
-    model_path: &Path,
-    config: &ConformanceConfig,
-) -> Result<String> {
+fn run_single_model_conformance(model_path: &Path, config: &ConformanceConfig) -> Result<String> {
     // Step 1: Load GGUF header to get model config (ignore errors - just verify loading works)
     if let Ok(header) = parser::parse_gguf(model_path) {
         tracing::debug!("✓ GGUF loaded: {} tensors", header.tensors.len());
@@ -170,7 +171,7 @@ fn run_single_model_conformance(
                 .arg("-n")
                 .arg("5") // Generate 5 tokens
                 .arg("--temp")
-                .arg("0.0")  // Deterministic argmax sampling for byte-exact comparison
+                .arg("0.0") // Deterministic argmax sampling for byte-exact comparison
                 .arg("-p")
                 .arg("The quick brown fox jumps over the lazy dog.")
                 .output()?;
@@ -230,24 +231,23 @@ fn run_single_model_conformance(
 /// Run actual pesti inference on a model using LlamaModel.load_gguf() + forward pass.
 fn run_pesti_inference(model_path: &Path) -> Result<String> {
     // Load the model via pesti-runner's LlamaModel (pure-Rust transformer path)
-    let mut model = pesti_runner::LlamaModel::load_gguf(model_path).map_err(|e| {
-        ConformanceError::ModelLoad(format!("Failed to load model: {}", e))
-    })?;
-    
+    let model = pesti_runner::LlamaModel::load_gguf(model_path)
+        .map_err(|e| ConformanceError::ModelLoad(format!("Failed to load model: {}", e)))?;
+
     // Dispatch is already initialized in load_gguf (line 386/451)
-    
+
     let batch_size = 1usize;
     let seq_len = 4usize; // Small context for conformance test (deterministic)
 
     // Initialize token embeddings from loaded weights
     let embed_dim = model.config.embed_dim;
-    let vocab_size = model.vocab_size as usize;
+    let _vocab_size = model.vocab_size as usize;
 
     // Create a simple input: single token [0] for conformance test
     let input_tokens: Vec<i32> = vec![0i32];
 
     // Build input tensor: deterministic zeroed embedding for conformance test
-    let mut input_tensor = vec![0.0f32; embed_dim];
+    let input_tensor = vec![0.0f32; embed_dim];
 
     // Run forward pass through transformer layers
     let mut hidden = input_tensor;
@@ -269,7 +269,10 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
         // This is acceptable for conformance testing - we're verifying the transformer forward pass
         tracing::warn!(
             "Model {} missing output layer, using hidden states for conformance",
-            model_path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown")
+            model_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
         );
         hidden
     };
@@ -538,9 +541,9 @@ mod tests {
     fn test_conformance_error_from_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test error");
         let conformance_err: ConformanceError = io_err.into();
-        
+
         match conformance_err {
-            ConformanceError::Io(_) => {},
+            ConformanceError::Io(_) => {}
             _ => panic!("Expected Io variant"),
         }
     }
@@ -549,9 +552,9 @@ mod tests {
     fn test_conformance_error_from_utf8() {
         let utf8_err = String::from_utf8(vec![0xFF, 0xFE]).unwrap_err();
         let conformance_err: ConformanceError = utf8_err.into();
-        
+
         match conformance_err {
-            ConformanceError::Utf8(_) => {},
+            ConformanceError::Utf8(_) => {}
             _ => panic!("Expected Utf8 variant"),
         }
     }

@@ -1,7 +1,7 @@
 //! Test that attention kernel PTX loads correctly
 
-use pesti_runner::cuda_runtime;
 use cuda_core::IntoResult;
+use pesti_runner::cuda_runtime;
 
 fn main() {
     println!("=== Attention Kernel PTX Load Test ===\n");
@@ -51,7 +51,7 @@ fn main() {
         Ok(m) => m,
         Err(e) => {
             println!("❌ Module load failed: {}", e);
-            
+
             // Print raw driver error if available
             println!("Driver Error Code: {:?}", e);
             return;

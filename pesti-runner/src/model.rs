@@ -48,16 +48,27 @@ impl Default for ModelConfig {
 impl ModelConfig {
     /// Create a model config from loaded GGUF weights.
     pub fn from_gguf(header: &pesti_gguf::types::GgufHeader) -> Result<Self> {
-        let embed_dim = header.get_kv_u32("embedding_length")
-            .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))? as usize;
-        let num_heads = header.get_kv_u32("attention.head_count")
-            .ok_or_else(|| RunnerError::MissingHeaderField("attention_head_count".to_string()))? as usize;
-        let num_kv_heads = header.get_kv_u32("attention.head_count_kv")
+        let embed_dim = header
+            .get_kv_u32("embedding_length")
+            .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
+            as usize;
+        let num_heads = header
+            .get_kv_u32("attention.head_count")
+            .ok_or_else(|| RunnerError::MissingHeaderField("attention_head_count".to_string()))?
+            as usize;
+        let num_kv_heads = header
+            .get_kv_u32("attention.head_count_kv")
             .unwrap_or(num_heads as u32) as usize;
         let num_layers = header.get_kv_u32("block_count").unwrap_or(32) as usize;
-        let head_dim = if num_heads > 0 { embed_dim / num_heads } else { 64 };
-        let max_seq = header.get_kv_u32("context_length")
-            .ok_or_else(|| RunnerError::MissingHeaderField("context_length".to_string()))? as usize;
+        let head_dim = if num_heads > 0 {
+            embed_dim / num_heads
+        } else {
+            64
+        };
+        let max_seq = header
+            .get_kv_u32("context_length")
+            .ok_or_else(|| RunnerError::MissingHeaderField("context_length".to_string()))?
+            as usize;
 
         Ok(Self {
             num_layers,
@@ -147,7 +158,8 @@ impl Model {
         let kv_caches = (0..num_layers)
             .map(|_| {
                 let key_cache = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, on_device);
-                let value_cache = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, on_device);
+                let value_cache =
+                    Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, on_device);
                 (key_cache, value_cache)
             })
             .collect();
@@ -231,7 +243,7 @@ impl Model {
 }
 
 // Real CpuModel for CPU-only builds with GGUF loading support
-use crate::gguf_weight_loader::{load_gguf_weights, GgufWeights};
+use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use std::path::Path;
 
 /// CPU model implementation for testing K-family dequantization.
@@ -269,7 +281,9 @@ impl CpuModel {
         }
 
         // Extract config values
-        let hidden_size = weights.header.embedding_length()
+        let hidden_size = weights
+            .header
+            .embedding_length()
             .map(|v| v as usize)
             .ok_or_else(|| {
                 crate::error::RunnerError::Gguf(pesti_gguf::GgufError::Io(
@@ -278,59 +292,84 @@ impl CpuModel {
             })?;
 
         // Get vocab size from KV metadata or default to 32000
-        let vocab_size = weights.header
-        .kv_pairs
-        .iter()
-        .find(|kv| kv.key == "tokenizer.ggml.vocab_size")
-        .and_then(|kv| kv.value.as_u32())
+        let vocab_size = weights
+            .header
+            .kv_pairs
+            .iter()
+            .find(|kv| kv.key == "tokenizer.ggml.vocab_size")
+            .and_then(|kv| kv.value.as_u32())
             .unwrap_or(32000) as usize;
 
         // Load token embeddings (various naming conventions: Llama = tok_embeddings, Qwen = token_embd)
-        let token_embeddings = match weights.tensors.get("token_embd.weight")
+        let token_embeddings = match weights
+            .tensors
+            .get("token_embd.weight")
             .or_else(|| weights.tensors.get("tok_embeddings.weight"))
-            .or_else(|| weights.tensors.get("model.embed_tokens.weight")) {
+            .or_else(|| weights.tensors.get("model.embed_tokens.weight"))
+        {
             Some(bytes) => {
                 // For now, assume F16 quantization and dequantize to f32
                 if bytes.len() % 2 == 0 {
-                    let f16_bytes: Vec<u16> = bytes.chunks(2)
+                    let f16_bytes: Vec<u16> = bytes
+                        .chunks(2)
                         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
                         .collect();
-                    Some(f16_bytes.iter()
-                        .map(|&x| half::f16::from_bits(x).to_f32())
-                        .collect())
+                    Some(
+                        f16_bytes
+                            .iter()
+                            .map(|&x| half::f16::from_bits(x).to_f32())
+                            .collect(),
+                    )
                 } else {
                     // Fallback: assume f32 storage
-                    Some(bytes.chunks(4)
-                        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                        .map(|x| f32::from_bits(x))
-                        .collect())
+                    Some(
+                        bytes
+                            .chunks(4)
+                            .map(|chunk| {
+                                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                            })
+                            .map(|x| f32::from_bits(x))
+                            .collect(),
+                    )
                 }
-            },
+            }
             None => None,
         };
 
         // Load output head (various naming conventions; fallback to token embeddings for tied models)
-        let output_weights = match weights.tensors.get("output.weight")
+        let output_weights = match weights
+            .tensors
+            .get("output.weight")
             .or_else(|| weights.tensors.get("lm_head.weight"))
-            .or_else(|| weights.tensors.get("token_embd.weight"))  // Tied embeddings case
-            .or_else(|| weights.tensors.get("tok_embeddings.weight")) {
+            .or_else(|| weights.tensors.get("token_embd.weight")) // Tied embeddings case
+            .or_else(|| weights.tensors.get("tok_embeddings.weight"))
+        {
             Some(bytes) => {
                 // Same dequantization logic as token embeddings
                 if bytes.len() % 2 == 0 {
-                    let f16_bytes: Vec<u16> = bytes.chunks(2)
+                    let f16_bytes: Vec<u16> = bytes
+                        .chunks(2)
                         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
                         .collect();
-                    Some(f16_bytes.iter()
-                        .map(|&x| half::f16::from_bits(x).to_f32())
-                        .collect())
+                    Some(
+                        f16_bytes
+                            .iter()
+                            .map(|&x| half::f16::from_bits(x).to_f32())
+                            .collect(),
+                    )
                 } else {
                     // Fallback: assume f32 storage
-                    Some(bytes.chunks(4)
-                        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                        .map(|x| f32::from_bits(x))
-                        .collect())
+                    Some(
+                        bytes
+                            .chunks(4)
+                            .map(|chunk| {
+                                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                            })
+                            .map(|x| f32::from_bits(x))
+                            .collect(),
+                    )
                 }
-            },
+            }
             None => None,
         };
 
@@ -351,7 +390,10 @@ impl CpuModel {
         })?;
 
         // Simple lookup: each row is hidden_size elements
-        Ok(embeddings[token as usize * self.hidden_size..(token + 1) as usize * self.hidden_size].to_vec())
+        Ok(
+            embeddings[token as usize * self.hidden_size..(token + 1) as usize * self.hidden_size]
+                .to_vec(),
+        )
     }
 
     /// Apply output head to get logits.
@@ -363,8 +405,13 @@ impl CpuModel {
         // Simple matrix-vector multiply: logits = hidden @ output_weights.T
         let mut logits = vec![0.0f32; self.vocab_size];
 
-        println!("DEBUG: output_weights.len={}, hidden.len={}, vocab_size={}, hidden_size={}", 
-                 output_weights.len(), hidden.len(), self.vocab_size, self.hidden_size);
+        println!(
+            "DEBUG: output_weights.len={}, hidden.len={}, vocab_size={}, hidden_size={}",
+            output_weights.len(),
+            hidden.len(),
+            self.vocab_size,
+            self.hidden_size
+        );
 
         for (row_idx, row) in output_weights.chunks(self.hidden_size).enumerate() {
             let mut sum = 0.0;
@@ -374,7 +421,10 @@ impl CpuModel {
             if row_idx < logits.len() {
                 logits[row_idx] = sum;
             } else {
-                println!("DEBUG: Skipping row_idx={} (exceeds vocab_size={})", row_idx, self.vocab_size);
+                println!(
+                    "DEBUG: Skipping row_idx={} (exceeds vocab_size={})",
+                    row_idx, self.vocab_size
+                );
             }
         }
 

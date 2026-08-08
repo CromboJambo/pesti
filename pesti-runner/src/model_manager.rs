@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{RwLock, watch};
 use tracing::{debug, info, warn};
 
 /// Model specification for loading.
@@ -283,7 +283,12 @@ impl ModelManager {
     ///
     /// Spawns a tokio task that periodically processes the preload queue.
     /// Returns a shutdown channel sender and a JoinHandle. Call `shutdown_tx.send(false)` to stop the task.
-    pub fn start_preloading_task(&self) -> (tokio::sync::watch::Sender<bool>, tokio::task::JoinHandle<()>) {
+    pub fn start_preloading_task(
+        &self,
+    ) -> (
+        tokio::sync::watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let manager = Arc::new(self.clone());
         let cleanup_interval = self.preload_config.cleanup_interval();
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -413,4 +418,3 @@ impl Default for ModelManager {
         Self::new()
     }
 }
-

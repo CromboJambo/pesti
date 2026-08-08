@@ -46,7 +46,10 @@ impl DeviceBackend {
             }
             _ => {
                 // Unknown preference, fall back to CPU
-                tracing::warn!("Unknown device backend '{}', falling back to CPU", self.preference);
+                tracing::warn!(
+                    "Unknown device backend '{}', falling back to CPU",
+                    self.preference
+                );
                 self.device = Device::Cpu;
             }
         }
@@ -366,4 +369,3 @@ impl LocalDevice {
         }
     }
 }
-

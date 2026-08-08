@@ -52,13 +52,9 @@ fn main() {
         let elapsed = start.elapsed();
 
         let avg_ms = elapsed.as_millis() as f64 / iterations as f64;
-        let tflops = (2.0 * m as f64 * n as f64 * k as f64)
-            / (elapsed.as_secs_f64() * 1e12);
+        let tflops = (2.0 * m as f64 * n as f64 * k as f64) / (elapsed.as_secs_f64() * 1e12);
 
-        println!(
-            "  Avg: {:.2}ms, Throughput: {:.2} TFLOPS",
-            avg_ms, tflops
-        );
+        println!("  Avg: {:.2}ms, Throughput: {:.2} TFLOPS", avg_ms, tflops);
     }
 
     println!("\n=== Complete ===");

@@ -36,26 +36,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "cuda"))]
     {
         println!("⚠️  CUDA feature not enabled, skipping device detection");
-        println!("   Run with: cargo run --features cuda --package pesti-runner --example benchmark_gpu");
+        println!(
+            "   Run with: cargo run --features cuda --package pesti-runner --example benchmark_gpu"
+        );
     }
 
     // Test 2: CPU GEMM baseline
     println!("\nTest 2: CPU GEMM Baseline (1024x1024x1024)");
-    
+
     let m = 1024;
     let n = 1024;
     let k = 1024;
-    
+
     let a_host: Vec<f16> = (0..(m * k))
         .map(|i| f16::from_f32(((i % 10) as f32) * 0.1))
         .collect();
     let b_host: Vec<f16> = (0..(k * n))
         .map(|i| f16::from_f32(((i % 10) as f32) * 0.1))
         .collect();
-    
+
     let start = Instant::now();
     let mut c_host = vec![0.0f32; m * n];
-    
+
     // Naive CPU GEMM
     for i in 0..m {
         for j in 0..n {
@@ -66,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             c_host[i * n + j] = sum;
         }
     }
-    
+
     let cpu_time = start.elapsed();
     println!("   CPU time: {:.3} ms", cpu_time.as_secs_f64() * 1000.0);
     println!("   C[0][0] = {:.6}", c_host[0]);
@@ -77,29 +79,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu_available = pesti_runner::InferenceEngine::list_devices().is_ok();
     #[cfg(not(feature = "cuda"))]
     let gpu_available = false;
-    
+
     if gpu_available {
         match Device::cuda_if_available(0) {
             Ok(gpu_device) => {
                 // Create inference engine with GPU
                 let engine = pesti_runner::InferenceEngine::new(gpu_device, DType::F16);
-                
+
                 if !engine.gpu_available() {
                     println!("⚠️  GPU available but kernel not ready");
                     return Ok(());
                 }
-                
+
                 // Get memory manager from engine
                 // Note: InferenceEngine doesn't expose memory_manager directly,
                 // so we'll use CPU fallback for now and just test that GPU path is available
                 println!("   GPU backend: {}", engine.backend_description());
                 println!("   GEMM arch: {:?}", engine.gemm_arch());
                 println!("   Attention arch: {:?}", engine.attention_arch());
-                
+
                 // Test kernel availability
                 println!("   ✅ GEMM kernel available: {}", engine.gemm_available());
-                println!("   ✅ Attention kernel available: {}", engine.attention_available());
-                
+                println!(
+                    "   ✅ Attention kernel available: {}",
+                    engine.attention_available()
+                );
+
                 // For a real benchmark, we'd need access to the memory manager
                 // to allocate DeviceBuffers on GPU. The current architecture
                 // has MemoryManager internal to InferenceEngine.
@@ -117,14 +122,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTest 4: Inference Engine Backend Detection");
     let _cpu_engine = pesti_runner::InferenceEngine::new(Device::Cpu, DType::F16);
     println!("   CPU backend: {}", _cpu_engine.backend_description());
-    
+
     if gpu_available {
         match Device::cuda_if_available(0) {
             Ok(gpu_device) => {
                 let gpu_engine = pesti_runner::InferenceEngine::new(gpu_device, DType::F16);
                 println!("   GPU backend: {}", gpu_engine.backend_description());
                 println!("   GPU available: {}", gpu_engine.gpu_available());
-                
+
                 if let Ok(info) = gpu_engine.full_device_info() {
                     println!("   Device info: {}", info);
                 }
@@ -139,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTest 5: Attention Kernel Status");
     let _cpu_engine = pesti_runner::InferenceEngine::new(Device::Cpu, DType::F16);
     println!("   CPU attention: available");
-    
+
     if gpu_available {
         match Device::cuda_if_available(0) {
             Ok(gpu_device) => {
@@ -162,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTest 6: GEMM Kernel Status");
     let _cpu_engine = pesti_runner::InferenceEngine::new(Device::Cpu, DType::F16);
     println!("   CPU GEMM: available");
-    
+
     if gpu_available {
         match Device::cuda_if_available(0) {
             Ok(gpu_device) => {

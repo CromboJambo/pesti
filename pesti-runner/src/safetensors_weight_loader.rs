@@ -87,7 +87,10 @@ pub fn load_safetensors_weights(safetensors_path: &Path) -> Result<SafetensorsWe
         let data = tensor_view.data();
         let size_bytes = data.len();
 
-        metadata.insert(tensor_name.clone(), (shape.to_vec(), dtype.clone(), size_bytes));
+        metadata.insert(
+            tensor_name.clone(),
+            (shape.to_vec(), dtype.clone(), size_bytes),
+        );
 
         // Convert to f32 bytes (dequantize)
         let loaded = convert_dtype(data, &dtype)?;
@@ -143,8 +146,8 @@ fn convert_dtype(raw: &[u8], dtype: &str) -> Result<Vec<u8>> {
             let f32_data = bf16_f32(raw);
             Ok(f32_data.into_iter().flat_map(|v| v.to_le_bytes()).collect())
         }
-        "U8" | "UINT_8" | "I8" | "INT_8" | "I16" | "INT_16" | "I32" | "INT_32"
-        | "I64" | "INT_64" | "U32" | "UINT_32" | "U64" | "UINT_64" => Ok(raw.to_vec()),
+        "U8" | "UINT_8" | "I8" | "INT_8" | "I16" | "INT_16" | "I32" | "INT_32" | "I64"
+        | "INT_64" | "U32" | "UINT_32" | "U64" | "UINT_64" => Ok(raw.to_vec()),
         _ => Err(RunnerError::ModelLoad(format!(
             "Unsupported safetensors dtype: {dtype}"
         ))),
@@ -241,4 +244,3 @@ pub fn get_safetensors_total_size(safetensors_path: &Path) -> Result<usize> {
 
     Ok(handle.tensors().iter().map(|(_, tv)| tv.data().len()).sum())
 }
-

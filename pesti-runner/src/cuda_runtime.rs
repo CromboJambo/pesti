@@ -223,7 +223,7 @@ impl CudaRuntime {
 /// Estimate compute capability from device name.
 fn estimate_compute_capability_from_name(name: &str) -> (i32, i32) {
     let name_lower = name.to_lowercase();
-    
+
     if name_lower.contains("50") {
         // RTX 50 series - likely sm_12+
         (12, 0)
@@ -257,7 +257,7 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
             if let Ok(device_count) = nvml.device_count() {
                 if device_count > 0 {
                     let mut devices = Vec::with_capacity(device_count as usize);
-                    
+
                     for ordinal in 0..device_count as usize {
                         if let Ok(device) = nvml.device_by_index(ordinal as u32) {
                             // Get name
@@ -266,10 +266,10 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
                                 if let Ok(mem_info) = device.memory_info() {
                                     let total_memory = mem_info.total;
                                     let free_memory = mem_info.free;
-                                    
+
                                     // Estimate compute capability from name
                                     let cc = estimate_compute_capability_from_name(&name);
-                                    
+
                                     devices.push(CudaDeviceInfo {
                                         ordinal,
                                         name: name.to_string(),
@@ -281,7 +281,7 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
                             }
                         }
                     }
-                    
+
                     if !devices.is_empty() {
                         return Ok(devices);
                     }
@@ -289,7 +289,7 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
             }
         }
     }
-    
+
     // Fallback to driver API if NVML fails or returns empty
     #[cfg(feature = "cuda")]
     {
@@ -388,7 +388,7 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
 
         Ok(devices)
     }
-    
+
     #[cfg(not(feature = "cuda"))]
     {
         Ok(Vec::new())
@@ -430,7 +430,7 @@ pub fn select_best_device(model_bytes: u64) -> Option<CudaDeviceInfo> {
 }
 
 /// Check if CUDA is available on this system.
-/// 
+///
 /// Uses NVML (NVIDIA Management Library) for more reliable device detection,
 /// especially when another process already has the CUDA context.
 pub fn is_available() -> bool {
@@ -445,7 +445,7 @@ pub fn is_available() -> bool {
             }
         }
     }
-    
+
     // Fallback to driver API if NVML fails
     enumerate_devices().is_ok() && !enumerate_devices().unwrap_or_default().is_empty()
 }

@@ -99,9 +99,7 @@ fn main() {
         let (free_memory, total_memory) = {
             let mut free: usize = 0;
             let mut total: usize = 0;
-            match unsafe {
-                cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total).result()
-            } {
+            match unsafe { cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total).result() } {
                 Ok(_) => (free as u64, total as u64),
                 Err(e) => {
                     println!("❌ cuMemGetInfo failed: {}", e);

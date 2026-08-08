@@ -88,7 +88,12 @@ impl Linear {
     }
 
     /// Build a Linear layer with explicit shape (for embeddings where we know embed_dim).
-    pub fn from_f32_weight_with_shape(weight_f32: &[u8], bias: Option<Vec<f32>>, in_features: usize, out_features: usize) -> Self {
+    pub fn from_f32_weight_with_shape(
+        weight_f32: &[u8],
+        bias: Option<Vec<f32>>,
+        in_features: usize,
+        out_features: usize,
+    ) -> Self {
         let weight: Vec<f32> = weight_f32
             .chunks_exact(4)
             .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
@@ -107,8 +112,15 @@ impl Linear {
     /// Returns: [batch_size, out_features]
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * self.out_features];
-        eprintln!("Linear::forward: in={}, out={}, batch={}, x.len={}, weight.len={}, output.len={}",
-            self.in_features, self.out_features, batch_size, x.len(), self.weight.len(), output.len());
+        eprintln!(
+            "Linear::forward: in={}, out={}, batch={}, x.len={}, weight.len={}, output.len={}",
+            self.in_features,
+            self.out_features,
+            batch_size,
+            x.len(),
+            self.weight.len(),
+            output.len()
+        );
 
         // Matmul: output[b, o] = sum_i(x[b, i] * W[o, i])
         // Weight is [out_features, in_features] row-major.
@@ -196,8 +208,8 @@ mod tests {
     fn test_linear_forward_vs_scalar() {
         // Simple 2x3 matrix multiply: A (2x3) @ B^T (3x2) -> C (2x2)
         let weight = vec![
-            1.0, 2.0, 3.0,  // row 0: W[0][0]=1, W[0][1]=2, W[0][2]=3
-            4.0, 5.0, 6.0,  // row 1: W[1][0]=4, W[1][1]=5, W[1][2]=6
+            1.0, 2.0, 3.0, // row 0: W[0][0]=1, W[0][1]=2, W[0][2]=3
+            4.0, 5.0, 6.0, // row 1: W[1][0]=4, W[1][1]=5, W[1][2]=6
         ];
         let bias = Some(vec![0.1, 0.2]);
 
@@ -205,8 +217,8 @@ mod tests {
 
         // Input: 2x3 matrix
         let x = vec![
-            1.0, 2.0, 3.0,  // batch 0
-            4.0, 5.0, 6.0,  // batch 1
+            1.0, 2.0, 3.0, // batch 0
+            4.0, 5.0, 6.0, // batch 1
         ];
 
         let output = linear.forward(&x, 2);
@@ -223,18 +235,16 @@ mod tests {
             assert!(
                 (got - exp).abs() < 1e-5,
                 "Mismatch at index {}: got {}, expected {}",
-                i, got, exp
+                i,
+                got,
+                exp
             );
         }
     }
 
     #[test]
     fn test_linear_forward_no_bias() {
-        let weight = vec![
-            1.0, 2.0,
-            3.0, 4.0,
-            5.0, 6.0,
-        ];
+        let weight = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
         let linear = Linear::new(weight, None, 2, 3);
 
@@ -253,9 +263,10 @@ mod tests {
             assert!(
                 (got - exp).abs() < 1e-5,
                 "Mismatch at index {}: got {}, expected {}",
-                i, got, exp
+                i,
+                got,
+                exp
             );
         }
     }
 }
-

@@ -8,13 +8,13 @@
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::kernel::Kvcache;
 use pesti_runner::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel, GemmBasedAttentionKernel,
 };
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::gemm::{CudaGemmKernelBuilder, GemmArch};
 use pesti_runner::kernel::memory::{CudaMemoryBackend, MemoryBackend};
-use pesti_runner::kernel::Kvcache;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -89,8 +89,7 @@ fn run_benchmark(
     );
 
     // --- GPU benchmark ---
-    let devices = pesti_runner::cuda_runtime::enumerate_devices()
-        .unwrap_or_default();
+    let devices = pesti_runner::cuda_runtime::enumerate_devices().unwrap_or_default();
     if devices.is_empty() {
         println!("  GPU:  No CUDA devices found, skipping GPU benchmark");
         return Ok(());
@@ -112,9 +111,7 @@ fn run_benchmark(
 
     println!(
         "  GPU Device: {} (sm_{}.{})",
-        device_info.name,
-        device_info.compute_capability.0,
-        device_info.compute_capability.1
+        device_info.name, device_info.compute_capability.0, device_info.compute_capability.1
     );
 
     // Create GEMM kernel
@@ -145,7 +142,8 @@ fn run_benchmark(
     let host_slice = kvc_gpu.buffer().as_slice().expect("kvcache must be host");
     let kv_device_buf = DeviceBuffer::from_host_device(&*backend, host_slice)?;
     let kv_ptr = kv_device_buf.device_ptr();
-    let mut kvc_device = unsafe { Kvcache::from_device(kv_ptr, num_heads, num_heads, head_dim, seq_len) };
+    let mut kvc_device =
+        unsafe { Kvcache::from_device(kv_ptr, num_heads, num_heads, head_dim, seq_len) };
     kvc_device.set_seq_len(seq_len);
 
     // Copy query to GPU
@@ -159,7 +157,8 @@ fn run_benchmark(
     // GPU benchmark
     let gpu_loops = 10;
     let gpu_start = Instant::now();
-    let gpu_output = attn_kernel.forward(&q_gpu_buf, &kvc_device, &kvc_device, None, &gpu_config)?;
+    let gpu_output =
+        attn_kernel.forward(&q_gpu_buf, &kvc_device, &kvc_device, None, &gpu_config)?;
     for _ in 0..gpu_loops {
         let _ = attn_kernel.forward(&q_gpu_buf, &kvc_device, &kvc_device, None, &gpu_config)?;
     }

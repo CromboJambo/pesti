@@ -14,8 +14,18 @@ use crate::transformer::rope::RopeConfig;
 
 /// SwiGLU activation: silu(x) * y
 fn swiglu(x: &[f32], y: &[f32], size: usize) -> Vec<f32> {
-    assert!(size <= x.len(), "swiglu: size={} but x.len()={}", size, x.len());
-    assert!(size <= y.len(), "swiglu: size={} but y.len()={}", size, y.len());
+    assert!(
+        size <= x.len(),
+        "swiglu: size={} but x.len()={}",
+        size,
+        x.len()
+    );
+    assert!(
+        size <= y.len(),
+        "swiglu: size={} but y.len()={}",
+        size,
+        y.len()
+    );
     let mut output = vec![0.0f32; size];
     for i in 0..size {
         let sigmoid = if x[i] >= 0.0 {
@@ -217,10 +227,7 @@ impl Attention {
             }
 
             // Softmax over cached positions
-            let max_val = scores
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
+            let max_val = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
             let exps: Vec<f32> = scores.iter().map(|s| (*s - max_val).exp()).collect();
             let exp_sum: f32 = exps.iter().sum();
             let weights: Vec<f32> = if exp_sum > 0.0 {
@@ -267,7 +274,14 @@ impl FeedForward {
         let gate = self.w1.forward(x, batch_size);
         let up = self.w3.forward(x, batch_size);
 
-        eprintln!("FFN: intermediate_dim={}, gate.len={}, up.len={}, x.len={}, batch={}", self.intermediate_dim, gate.len(), up.len(), x.len(), batch_size);
+        eprintln!(
+            "FFN: intermediate_dim={}, gate.len={}, up.len={}, x.len={}, batch={}",
+            self.intermediate_dim,
+            gate.len(),
+            up.len(),
+            x.len(),
+            batch_size
+        );
 
         let swiglu_out = swiglu(&gate, &up, self.intermediate_dim);
         self.w2.forward(&swiglu_out, batch_size)

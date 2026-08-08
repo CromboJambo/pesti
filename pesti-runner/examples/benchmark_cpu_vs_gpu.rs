@@ -102,9 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n💡 NEXT STEPS FOR FULL BENCHMARKING");
     println!("{}", "-".repeat(50));
     println!("1. Run full inference with model loading:");
-    println!(
-        "   cargo run --example e2e_gpu_inference --features cuda"
-    );
+    println!("   cargo run --example e2e_gpu_inference --features cuda");
     println!();
 
     println!("2. Test different quantization levels:");

@@ -227,4 +227,3 @@ pub async fn get_healthy_remote_devices() -> Vec<RemoteDevice> {
     let devices = discover_remote_devices(&config).await;
     devices.into_iter().filter(|d| d.healthy).collect()
 }
-

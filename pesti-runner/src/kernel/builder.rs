@@ -466,4 +466,3 @@ impl GemmKernel for KernelFromPtx {
         self.gpu_available
     }
 }
-

@@ -36,7 +36,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use llama_cpp_sys_2;
 use llama_cpp_2::{
     context::{LlamaContext, params::LlamaContextParams},
     json_schema_to_grammar, llama_backend,
@@ -46,6 +45,7 @@ use llama_cpp_2::{
     sampling::LlamaSampler,
     token::LlamaToken,
 };
+use llama_cpp_sys_2;
 
 use anyhow::Result;
 use tracing::info;
@@ -217,8 +217,12 @@ impl LlamaRunnerBuilder {
             .with_n_batch(self.n_batch)
             .with_n_ubatch(self.n_ubatch)
             .with_n_threads(self.n_threads)
-            .with_type_k(llama_cpp_2::context::params::KvCacheType::from(self.kv_cache_type))
-            .with_type_v(llama_cpp_2::context::params::KvCacheType::from(self.kv_cache_type));
+            .with_type_k(llama_cpp_2::context::params::KvCacheType::from(
+                self.kv_cache_type,
+            ))
+            .with_type_v(llama_cpp_2::context::params::KvCacheType::from(
+                self.kv_cache_type,
+            ));
 
         // Leak model to satisfy 'static lifetime requirement of LlamaContext
         let model = Box::leak(Box::new(model));
@@ -285,7 +289,9 @@ impl LlamaRunner {
         } else {
             llama_cpp_2::model::AddBos::Never
         };
-        self.model.str_to_token(text, add_bos).map_err(|e| anyhow::anyhow!(e))
+        self.model
+            .str_to_token(text, add_bos)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Decode a single token to a string piece.
@@ -415,9 +421,7 @@ impl LlamaRunner {
             .iter()
             .filter_map(|t| {
                 let mut decoder = encoding_rs::UTF_8.new_decoder();
-                self.model
-                    .token_to_piece(*t, &mut decoder, true, None)
-                    .ok()
+                self.model.token_to_piece(*t, &mut decoder, true, None).ok()
             })
             .collect();
 
@@ -584,7 +588,8 @@ impl LlamaRunner {
             if is_eos {
                 info!(
                     "EOS token reached at position {}, generated {} tokens",
-                    pos + 1, gen_count
+                    pos + 1,
+                    gen_count
                 );
                 break;
             }
@@ -780,14 +785,18 @@ impl SessionManager {
 
     /// Save the current context state to a file.
     pub fn save(&self, path: &str) -> Result<(), String> {
-        self.context.borrow().state_save_file(path, &[])
+        self.context
+            .borrow()
+            .state_save_file(path, &[])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// Load context state from a file.
     pub fn load(&self, path: &str) -> Result<(), String> {
-        self.context.borrow_mut().state_load_file(path, 0)
+        self.context
+            .borrow_mut()
+            .state_load_file(path, 0)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -798,15 +807,29 @@ impl SessionManager {
     }
 
     /// Save a specific sequence's state to a file.
-    pub fn save_seq_state(&self, seq_id: i32, path: &str, tokens: &[LlamaToken]) -> Result<(), String> {
-        self.context.borrow_mut().state_seq_save_file(path, seq_id, tokens)
+    pub fn save_seq_state(
+        &self,
+        seq_id: i32,
+        path: &str,
+        tokens: &[LlamaToken],
+    ) -> Result<(), String> {
+        self.context
+            .borrow_mut()
+            .state_seq_save_file(path, seq_id, tokens)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// Load a specific sequence's state from a file.
-    pub fn load_seq_state(&self, dest_seq_id: i32, path: &str, max_tokens: usize) -> Result<(), String> {
-        self.context.borrow_mut().state_seq_load_file(path, dest_seq_id, max_tokens)
+    pub fn load_seq_state(
+        &self,
+        dest_seq_id: i32,
+        path: &str,
+        max_tokens: usize,
+    ) -> Result<(), String> {
+        self.context
+            .borrow_mut()
+            .state_seq_load_file(path, dest_seq_id, max_tokens)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -851,7 +874,10 @@ pub fn inspect_gguf(path: &str) -> Result<String> {
     let n_tensors = unsafe { llama_cpp_sys_2::gguf_get_n_tensors(gguf) };
     let n_kv = unsafe { llama_cpp_sys_2::gguf_get_n_kv(gguf) };
     let mut info = String::new();
-    info.push_str(&format!("GGUF file: {}\n  n_tensors: {}\n  n_kv: {}\n", path, n_tensors, n_kv));
+    info.push_str(&format!(
+        "GGUF file: {}\n  n_tensors: {}\n  n_kv: {}\n",
+        path, n_tensors, n_kv
+    ));
 
     // Read key KV metadata
     let n_keys = unsafe { llama_cpp_sys_2::gguf_get_n_kv(gguf) };

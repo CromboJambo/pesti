@@ -154,8 +154,9 @@ impl<'a> SafetensorsStore<'a> {
         let file_data = std::fs::read(&abs_path)
             .map_err(|e| SafetensorsError::Load(format!("failed to read file: {e}")))?;
 
-        let handle = safetensors::SafeTensors::deserialize(&file_data)
-            .map_err(|e| SafetensorsError::Load(format!("failed to deserialize safetensors: {e}")))?;
+        let handle = safetensors::SafeTensors::deserialize(&file_data).map_err(|e| {
+            SafetensorsError::Load(format!("failed to deserialize safetensors: {e}"))
+        })?;
 
         let mut tensor_rows = Vec::new();
         let mut total_tensors: i32 = 0;
@@ -167,7 +168,11 @@ impl<'a> SafetensorsStore<'a> {
             let shape = tensor_view.shape();
             let shape_str = format!(
                 "({})",
-                shape.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
+                shape
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
 
             let data = tensor_view.data();
@@ -246,8 +251,9 @@ impl<'a> SafetensorsStore<'a> {
         let file_data = std::fs::read(&abs_path)
             .map_err(|e| SafetensorsError::Load(format!("failed to read file: {e}")))?;
 
-        let handle = safetensors::SafeTensors::deserialize(&file_data)
-            .map_err(|e| SafetensorsError::Load(format!("failed to deserialize safetensors: {e}")))?;
+        let handle = safetensors::SafeTensors::deserialize(&file_data).map_err(|e| {
+            SafetensorsError::Load(format!("failed to deserialize safetensors: {e}"))
+        })?;
 
         let tensor_view = handle
             .tensor(tensor_name)
@@ -283,8 +289,9 @@ impl<'a> SafetensorsStore<'a> {
         let file_data = std::fs::read(&abs_path)
             .map_err(|e| SafetensorsError::Load(format!("failed to read file: {e}")))?;
 
-        let handle = safetensors::SafeTensors::deserialize(&file_data)
-            .map_err(|e| SafetensorsError::Load(format!("failed to deserialize safetensors: {e}")))?;
+        let handle = safetensors::SafeTensors::deserialize(&file_data).map_err(|e| {
+            SafetensorsError::Load(format!("failed to deserialize safetensors: {e}"))
+        })?;
 
         Ok(handle.names().iter().map(|s| s.to_string()).collect())
     }
@@ -302,8 +309,9 @@ impl<'a> SafetensorsStore<'a> {
         let file_data = std::fs::read(&abs_path)
             .map_err(|e| SafetensorsError::Load(format!("failed to read file: {e}")))?;
 
-        let handle = safetensors::SafeTensors::deserialize(&file_data)
-            .map_err(|e| SafetensorsError::Load(format!("failed to deserialize safetensors: {e}")))?;
+        let handle = safetensors::SafeTensors::deserialize(&file_data).map_err(|e| {
+            SafetensorsError::Load(format!("failed to deserialize safetensors: {e}"))
+        })?;
 
         let mut result = Vec::new();
         for (name, tensor_view) in handle.tensors() {
@@ -322,21 +330,18 @@ mod tests {
     use tempfile::tempdir;
 
     /// Helper: create a minimal valid safetensors file with f32 tensor data.
-    fn make_safetensors_file(dir: &tempfile::TempDir, name: &str, data: &[f32]) -> std::path::PathBuf {
+    fn make_safetensors_file(
+        dir: &tempfile::TempDir,
+        name: &str,
+        data: &[f32],
+    ) -> std::path::PathBuf {
         let path = dir.path().join(name);
         let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                data.as_ptr() as *const u8,
-                std::mem::size_of_val(data),
-            )
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
         };
         let shape: Vec<usize> = vec![data.len()];
-        let tv = safetensors::tensor::TensorView::new(
-            safetensors::Dtype::F32,
-            shape,
-            bytes,
-        )
-        .unwrap();
+        let tv =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape, bytes).unwrap();
         let meta = std::collections::HashMap::new();
         let buf = safetensors::serialize(std::iter::once(("weight", &tv)), Some(meta)).unwrap();
         std::fs::write(&path, buf).unwrap();
@@ -350,7 +355,8 @@ mod tests {
         let buf = safetensors::serialize(
             Vec::<(&str, safetensors::tensor::TensorView)>::new(),
             Some(meta),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(&path, buf).unwrap();
         path
     }
@@ -630,7 +636,9 @@ mod tests {
 
         let model_path = make_safetensors_file(&dir, "model.safetensors", &[1.0, 2.0, 3.0, 4.0]);
 
-        let data = store.load_tensor_data(model_path.to_str().unwrap(), "weight").unwrap();
+        let data = store
+            .load_tensor_data(model_path.to_str().unwrap(), "weight")
+            .unwrap();
         assert_eq!(data.len(), 16); // 4 * f32 = 16 bytes
     }
 
@@ -658,7 +666,9 @@ mod tests {
         store.init().unwrap();
 
         let model_path = make_safetensors_file(&dir, "model.safetensors", &[1.0, 2.0]);
-        let result = store.verify_file_integrity(model_path.to_str().unwrap()).unwrap();
+        let result = store
+            .verify_file_integrity(model_path.to_str().unwrap())
+            .unwrap();
         assert!(result);
     }
 
@@ -690,23 +700,30 @@ mod tests {
         let model_path = dir.path().join("model.safetensors");
         // Create a file with 2 tensors using direct serialization
         let d1: [f32; 1] = [1.0];
-        let data1: &[u8] = unsafe { std::slice::from_raw_parts(&d1 as *const [f32; 1] as *const u8, 4) };
+        let data1: &[u8] =
+            unsafe { std::slice::from_raw_parts(&d1 as *const [f32; 1] as *const u8, 4) };
         let shape1: Vec<usize> = vec![1];
-        let tv1 = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape1, data1).unwrap();
+        let tv1 =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape1, data1).unwrap();
         let d2: [f32; 2] = [2.0, 3.0];
-        let data2: &[u8] = unsafe { std::slice::from_raw_parts(&d2 as *const [f32; 2] as *const u8, 8) };
+        let data2: &[u8] =
+            unsafe { std::slice::from_raw_parts(&d2 as *const [f32; 2] as *const u8, 8) };
         let shape2: Vec<usize> = vec![2];
-        let tv2 = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape2, data2).unwrap();
+        let tv2 =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape2, data2).unwrap();
         let keys: Vec<String> = vec!["weight_0".to_string(), "weight_1".to_string()];
         let views: Vec<safetensors::tensor::TensorView> = vec![tv1, tv2];
         let meta = std::collections::HashMap::new();
         let buf = safetensors::serialize(
             keys.iter().zip(views.iter()).map(|(k, v)| (k.as_str(), v)),
             Some(meta),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(&model_path, buf).unwrap();
 
-        let names = store.list_tensor_names(model_path.to_str().unwrap()).unwrap();
+        let names = store
+            .list_tensor_names(model_path.to_str().unwrap())
+            .unwrap();
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"weight_0".to_string()));
         assert!(names.contains(&"weight_1".to_string()));
@@ -723,7 +740,9 @@ mod tests {
 
         let model_path = make_safetensors_file(&dir, "model.safetensors", &[1.0, 2.0]);
 
-        let metadata = store.list_tensor_metadata(model_path.to_str().unwrap()).unwrap();
+        let metadata = store
+            .list_tensor_metadata(model_path.to_str().unwrap())
+            .unwrap();
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata[0].0, "weight");
         assert_eq!(metadata[0].1, "F32");
@@ -743,23 +762,30 @@ mod tests {
 
         // Create two tensors with different data to verify checksums differ
         let d1: [f32; 2] = [1.0, 2.0];
-        let data1: &[u8] = unsafe { std::slice::from_raw_parts(&d1 as *const [f32; 2] as *const u8, 8) };
+        let data1: &[u8] =
+            unsafe { std::slice::from_raw_parts(&d1 as *const [f32; 2] as *const u8, 8) };
         let shape1: Vec<usize> = vec![2];
-        let tv1 = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape1, data1).unwrap();
+        let tv1 =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape1, data1).unwrap();
         let d2: [f32; 2] = [3.0, 4.0];
-        let data2: &[u8] = unsafe { std::slice::from_raw_parts(&d2 as *const [f32; 2] as *const u8, 8) };
+        let data2: &[u8] =
+            unsafe { std::slice::from_raw_parts(&d2 as *const [f32; 2] as *const u8, 8) };
         let shape2: Vec<usize> = vec![2];
-        let tv2 = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape2, data2).unwrap();
+        let tv2 =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, shape2, data2).unwrap();
         let keys: Vec<String> = vec!["weight_A".to_string(), "weight_B".to_string()];
         let views: Vec<safetensors::tensor::TensorView> = vec![tv1, tv2];
         let meta = std::collections::HashMap::new();
         let buf = safetensors::serialize(
             keys.iter().zip(views.iter()).map(|(k, v)| (k.as_str(), v)),
             Some(meta),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(&model_path, buf).unwrap();
 
-        let (_, tensor_rows) = store.parse_weights(model_path.to_str().unwrap(), "checksum-test", "test-repo").unwrap();
+        let (_, tensor_rows) = store
+            .parse_weights(model_path.to_str().unwrap(), "checksum-test", "test-repo")
+            .unwrap();
 
         // Each tensor should have a unique non-empty checksum
         assert!(!tensor_rows[0].checksum.is_empty());

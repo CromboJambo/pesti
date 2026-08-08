@@ -27,9 +27,11 @@ pub struct SafetensorsTokenizerConfig {
 }
 
 /// Load a tokenizer from a HuggingFace tokenizer.json file.
-pub fn load_tokenizer_from_safetensors(path: &Path) -> Result<(SafetensorsTokenizerConfig, TokenizerImpl)> {
-    let tokenizer = TokenizerImpl::from_file(path)
-        .map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
+pub fn load_tokenizer_from_safetensors(
+    path: &Path,
+) -> Result<(SafetensorsTokenizerConfig, TokenizerImpl)> {
+    let tokenizer =
+        TokenizerImpl::from_file(path).map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
 
     let vocab_size = tokenizer.get_vocab_size(true);
 
@@ -55,7 +57,9 @@ pub fn load_tokenizer_from_safetensors(path: &Path) -> Result<(SafetensorsTokeni
 ///
 /// Looks for:
 /// - tokenizer.json (standard HuggingFace format)
-pub fn load_tokenizer_for_model(model_path: &Path) -> Result<(SafetensorsTokenizerConfig, TokenizerImpl)> {
+pub fn load_tokenizer_for_model(
+    model_path: &Path,
+) -> Result<(SafetensorsTokenizerConfig, TokenizerImpl)> {
     let model_dir = model_path
         .parent()
         .ok_or_else(|| RunnerError::Tokenizer("Model path has no parent directory".to_string()))?;
@@ -70,4 +74,3 @@ pub fn load_tokenizer_for_model(model_path: &Path) -> Result<(SafetensorsTokeniz
         "No tokenizer found in model directory (expected tokenizer.json)".to_string(),
     ))
 }
-

@@ -65,11 +65,12 @@ impl LlamaConfig {
             _ => ModelArch::Llama,
         };
 
-        let embed_dim = header.embedding_length().ok_or_else(|| {
-            RunnerError::MissingHeaderField("embedding_length".to_string())
-        })? as usize;
-        let num_heads = pesti_gguf::parser::get_kv_u32(&header, "attention.head_count")
-        .unwrap_or(32) as usize;
+        let embed_dim = header
+            .embedding_length()
+            .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
+            as usize;
+        let num_heads =
+            pesti_gguf::parser::get_kv_u32(&header, "attention.head_count").unwrap_or(32) as usize;
 
         let num_kv_heads = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
@@ -150,22 +151,22 @@ impl LlamaConfig {
     /// - `max_position_embeddings` / `context_length` — max seq len
     /// - `rope_theta` — RoPE base
     /// - `rms_norm_eps` / `layer_norm_epsilon` — normalization epsilon
-    pub fn from_safetensors_metadata(meta: &std::collections::HashMap<String, String>) -> Result<Self> {
+    pub fn from_safetensors_metadata(
+        meta: &std::collections::HashMap<String, String>,
+    ) -> Result<Self> {
         // Architecture
         let arch = meta
             .get("model_type")
             .or(meta.get("architectures"))
             .map(|s| s.trim_matches('"').to_lowercase())
-            .and_then(|s| {
-                match s.as_str() {
-                    "gemma" | "google/gemma" => Some(ModelArch::Gemma),
-                    "qwen2" | "qwen2vl" => Some(ModelArch::Qwen2),
-                    "qwen3" => Some(ModelArch::Qwen3),
-                    "phi3" | "microsoft/phi-3" => Some(ModelArch::Phi3),
-                    "mixtral" | "mistral" | "mistralai" => Some(ModelArch::Mixtral),
-                    "starcoder2" => Some(ModelArch::Starcoder2),
-                    _ => None,
-                }
+            .and_then(|s| match s.as_str() {
+                "gemma" | "google/gemma" => Some(ModelArch::Gemma),
+                "qwen2" | "qwen2vl" => Some(ModelArch::Qwen2),
+                "qwen3" => Some(ModelArch::Qwen3),
+                "phi3" | "microsoft/phi-3" => Some(ModelArch::Phi3),
+                "mixtral" | "mistral" | "mistralai" => Some(ModelArch::Mixtral),
+                "starcoder2" => Some(ModelArch::Starcoder2),
+                _ => None,
             })
             .unwrap_or(ModelArch::Llama);
 
@@ -192,25 +193,44 @@ impl LlamaConfig {
             None
         };
 
-        let embed_dim = get_u64(&["hidden_size", "dim", "d_model"]).map(|v| v as usize).ok_or_else(|| {
-            RunnerError::ModelLoad("safetensors metadata missing hidden_size/dim".to_string())
-        })?;
+        let embed_dim = get_u64(&["hidden_size", "dim", "d_model"])
+            .map(|v| v as usize)
+            .ok_or_else(|| {
+                RunnerError::ModelLoad("safetensors metadata missing hidden_size/dim".to_string())
+            })?;
 
-        let num_heads = get_u64(&["num_attention_heads", "n_heads", "num_heads"]).map(|v| v as usize).unwrap_or(32);
-        let num_kv_heads = get_u64(&["num_key_value_heads"]).map(|v| v as usize).unwrap_or(num_heads);
-        let num_layers = get_u64(&["num_hidden_layers", "n_layers", "num_layers"]).map(|v| v as usize).unwrap_or(32);
-        let head_dim = if num_heads > 0 { embed_dim / num_heads } else { 64 };
+        let num_heads = get_u64(&["num_attention_heads", "n_heads", "num_heads"])
+            .map(|v| v as usize)
+            .unwrap_or(32);
+        let num_kv_heads = get_u64(&["num_key_value_heads"])
+            .map(|v| v as usize)
+            .unwrap_or(num_heads);
+        let num_layers = get_u64(&["num_hidden_layers", "n_layers", "num_layers"])
+            .map(|v| v as usize)
+            .unwrap_or(32);
+        let head_dim = if num_heads > 0 {
+            embed_dim / num_heads
+        } else {
+            64
+        };
         let intermediate_dim = get_u64(&["intermediate_size", "ffn_dim", "feed_forward_length"])
             .map(|v| v as usize)
             .unwrap_or(11008);
-        let max_seq_len = get_u64(&["max_position_embeddings", "context_length", "seq_length"]).map(|v| v as usize).unwrap_or(4096);
+        let max_seq_len = get_u64(&["max_position_embeddings", "context_length", "seq_length"])
+            .map(|v| v as usize)
+            .unwrap_or(4096);
         let rope_base = get_f32(&["rope_theta", "rope_scaling_factor"]).unwrap_or(10000.0);
-        let rms_norm_eps = get_f32(&["rms_norm_eps", "layer_norm_epsilon", "layer_norm_epsilon"]).unwrap_or(1e-5);
+        let rms_norm_eps =
+            get_f32(&["rms_norm_eps", "layer_norm_epsilon", "layer_norm_epsilon"]).unwrap_or(1e-5);
 
         // Try to get rope dimension from metadata
-        let rope_dim = get_u64(&["rope_dim", "rope_dimension_count", "rope_scaling_rope_dimension"])
-            .map(|v| v as usize)
-            .unwrap_or(head_dim);
+        let rope_dim = get_u64(&[
+            "rope_dim",
+            "rope_dimension_count",
+            "rope_scaling_rope_dimension",
+        ])
+        .map(|v| v as usize)
+        .unwrap_or(head_dim);
         let actual_head_dim = if rope_dim > 0 { rope_dim } else { head_dim };
 
         // Rope scaling
@@ -220,7 +240,11 @@ impl LlamaConfig {
             .and_then(|v| v.get("factor").and_then(|fv| fv.as_f64()).map(|f| f as f32));
         let rope_scaling_type = rope_scaling
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s.trim_matches('"')).ok())
-            .and_then(|v| v.get("type").and_then(|tv| tv.as_str()).map(|s| s.to_string()));
+            .and_then(|v| {
+                v.get("type")
+                    .and_then(|tv| tv.as_str())
+                    .map(|s| s.to_string())
+            });
 
         Ok(Self {
             arch,
@@ -345,42 +369,36 @@ impl LlamaModel {
 
         // Load token embeddings — architecture-dependent name
         let embedding_name = config.embedding_name();
-        let token_embeddings = weights
-            .tensors
-            .get(embedding_name)
-            .map(|tensor_data| {
-                // For Qwen2, the embedding tensor shape is [embed_dim, vocab_size]
-                // We need to set in_features = embed_dim for correct row lookup
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                    let embed_dim = config.embed_dim;
-                    Linear::from_f32_weight_with_shape(
-                        tensor_data,
-                        None,
-                        embed_dim as usize,
-                        vocab_size as usize * embed_dim as usize,
-                    )
-                } else {
-                    Linear::from_f32_weight(tensor_data, None)
-                }
-            });
+        let token_embeddings = weights.tensors.get(embedding_name).map(|tensor_data| {
+            // For Qwen2, the embedding tensor shape is [embed_dim, vocab_size]
+            // We need to set in_features = embed_dim for correct row lookup
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let embed_dim = config.embed_dim;
+                Linear::from_f32_weight_with_shape(
+                    tensor_data,
+                    None,
+                    embed_dim as usize,
+                    vocab_size as usize * embed_dim as usize,
+                )
+            } else {
+                Linear::from_f32_weight(tensor_data, None)
+            }
+        });
 
         // Load output (LM head) — architecture-dependent name
         let output_name = config.output_name();
-        let output = weights
-            .tensors
-            .get(output_name)
-            .map(|tensor_data| {
-                // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
-                // Linear layer expects [vocab_size, embed_dim], so we need to transpose
-                // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                    let embed_dim = config.embed_dim;
-                    let vocab = vocab_size as usize;
-                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
-                } else {
-                    Linear::from_f32_weight(tensor_data, None)
-                }
-            });
+        let output = weights.tensors.get(output_name).map(|tensor_data| {
+            // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
+            // Linear layer expects [vocab_size, embed_dim], so we need to transpose
+            // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let embed_dim = config.embed_dim;
+                let vocab = vocab_size as usize;
+                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+            } else {
+                Linear::from_f32_weight(tensor_data, None)
+            }
+        });
 
         // Build transformer layers
         let mut layers = Vec::with_capacity(config.num_layers);
@@ -391,16 +409,13 @@ impl LlamaModel {
 
         // Load final norm for architectures that have it (qwen2/qwen3)
         let final_norm = if let Some(norm_name) = config.final_norm_name() {
-            weights
-                .tensors
-                .get(norm_name)
-                .map(|tensor_data| {
-                    let weight: Vec<f32> = tensor_data
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect();
-                    RmsNorm::new(weight, config.rms_norm_eps)
-                })
+            weights.tensors.get(norm_name).map(|tensor_data| {
+                let weight: Vec<f32> = tensor_data
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                RmsNorm::new(weight, config.rms_norm_eps)
+            })
         } else {
             None
         };
@@ -425,7 +440,10 @@ impl LlamaModel {
     /// Unlike GGUF, safetensors doesn't embed model config — the caller must
     /// provide `LlamaConfig` (e.g., from a companion `config.json` file).
     /// All tensor data is already in f32 format (the loader converted f16/bf16).
-    pub fn from_safetensors_weights(weights: SafetensorsWeights, config: LlamaConfig) -> Result<Self> {
+    pub fn from_safetensors_weights(
+        weights: SafetensorsWeights,
+        config: LlamaConfig,
+    ) -> Result<Self> {
         let rope_config = RopeConfig::new(config.head_dim, config.rope_base, config.max_seq_len);
         let vocab_size = config.embed_dim as u32; // default if not in metadata
 
@@ -438,26 +456,24 @@ impl LlamaModel {
 
         // Load output (LM head) — architecture-dependent name
         let output_name = config.output_name();
-        let output = weights
-            .tensors
-            .get(output_name)
-            .map(|tensor_data| {
-                // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
-                // Linear layer expects [vocab_size, embed_dim], so we need to transpose
-                // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                    let embed_dim = config.embed_dim;
-                    let vocab = vocab_size as usize;
-                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
-                } else {
-                    Linear::from_f32_weight(tensor_data, None)
-                }
-            });
+        let output = weights.tensors.get(output_name).map(|tensor_data| {
+            // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
+            // Linear layer expects [vocab_size, embed_dim], so we need to transpose
+            // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let embed_dim = config.embed_dim;
+                let vocab = vocab_size as usize;
+                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+            } else {
+                Linear::from_f32_weight(tensor_data, None)
+            }
+        });
 
         // Build transformer layers
         let mut layers = Vec::with_capacity(config.num_layers);
         for layer_idx in 0..config.num_layers {
-            let layer = Self::load_layer_from_safetensors(&weights, layer_idx, &config, &rope_config)?;
+            let layer =
+                Self::load_layer_from_safetensors(&weights, layer_idx, &config, &rope_config)?;
             layers.push(layer);
         }
 
@@ -511,9 +527,11 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_norm.weight"),
             _ => format!("{prefix}attention_norm.weight"),
         };
-        
+
         // Try primary name first, then fallback for Qwen (which uses attn_norm)
-        let attention_norm_data = weights.tensors.get(&attention_norm_name)
+        let attention_norm_data = weights
+            .tensors
+            .get(&attention_norm_name)
             .or_else(|| {
                 if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                     weights.tensors.get(&format!("{prefix}attn_norm.weight"))
@@ -521,7 +539,12 @@ impl LlamaModel {
                     None
                 }
             })
-            .ok_or_else(|| RunnerError::ModelLoad(format!("missing attention norm (tried: {})", attention_norm_name)))?;
+            .ok_or_else(|| {
+                RunnerError::ModelLoad(format!(
+                    "missing attention norm (tried: {})",
+                    attention_norm_name
+                ))
+            })?;
         // Data is already f32 (gguf_weight_loader dequantized F16→f32)
         let norm_weight: Vec<f32> = attention_norm_data
             .chunks_exact(4)
@@ -745,9 +768,11 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_norm.weight"),
             _ => format!("{prefix}attention_norm.weight"),
         };
-        
+
         // Try primary name first, then fallback for Qwen (which uses attn_norm)
-        let attention_norm_data = weights.tensors.get(&attention_norm_name)
+        let attention_norm_data = weights
+            .tensors
+            .get(&attention_norm_name)
             .or_else(|| {
                 if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                     weights.tensors.get(&format!("{prefix}attn_norm.weight"))
@@ -755,7 +780,12 @@ impl LlamaModel {
                     None
                 }
             })
-            .ok_or_else(|| RunnerError::ModelLoad(format!("missing attention norm (tried: {})", attention_norm_name)))?;
+            .ok_or_else(|| {
+                RunnerError::ModelLoad(format!(
+                    "missing attention norm (tried: {})",
+                    attention_norm_name
+                ))
+            })?;
         let attention_norm =
             RmsNorm::new(f32_bytes_to_f32(attention_norm_data), config.rms_norm_eps);
 
@@ -1334,4 +1364,3 @@ fn f32_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
 fn f32_to_f16(data: &[f32]) -> Vec<half::f16> {
     data.iter().map(|&v| half::f16::from_f32(v)).collect()
 }
-

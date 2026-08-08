@@ -215,17 +215,16 @@ impl<T> DeviceBuffer<T> {
         T: Copy,
     {
         let bytes = data.len() * std::mem::size_of::<T>();
-        let handle = backend.alloc(bytes).map_err(|e| {
-            DeviceBufferError::Allocation(format!("alloc {} bytes: {e}", bytes))
-        })?;
+        let handle = backend
+            .alloc(bytes)
+            .map_err(|e| DeviceBufferError::Allocation(format!("alloc {} bytes: {e}", bytes)))?;
 
         // Convert data to bytes and copy to device
-        let src_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, bytes)
-        };
-        backend.h2d(src_bytes, handle).map_err(|e| {
-            DeviceBufferError::Transfer(format!("H2D: {e}"))
-        })?;
+        let src_bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, bytes) };
+        backend
+            .h2d(src_bytes, handle)
+            .map_err(|e| DeviceBufferError::Transfer(format!("H2D: {e}")))?;
 
         Ok(Self {
             handle,
@@ -250,14 +249,17 @@ impl<T> DeviceBuffer<T> {
     }
 
     /// Allocate zero-initialized memory on the given backend.
-    pub fn zeros_device<B: MemoryBackend>(backend: &B, len: usize) -> Result<Self, DeviceBufferError>
+    pub fn zeros_device<B: MemoryBackend>(
+        backend: &B,
+        len: usize,
+    ) -> Result<Self, DeviceBufferError>
     where
         T: Default + Copy,
     {
         let bytes = len * std::mem::size_of::<T>();
-        let handle = backend.alloc(bytes).map_err(|e| {
-            DeviceBufferError::Allocation(format!("alloc {} bytes: {e}", bytes))
-        })?;
+        let handle = backend
+            .alloc(bytes)
+            .map_err(|e| DeviceBufferError::Allocation(format!("alloc {} bytes: {e}", bytes)))?;
 
         Ok(Self {
             handle,
@@ -277,9 +279,9 @@ impl<T> DeviceBuffer<T> {
         let mut buf = vec![T::default(); self.len];
         let dst_bytes: &mut [u8] =
             unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, bytes) };
-        backend.d2h(self.handle, dst_bytes).map_err(|e| {
-            DeviceBufferError::Transfer(format!("D2H: {e}"))
-        })?;
+        backend
+            .d2h(self.handle, dst_bytes)
+            .map_err(|e| DeviceBufferError::Transfer(format!("D2H: {e}")))?;
         Ok(buf)
     }
 
@@ -292,9 +294,9 @@ impl<T> DeviceBuffer<T> {
         let bytes = self.byte_len();
         let dst_bytes: &mut [u8] =
             unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut u8, bytes) };
-        backend.d2h(self.handle, dst_bytes).map_err(|e| {
-            DeviceBufferError::Transfer(format!("D2H: {e}"))
-        })?;
+        backend
+            .d2h(self.handle, dst_bytes)
+            .map_err(|e| DeviceBufferError::Transfer(format!("D2H: {e}")))?;
         Ok(())
     }
 
@@ -316,9 +318,9 @@ impl<T> DeviceBuffer<T> {
         let bytes = src.len() * std::mem::size_of::<T>();
         let src_bytes: &[u8] =
             unsafe { std::slice::from_raw_parts(src.as_ptr() as *const u8, bytes) };
-        backend.h2d(src_bytes, self.handle).map_err(|e| {
-            DeviceBufferError::Transfer(format!("H2D: {e}"))
-        })?;
+        backend
+            .h2d(src_bytes, self.handle)
+            .map_err(|e| DeviceBufferError::Transfer(format!("H2D: {e}")))?;
         Ok(())
     }
 
@@ -420,9 +422,9 @@ pub fn allocate_on<M: Into<MemoryManager>>(
 ) -> Result<DeviceBuffer<u8>, DeviceBufferError> {
     let mgr = manager.into();
     let bytes = len;
-    let handle = mgr.alloc(bytes).map_err(|e| {
-        DeviceBufferError::Allocation(format!("alloc {bytes} bytes: {e}"))
-    })?;
+    let handle = mgr
+        .alloc(bytes)
+        .map_err(|e| DeviceBufferError::Allocation(format!("alloc {bytes} bytes: {e}")))?;
     Ok(DeviceBuffer {
         handle,
         len,

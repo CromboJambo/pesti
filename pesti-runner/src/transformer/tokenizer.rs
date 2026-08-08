@@ -174,8 +174,8 @@ impl GgufTokenizerConfig {
 
 /// Load a tokenizer from a GGUF file.
 pub fn load_tokenizer_from_gguf(path: &Path) -> Result<(GgufTokenizerConfig, Tokenizer)> {
-    let header = pesti_gguf::parser::parse_gguf(path)
-        .map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
+    let header =
+        pesti_gguf::parser::parse_gguf(path).map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
 
     let config = GgufTokenizerConfig::from_gguf_header(&header);
     let tokenizer = config.to_tokenizer();
@@ -194,4 +194,3 @@ pub fn load_tokenizer_from_gguf(path: &Path) -> Result<(GgufTokenizerConfig, Tok
 pub fn tokenizer_config_from_header(header: &GgufHeader) -> GgufTokenizerConfig {
     GgufTokenizerConfig::from_gguf_header(header)
 }
-

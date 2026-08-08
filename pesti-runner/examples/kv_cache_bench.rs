@@ -43,7 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let uncached_tok_s = num_tokens as f32 / uncached_total.as_secs_f32();
     println!(
         "  {} tokens: total={:.1}ms, avg={:.1}ms/token, {:.1} tok/s",
-        num_tokens, uncached_total.as_secs_f64() * 1000.0, uncached_ms, uncached_tok_s,
+        num_tokens,
+        uncached_total.as_secs_f64() * 1000.0,
+        uncached_ms,
+        uncached_tok_s,
     );
 
     // ── Cached: incremental decode with KV cache ──
@@ -58,7 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cached_tok_s = num_tokens as f32 / cached_total.as_secs_f32();
     println!(
         "  {} tokens: total={:.1}ms, avg={:.1}ms/token, {:.1} tok/s",
-        num_tokens, cached_total.as_secs_f64() * 1000.0, cached_ms, cached_tok_s,
+        num_tokens,
+        cached_total.as_secs_f64() * 1000.0,
+        cached_ms,
+        cached_tok_s,
     );
 
     // ── Summary ──
@@ -70,7 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if speedup > 1.0 {
-        println!("  ✅ KV cache provides {:.1}x speedup over {} tokens", speedup, num_tokens);
+        println!(
+            "  ✅ KV cache provides {:.1}x speedup over {} tokens",
+            speedup, num_tokens
+        );
     } else {
         println!("  ⚠️  KV cache is slower at this sequence length (overhead dominates)");
         println!("  Try longer sequences to see the crossover point.");

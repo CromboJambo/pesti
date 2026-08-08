@@ -81,8 +81,16 @@ impl TmaDescriptor {
         smem_y_stride: u16,
     ) -> Self {
         self.0 |= (box_x as u128) << 32;
-        let gmem_x = if gmem_x_stride > 255 { 255u16 } else { gmem_x_stride };
-        let smem_x = if smem_x_stride > 255 { 255u16 } else { smem_x_stride };
+        let gmem_x = if gmem_x_stride > 255 {
+            255u16
+        } else {
+            gmem_x_stride
+        };
+        let smem_x = if smem_x_stride > 255 {
+            255u16
+        } else {
+            smem_x_stride
+        };
         self.0 |= (gmem_x as u128) << 48;
         self.0 |= (smem_x as u128) << 56;
         self.0 |= (box_y as u128) << 64;
@@ -109,8 +117,6 @@ impl TmaDescriptor {
         self
     }
 
-
-
     /// Unpack from [u32; 4] words received from a kernel.
     pub const fn from_u32_words(words: [u32; 4]) -> Self {
         Self(
@@ -127,4 +133,3 @@ impl Default for TmaDescriptor {
         Self::new()
     }
 }
-

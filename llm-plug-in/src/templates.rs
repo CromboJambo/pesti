@@ -102,11 +102,7 @@ impl TemplateFamily {
         s
     }
 
-    fn render_openchat(
-        &self,
-        messages: &[(String, String)],
-        input: Option<&str>,
-    ) -> String {
+    fn render_openchat(&self, messages: &[(String, String)], input: Option<&str>) -> String {
         let mut s = String::new();
         for (role, content) in messages {
             s.push_str(&format!("{}: {}\n", role, content));
@@ -283,25 +279,55 @@ mod tests {
 
     #[test]
     fn infer_llama3_variants() {
-        assert!(matches!(infer_template("llama-3-8b"), TemplateFamily::Llama3));
-        assert!(matches!(infer_template("llama3-70b"), TemplateFamily::Llama3));
-        assert!(matches!(infer_template("meta-llama-3-instruct"), TemplateFamily::Llama3));
-        assert!(matches!(infer_template("Meta-Llama-3.1-8B"), TemplateFamily::Llama3));
+        assert!(matches!(
+            infer_template("llama-3-8b"),
+            TemplateFamily::Llama3
+        ));
+        assert!(matches!(
+            infer_template("llama3-70b"),
+            TemplateFamily::Llama3
+        ));
+        assert!(matches!(
+            infer_template("meta-llama-3-instruct"),
+            TemplateFamily::Llama3
+        ));
+        assert!(matches!(
+            infer_template("Meta-Llama-3.1-8B"),
+            TemplateFamily::Llama3
+        ));
     }
 
     #[test]
     fn infer_chatml_fallback() {
-        assert!(matches!(infer_template("tinyllama-1.1b"), TemplateFamily::ChatML));
-        assert!(matches!(infer_template("mistral-7b"), TemplateFamily::ChatML));
-        assert!(matches!(infer_template("phi-3-mini"), TemplateFamily::ChatML));
+        assert!(matches!(
+            infer_template("tinyllama-1.1b"),
+            TemplateFamily::ChatML
+        ));
+        assert!(matches!(
+            infer_template("mistral-7b"),
+            TemplateFamily::ChatML
+        ));
+        assert!(matches!(
+            infer_template("phi-3-mini"),
+            TemplateFamily::ChatML
+        ));
         assert!(matches!(infer_template("qwen2-7b"), TemplateFamily::ChatML));
-        assert!(matches!(infer_template("llama-2-7b"), TemplateFamily::ChatML));
+        assert!(matches!(
+            infer_template("llama-2-7b"),
+            TemplateFamily::ChatML
+        ));
     }
 
     #[test]
     fn infer_unknown_model_defaults_chatml() {
-        assert!(matches!(infer_template("unknown-model"), TemplateFamily::ChatML));
-        assert!(matches!(infer_template("custom-7b"), TemplateFamily::ChatML));
+        assert!(matches!(
+            infer_template("unknown-model"),
+            TemplateFamily::ChatML
+        ));
+        assert!(matches!(
+            infer_template("custom-7b"),
+            TemplateFamily::ChatML
+        ));
     }
 
     // ── Serialization ──────────────────────────────────────────────────

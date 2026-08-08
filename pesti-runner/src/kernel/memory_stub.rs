@@ -1,6 +1,5 @@
 //! Stub memory module for CPU-only builds.
 
-
 /// Dummy MemoryBackend trait
 pub trait MemoryBackend {
     fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError>;

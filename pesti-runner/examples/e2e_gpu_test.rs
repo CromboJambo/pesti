@@ -1,9 +1,9 @@
 //! Minimal end-to-end GPU test
 
 use cuda_core::CudaContext;
+use half::f16;
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::memory::{CudaMemoryBackend, MemoryBackend};
-use half::f16;
 use std::sync::Arc;
 
 fn main() {
@@ -35,31 +35,25 @@ fn main() {
     match DeviceBuffer::from_host_device(&backend, &data) {
         Ok(buf) => {
             println!("✅ Allocation succeeded!");
-            
+
             // Read back
             let mut host_buf = vec![f16::default(); size];
             backend
-                .d2h(
-                    buf.handle(),
-                    unsafe {
-                        std::slice::from_raw_parts_mut(
-                            host_buf.as_mut_ptr() as *mut u8,
-                            size * 2,
-                        )
-                    },
-                )
+                .d2h(buf.handle(), unsafe {
+                    std::slice::from_raw_parts_mut(host_buf.as_mut_ptr() as *mut u8, size * 2)
+                })
                 .expect("D2H failed");
 
             let first_5: Vec<f32> = host_buf.iter().take(5).map(|&x| x.to_f32()).collect();
             println!("✅ First 5 values: {:?}", first_5);
-            
+
             // Verify
             let match_count = data
                 .iter()
                 .zip(host_buf.iter())
                 .filter(|(a, b)| (a.to_f32() - b.to_f32()).abs() < 1e-5)
                 .count();
-            
+
             if match_count == size {
                 println!("\n✅ SUCCESS! All {} elements verified!", size);
             } else {
@@ -68,7 +62,7 @@ fn main() {
         }
         Err(e) => {
             println!("❌ Allocation failed: {}", e);
-            
+
             // Try simpler allocation
             println!("\nTrying simpler allocation...");
             let _buf: DeviceBuffer<f16> = DeviceBuffer::zeros(size);

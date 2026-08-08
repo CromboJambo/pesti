@@ -77,11 +77,7 @@ impl Kvcache {
         // Stub - no-op for CPU-only builds
     }
 
-    pub fn append(
-        &mut self,
-        _key: &[f16],
-        _value: &[f16],
-    ) -> Result<(), KvError> {
+    pub fn append(&mut self, _key: &[f16], _value: &[f16]) -> Result<(), KvError> {
         Err(KvError::NotAvailable)
     }
 
@@ -89,11 +85,7 @@ impl Kvcache {
         &self.buffer
     }
 
-    pub fn slice(
-        &self,
-        _start_pos: usize,
-        _seq_len: usize,
-    ) -> Result<KvcacheSlice<'_>, KvError> {
+    pub fn slice(&self, _start_pos: usize, _seq_len: usize) -> Result<KvcacheSlice<'_>, KvError> {
         Err(KvError::NotAvailable)
     }
 

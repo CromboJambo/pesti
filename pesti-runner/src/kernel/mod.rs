@@ -74,21 +74,21 @@ pub mod builder;
 pub mod builder_stub;
 pub mod candle_bridge;
 pub mod device_buf;
-#[cfg(feature = "cuda")]
-pub mod memory;
-#[cfg(not(feature = "cuda"))]
-pub mod memory_stub;
 pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod gemm;
-#[cfg(not(feature = "cuda"))]
-pub mod gemm_stub;
 #[cfg(feature = "cuda")]
 pub mod gemm_cutlass;
+#[cfg(not(feature = "cuda"))]
+pub mod gemm_stub;
 #[cfg(feature = "cuda")]
 pub mod kvcache;
 #[cfg(not(feature = "cuda"))]
 pub mod kvcache_stub;
+#[cfg(feature = "cuda")]
+pub mod memory;
+#[cfg(not(feature = "cuda"))]
+pub mod memory_stub;
 #[cfg(feature = "cuda")]
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
@@ -114,11 +114,21 @@ pub use builder::{GemmBuilder, KernelFromPtx, PtxSource};
 pub use builder_stub::GemmBuilder;
 pub use device_buf::{DeviceBuffer, DeviceBufferError, HostBuffer};
 #[cfg(feature = "cuda")]
-pub use gemm::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
+pub use dispatch::{
+    AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
+    LinearDispatch, RmsNormDispatch,
+};
 #[cfg(not(feature = "cuda"))]
-pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
+pub use dispatch::{
+    AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
+    LinearDispatch, RmsNormDispatch,
+};
+#[cfg(feature = "cuda")]
+pub use gemm::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use gemm::{CudaGemmKernel, CudaGemmKernelBuilder};
+#[cfg(not(feature = "cuda"))]
+pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use kvcache::{KvError, Kvcache, KvcacheSlice};
 #[cfg(not(feature = "cuda"))]
@@ -133,13 +143,3 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]
 pub use tma_descriptor::TmaDescriptor;
-#[cfg(feature = "cuda")]
-pub use dispatch::{
-    AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
-    LinearDispatch, RmsNormDispatch,
-};
-#[cfg(not(feature = "cuda"))]
-pub use dispatch::{
-    AttentionDispatch, DispatchContext, DispatchError, FeedForwardDispatch, LayerDispatch,
-    LinearDispatch, RmsNormDispatch,
-};

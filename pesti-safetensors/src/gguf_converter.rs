@@ -4,10 +4,10 @@ use std::path::Path;
 
 use pesti_gguf::parser::parse_gguf;
 use pesti_gguf::types::{GgufDtype, GgufHeader, GgufKvPair, GgufTensorInfo};
-use safetensors::tensor::{Dtype, TensorView};
 use safetensors::serialize;
+use safetensors::tensor::{Dtype, TensorView};
 
-// Use half crate from pesti-gguf dependency  
+// Use half crate from pesti-gguf dependency
 use pesti_gguf::types as gguf_types;
 
 /// Result of a GGUF → safetensors conversion.
@@ -45,7 +45,12 @@ pub enum GgufConvertError {
 fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufConvertError> {
     let num_full_blocks = element_count / 32;
     let remaining = element_count % 32;
-    let expected_size = num_full_blocks * 20 + if remaining > 0 { 4 + remaining.div_ceil(2) } else { 0 };
+    let expected_size = num_full_blocks * 20
+        + if remaining > 0 {
+            4 + remaining.div_ceil(2)
+        } else {
+            0
+        };
     if data.len() < expected_size {
         return Err(GgufConvertError::TensorMismatch(format!(
             "Q4_0 data too small: got {} bytes, need {}",
@@ -61,7 +66,9 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let min = f16_to_f32(&data[base + 2..base + 4])[0];
 
         for i in 0..32usize {
-            if result.len() >= element_count { break; }
+            if result.len() >= element_count {
+                break;
+            }
             let nibble = (data[base + 4 + i / 2] >> (4 * (i & 1))) & 0x0F;
             let q = nibble as i32 - 8;
             result.push(scale * q as f32 + min);
@@ -87,7 +94,12 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
 fn dequantize_q4_1(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufConvertError> {
     let num_full_blocks = element_count / 32;
     let remaining = element_count % 32;
-    let expected_size = num_full_blocks * 20 + if remaining > 0 { 4 + remaining.div_ceil(2) } else { 0 };
+    let expected_size = num_full_blocks * 20
+        + if remaining > 0 {
+            4 + remaining.div_ceil(2)
+        } else {
+            0
+        };
     if data.len() < expected_size {
         return Err(GgufConvertError::TensorMismatch(format!(
             "Q4_1 data too small: got {} bytes, need {}",
@@ -103,7 +115,9 @@ fn dequantize_q4_1(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let min = f16_to_f32(&data[base + 2..base + 4])[0];
 
         for i in 0..32usize {
-            if result.len() >= element_count { break; }
+            if result.len() >= element_count {
+                break;
+            }
             let nibble = (data[base + 4 + i / 2] >> (4 * (i & 1))) & 0x0F;
             let q = nibble as f32;
             result.push(scale * q + min);
@@ -142,7 +156,9 @@ fn dequantize_q8_0(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let base = block * 258;
         let scale = f16_to_f32(&data[base..base + 2])[0];
         for i in 0..256usize {
-            if result.len() >= element_count { break; }
+            if result.len() >= element_count {
+                break;
+            }
             let q = data[base + 2 + i] as i8 as f32 / 128.0;
             result.push(scale * q);
         }
@@ -170,7 +186,14 @@ fn dequantize_q2_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let d = f16_to_f32(&data[base..base + 2])[0];
         let d2 = f16_to_f32(&data[base + 2..base + 4])[0];
         let q1 = [data[base + 4], data[base + 5]];
-        let q2 = [data[base + 6], data[base + 7], data[base + 8], data[base + 9], data[base + 10], data[base + 11]];
+        let q2 = [
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+        ];
         let h_bits = [&data[base + 12..base + 14], &data[base + 14..base + 16]];
         let h0 = f16_to_f32(h_bits[0])[0];
         let h1 = f16_to_f32(h_bits[1])[0];
@@ -189,7 +212,12 @@ fn dequantize_q2_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let d = f16_to_f32(&data[base..base + 2])[0];
         let d2 = f16_to_f32(&data[base + 2..base + 4])[0];
         let q1 = [data[base + 4], data[base + 5]];
-        let q2 = [data[base + 6], data[base + 7], data[base + 8], data[base + 9]];
+        let q2 = [
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+            data[base + 9],
+        ];
         let h_bits = [&data[base + 10..base + 12]];
         let h0 = f16_to_f32(h_bits[0])[0];
 
@@ -224,11 +252,33 @@ fn dequantize_q3_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let d = f16_to_f32(&data[base..base + 2])[0];
         let d_min = f16_to_f32(&data[base + 2..base + 4])[0];
         let delta = data[base + 4] as i32;
-        let k_scale = [data[base + 5], data[base + 6], data[base + 7], data[base + 8]];
-        let q3_bits = [data[base + 9], data[base + 10], data[base + 11], data[base + 12], data[base + 13], data[base + 14]];
+        let k_scale = [
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+        ];
+        let q3_bits = [
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+            data[base + 12],
+            data[base + 13],
+            data[base + 14],
+        ];
         let mask = data[base + 15];
-        let h_bits = [&data[base + 16..base + 18], &data[base + 18..base + 20], &data[base + 20..base + 22], &data[base + 22..base + 24]];
-        let h = [f16_to_f32(h_bits[0])[0], f16_to_f32(h_bits[1])[0], f16_to_f32(h_bits[2])[0], f16_to_f32(h_bits[3])[0]];
+        let h_bits = [
+            &data[base + 16..base + 18],
+            &data[base + 18..base + 20],
+            &data[base + 20..base + 22],
+            &data[base + 22..base + 24],
+        ];
+        let h = [
+            f16_to_f32(h_bits[0])[0],
+            f16_to_f32(h_bits[1])[0],
+            f16_to_f32(h_bits[2])[0],
+            f16_to_f32(h_bits[3])[0],
+        ];
 
         for i in 0..16usize {
             let k = k_scale[i / 4] as i32;
@@ -250,11 +300,33 @@ fn dequantize_q3_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let d = f16_to_f32(&data[base..base + 2])[0];
         let d_min = f16_to_f32(&data[base + 2..base + 4])[0];
         let delta = data[base + 4] as i32;
-        let k_scale = [data[base + 5], data[base + 6], data[base + 7], data[base + 8]];
-        let q3_bits = [data[base + 9], data[base + 10], data[base + 11], data[base + 12], data[base + 13], data[base + 14]];
+        let k_scale = [
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+        ];
+        let q3_bits = [
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+            data[base + 12],
+            data[base + 13],
+            data[base + 14],
+        ];
         let mask = data[base + 15];
-        let h_bits = [&data[base + 16..base + 18], &data[base + 18..base + 20], &data[base + 20..base + 22], &data[base + 22..base + 24]];
-        let h = [f16_to_f32(h_bits[0])[0], f16_to_f32(h_bits[1])[0], f16_to_f32(h_bits[2])[0], f16_to_f32(h_bits[3])[0]];
+        let h_bits = [
+            &data[base + 16..base + 18],
+            &data[base + 18..base + 20],
+            &data[base + 20..base + 22],
+            &data[base + 22..base + 24],
+        ];
+        let h = [
+            f16_to_f32(h_bits[0])[0],
+            f16_to_f32(h_bits[1])[0],
+            f16_to_f32(h_bits[2])[0],
+            f16_to_f32(h_bits[3])[0],
+        ];
 
         for i in 0..remaining {
             let k = k_scale[i / 4] as i32;
@@ -405,7 +477,20 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let base = block * 24;
         let d = f16_to_f32(&data[base..base + 2])[0];
         let mask = data[base + 2];
-        let q6 = [data[base + 3], data[base + 4], data[base + 5], data[base + 6], data[base + 7], data[base + 8], data[base + 9], data[base + 10], data[base + 11], data[base + 12], data[base + 13], data[base + 14]];
+        let q6 = [
+            data[base + 3],
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+            data[base + 12],
+            data[base + 13],
+            data[base + 14],
+        ];
         let scale = data[base + 15] as f32;
 
         for i in 0..16usize {
@@ -420,7 +505,14 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>, GgufCo
         let base = num_full_blocks * 24;
         let d = f16_to_f32(&data[base..base + 2])[0];
         let mask = data[base + 2];
-        let q6 = [data[base + 3], data[base + 4], data[base + 5], data[base + 6], data[base + 7], data[base + 8]];
+        let q6 = [
+            data[base + 3],
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+            data[base + 8],
+        ];
         let scale = data[base + 9] as f32;
 
         for i in 0..remaining {
@@ -485,7 +577,10 @@ fn f16_to_f32(data: &[u8]) -> Vec<f32> {
 }
 
 /// Dequantize tensor data based on dtype.
-fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>, GgufConvertError> {
+fn dequantize_tensor(
+    tensor: &GgufTensorInfo,
+    raw_data: &[u8],
+) -> Result<Vec<u8>, GgufConvertError> {
     let dtype = GgufDtype::from_u32(tensor.dtype);
     let element_count = tensor.element_count() as usize;
 
@@ -497,8 +592,11 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
         }
         GgufDtype::I8 | GgufDtype::I16 | GgufDtype::I32 | GgufDtype::I64 => Ok(raw_data.to_vec()),
         GgufDtype::F64 => {
-            let f32_data: Vec<f32> = raw_data.chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32)
+            let f32_data: Vec<f32> = raw_data
+                .chunks_exact(8)
+                .map(|c| {
+                    f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32
+                })
                 .collect();
             Ok(f32_data.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
@@ -535,9 +633,31 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
         // Unsupported variants
-        GgufDtype::Q5_0 | GgufDtype::Q5_1 | GgufDtype::Q8_1 | GgufDtype::Q1K | GgufDtype::Q2K_S | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
+        GgufDtype::Q5_0
+        | GgufDtype::Q5_1
+        | GgufDtype::Q8_1
+        | GgufDtype::Q1K
+        | GgufDtype::Q2K_S
+        | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
         // Catch-all for new IQ* quantization types and Unknown variants
-        GgufDtype::Unknown(_) | GgufDtype::IQ2_XXS | GgufDtype::IQ2_XS | GgufDtype::IQ3_XXS | GgufDtype::IQ1_S | GgufDtype::Q4_0_4_4 | GgufDtype::Q4_0_4_8 | GgufDtype::Q4_0_8_8 | GgufDtype::TQ1_0 | GgufDtype::TQ2_0 | GgufDtype::IQ4NL_4_4 | GgufDtype::IQ4NL_4_8 | GgufDtype::IQ4NL_8_8 | GgufDtype::MXFP4 | GgufDtype::NVFP4 | GgufDtype::Q1_0 | GgufDtype::Q2_0 | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
+        GgufDtype::Unknown(_)
+        | GgufDtype::IQ2_XXS
+        | GgufDtype::IQ2_XS
+        | GgufDtype::IQ3_XXS
+        | GgufDtype::IQ1_S
+        | GgufDtype::Q4_0_4_4
+        | GgufDtype::Q4_0_4_8
+        | GgufDtype::Q4_0_8_8
+        | GgufDtype::TQ1_0
+        | GgufDtype::TQ2_0
+        | GgufDtype::IQ4NL_4_4
+        | GgufDtype::IQ4NL_4_8
+        | GgufDtype::IQ4NL_8_8
+        | GgufDtype::MXFP4
+        | GgufDtype::NVFP4
+        | GgufDtype::Q1_0
+        | GgufDtype::Q2_0
+        | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
     }
 }
 
@@ -554,11 +674,44 @@ fn gguf_dtype_to_safetensors(gguf_dtype: GgufDtype) -> Result<Dtype, GgufConvert
         // Supported dequantization types — dequantize_tensor() handles these
         GgufDtype::Q4_0 | GgufDtype::Q4_1 | GgufDtype::Q8_0 => Ok(Dtype::F32),
         // Unsupported: K-family types without full dequantization
-        GgufDtype::Q5_0 | GgufDtype::Q5_1 | GgufDtype::Q8_1 | GgufDtype::Q1K | GgufDtype::Q2K_S | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
+        GgufDtype::Q5_0
+        | GgufDtype::Q5_1
+        | GgufDtype::Q8_1
+        | GgufDtype::Q1K
+        | GgufDtype::Q2K_S
+        | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
         // K-family types with dequantization
-        GgufDtype::Q2K | GgufDtype::Q3K | GgufDtype::Q4K | GgufDtype::Q4K_M | GgufDtype::Q4K_S | GgufDtype::Q5K | GgufDtype::Q5K_M | GgufDtype::Q5K_S | GgufDtype::Q6K | GgufDtype::Q6K_S | GgufDtype::Q8K | GgufDtype::Q8K_M => Ok(Dtype::F32),
+        GgufDtype::Q2K
+        | GgufDtype::Q3K
+        | GgufDtype::Q4K
+        | GgufDtype::Q4K_M
+        | GgufDtype::Q4K_S
+        | GgufDtype::Q5K
+        | GgufDtype::Q5K_M
+        | GgufDtype::Q5K_S
+        | GgufDtype::Q6K
+        | GgufDtype::Q6K_S
+        | GgufDtype::Q8K
+        | GgufDtype::Q8K_M => Ok(Dtype::F32),
         // Catch-all for new IQ* quantization types and Unknown variants
-        GgufDtype::Unknown(_) | GgufDtype::IQ2_XXS | GgufDtype::IQ2_XS | GgufDtype::IQ3_XXS | GgufDtype::IQ1_S | GgufDtype::Q4_0_4_4 | GgufDtype::Q4_0_4_8 | GgufDtype::Q4_0_8_8 | GgufDtype::TQ1_0 | GgufDtype::TQ2_0 | GgufDtype::IQ4NL_4_4 | GgufDtype::IQ4NL_4_8 | GgufDtype::IQ4NL_8_8 | GgufDtype::MXFP4 | GgufDtype::NVFP4 | GgufDtype::Q1_0 | GgufDtype::Q2_0 | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
+        GgufDtype::Unknown(_)
+        | GgufDtype::IQ2_XXS
+        | GgufDtype::IQ2_XS
+        | GgufDtype::IQ3_XXS
+        | GgufDtype::IQ1_S
+        | GgufDtype::Q4_0_4_4
+        | GgufDtype::Q4_0_4_8
+        | GgufDtype::Q4_0_8_8
+        | GgufDtype::TQ1_0
+        | GgufDtype::TQ2_0
+        | GgufDtype::IQ4NL_4_4
+        | GgufDtype::IQ4NL_4_8
+        | GgufDtype::IQ4NL_8_8
+        | GgufDtype::MXFP4
+        | GgufDtype::NVFP4
+        | GgufDtype::Q1_0
+        | GgufDtype::Q2_0
+        | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
     }
 }
 
@@ -580,14 +733,20 @@ pub fn convert_gguf_to_safetensors(
         }
     }
 
-    let model_name = header.get_kv_str("general.name").unwrap_or(&"unknown".to_string())
+    let model_name = header
+        .get_kv_str("general.name")
+        .unwrap_or(&"unknown".to_string())
         .to_string();
-    let base_model = header.get_kv_str("general.base_model").unwrap_or(&"unknown".to_string())
+    let base_model = header
+        .get_kv_str("general.base_model")
+        .unwrap_or(&"unknown".to_string())
         .to_string();
 
     eprintln!(
         "Converting GGUF model: {} (base: {}, tensors: {})",
-        model_name, base_model, header.tensors.len()
+        model_name,
+        base_model,
+        header.tensors.len()
     );
 
     // Convert each tensor
@@ -616,7 +775,8 @@ pub fn convert_gguf_to_safetensors(
         })
         .collect();
 
-    let serialized = serialize(tensors.into_iter().collect::<Vec<_>>(), None).map_err(|e| GgufConvertError::Serialize(e.to_string()))?;
+    let serialized = serialize(tensors.into_iter().collect::<Vec<_>>(), None)
+        .map_err(|e| GgufConvertError::Serialize(e.to_string()))?;
     std::fs::write(&output_path, &serialized)?;
 
     eprintln!("Converted GGUF to safetensors: {}", output_path.display());
@@ -631,7 +791,10 @@ pub fn convert_gguf_to_safetensors(
 }
 
 /// Extract raw tensor bytes from a GGUF file.
-fn extract_tensor_bytes(gguf_path: &Path, tensor: &GgufTensorInfo) -> Result<Vec<u8>, GgufConvertError> {
+fn extract_tensor_bytes(
+    gguf_path: &Path,
+    tensor: &GgufTensorInfo,
+) -> Result<Vec<u8>, GgufConvertError> {
     let mut file = std::fs::File::open(gguf_path)?;
     let offset = tensor.offset as u64;
     let size = tensor.stored_size().unwrap_or(0) as usize;
@@ -664,22 +827,52 @@ mod tests {
 
     #[test]
     fn test_gguf_dtype_to_safetensors_known_types() {
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::F32).unwrap(), Dtype::F32);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::F16).unwrap(), Dtype::F32);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::BF16).unwrap(), Dtype::F32);
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::F32).unwrap(),
+            Dtype::F32
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::F16).unwrap(),
+            Dtype::F32
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::BF16).unwrap(),
+            Dtype::F32
+        );
         assert_eq!(gguf_dtype_to_safetensors(GgufDtype::I8).unwrap(), Dtype::I8);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::I16).unwrap(), Dtype::I16);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::I32).unwrap(), Dtype::I32);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::I64).unwrap(), Dtype::I64);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::F64).unwrap(), Dtype::F64);
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::I16).unwrap(),
+            Dtype::I16
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::I32).unwrap(),
+            Dtype::I32
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::I64).unwrap(),
+            Dtype::I64
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::F64).unwrap(),
+            Dtype::F64
+        );
     }
 
     #[test]
     fn test_gguf_dtype_to_safetensors_quantized_returns_f32() {
         // Supported dequantization types map to f32
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::Q4_0).unwrap(), Dtype::F32);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::Q4_1).unwrap(), Dtype::F32);
-        assert_eq!(gguf_dtype_to_safetensors(GgufDtype::Q8_0).unwrap(), Dtype::F32);
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::Q4_0).unwrap(),
+            Dtype::F32
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::Q4_1).unwrap(),
+            Dtype::F32
+        );
+        assert_eq!(
+            gguf_dtype_to_safetensors(GgufDtype::Q8_0).unwrap(),
+            Dtype::F32
+        );
     }
 
     #[test]
@@ -723,7 +916,10 @@ mod tests {
         assert_eq!(result.len(), 16);
         // With all quantized values = 0 and scale_hi = 0: q = -8, result = d * (-8/16) + d_min = -0.5
         for (i, &v) in result.iter().enumerate() {
-            assert!((v - (-0.5)).abs() < 0.1, "Q4_K element {i} = {v}, expected -0.5");
+            assert!(
+                (v - (-0.5)).abs() < 0.1,
+                "Q4_K element {i} = {v}, expected -0.5"
+            );
         }
     }
 
@@ -747,7 +943,10 @@ mod tests {
         assert_eq!(result.len(), 16);
         // With all quantized values = 0: q = 0, result = d * (-16/16) + d_min + scale = -1.0
         for (i, &v) in result.iter().enumerate() {
-            assert!((v - (-1.0)).abs() < 0.1, "Q5_K element {i} = {v}, expected -1.0");
+            assert!(
+                (v - (-1.0)).abs() < 0.1,
+                "Q5_K element {i} = {v}, expected -1.0"
+            );
         }
     }
 
@@ -768,7 +967,10 @@ mod tests {
         assert_eq!(result.len(), 16);
         // With all quantized values = 0 and mask = 0: combined = 0, result = d * (-32/32) * scale = -1.0
         for (i, &v) in result.iter().enumerate() {
-            assert!((v - (-1.0)).abs() < 0.1, "Q6_K element {i} = {v}, expected -1.0");
+            assert!(
+                (v - (-1.0)).abs() < 0.1,
+                "Q6_K element {i} = {v}, expected -1.0"
+            );
         }
     }
 }

@@ -147,4 +147,3 @@ pub fn to_descriptor_ptr(desc: &HostTmaDescriptor) -> *const cuda_device::tma::T
     // We cast the pointer to the first u64 element to match the TmaDescriptor layout.
     desc.opaque.as_ptr() as *const cuda_device::tma::TmaDescriptor
 }
-

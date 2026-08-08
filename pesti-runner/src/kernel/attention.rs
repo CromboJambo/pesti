@@ -177,8 +177,18 @@ impl AttentionKernel for CpuAttentionKernel {
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         // Extract host data from device buffers
         let q_host: Vec<f32> = query.to_host().iter().map(|&x| f16::to_f32(x)).collect();
-        let k_host: Vec<f32> = key_cache.buffer().to_host().iter().map(|&x| f16::to_f32(x)).collect();
-        let v_host: Vec<f32> = value_cache.buffer().to_host().iter().map(|&x| f16::to_f32(x)).collect();
+        let k_host: Vec<f32> = key_cache
+            .buffer()
+            .to_host()
+            .iter()
+            .map(|&x| f16::to_f32(x))
+            .collect();
+        let v_host: Vec<f32> = value_cache
+            .buffer()
+            .to_host()
+            .iter()
+            .map(|&x| f16::to_f32(x))
+            .collect();
 
         let num_heads = config.num_heads;
         let head_dim = config.head_dim;
@@ -187,39 +197,35 @@ impl AttentionKernel for CpuAttentionKernel {
 
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
         let mut scores = vec![0.0f32; query_seq_len * num_heads * n];
-        
+
         // SIMD inner product helper: process 8 elements at a time
         #[inline]
         fn simd_dot_product(q_slice: &[f32], k_slice: &[f32], head_dim: usize) -> f32 {
             const LANES: usize = 8;
-            
+
             let mut sum = 0.0f32;
             let simd_len = (head_dim / LANES) * LANES;
-            
+
             for i in (0..simd_len).step_by(LANES) {
                 let q_vec = f32x8::from_slice(&q_slice[i..]);
                 let k_vec = f32x8::from_slice(&k_slice[i..]);
                 sum += (q_vec * k_vec).reduce_sum();
             }
-            
+
             // Handle remainder
             for i in simd_len..head_dim {
                 sum += q_slice[i] * k_slice[i];
             }
-            
+
             sum
         }
-        
+
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
                 let q_base = (qs * num_heads + h) * head_dim;
                 for s in 0..n {
                     let k_base = (h * n + s) * head_dim;
-                    let sum = simd_dot_product(
-                        &q_host[q_base..],
-                        &k_host[k_base..],
-                        head_dim,
-                    );
+                    let sum = simd_dot_product(&q_host[q_base..], &k_host[k_base..], head_dim);
                     scores[qs * num_heads * n + h * n + s] = sum * config.scale;
                 }
             }
@@ -252,7 +258,7 @@ impl AttentionKernel for CpuAttentionKernel {
 
         // Step 3: Softmax @ V -> output [query_seq_len, num_heads, head_dim]
         let mut output = vec![0.0f32; query_seq_len * num_heads * head_dim];
-        
+
         // SIMD vectorized dot product for softmax @ V (8 lanes)
         #[inline]
         fn simd_softmax_v_dot(
@@ -263,10 +269,10 @@ impl AttentionKernel for CpuAttentionKernel {
             d: usize,
         ) -> f32 {
             const LANES: usize = 8;
-            
+
             let mut sum = 0.0f32;
             let simd_len = (n / LANES) * LANES;
-            
+
             for i in (0..simd_len).step_by(LANES) {
                 let s_vec = f32x8::from_slice(&softmax_row[i..]);
                 let v_start = i * head_dim + d;
@@ -280,20 +286,20 @@ impl AttentionKernel for CpuAttentionKernel {
                 let v_vec = f32x8::from_array(v_vals);
                 sum += (s_vec * v_vec).reduce_sum();
             }
-            
+
             // Handle remainder
             for i in simd_len..n {
                 sum += softmax_row[i] * v_slice[i * head_dim + d];
             }
-            
+
             sum
         }
-        
+
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
                 let softmax_start = (qs * num_heads + h) * n;
                 let softmax_row = &softmax_scores[softmax_start..softmax_start + n];
-                
+
                 for d in 0..head_dim {
                     let sum = simd_softmax_v_dot(softmax_row, &v_host, n, head_dim, d);
                     output[qs * num_heads * head_dim + h * head_dim + d] = sum;
@@ -432,8 +438,14 @@ pub struct GemmBasedAttentionKernel {
 }
 
 impl GemmBasedAttentionKernel {
-    pub fn new(gemm_kernel: CudaGemmKernel, backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>) -> Self {
-        Self { gemm_kernel, backend }
+    pub fn new(
+        gemm_kernel: CudaGemmKernel,
+        backend: std::sync::Arc<crate::kernel::memory::CudaMemoryBackend>,
+    ) -> Self {
+        Self {
+            gemm_kernel,
+            backend,
+        }
     }
 }
 
@@ -454,16 +466,15 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
         // Q: [query_seq_len, num_heads, head_dim] -> reshape to [query_seq_len * num_heads, head_dim]
         // K: [num_heads, cache_seq_len, head_dim] -> transpose to [head_dim, num_heads * cache_seq_len]
-        
+
         let q_m = query_seq_len * num_heads;
         let q_k = head_dim;
         let k_n = n; // We'll do Q @ K^T, so K is transposed
 
         // Allocate scores buffer on device: [q_m, k_n]
         let backend = &*self.backend;
-        let mut scores_buffer =
-            DeviceBuffer::<f32>::zeros_device(backend, q_m * k_n)
-                .map_err(|e| AttentionError::Cuda(format!("scores alloc: {e}")))?;
+        let mut scores_buffer = DeviceBuffer::<f32>::zeros_device(backend, q_m * k_n)
+            .map_err(|e| AttentionError::Cuda(format!("scores alloc: {e}")))?;
 
         // Launch Q @ K^T via GEMM
         self.gemm_kernel
@@ -486,7 +497,8 @@ impl AttentionKernel for GemmBasedAttentionKernel {
             .map_err(|e| AttentionError::Cuda(format!("sync after QK: {e}")))?;
 
         // Step 2: Apply scaling factor and softmax on CPU
-        let mut scores_host = scores_buffer.to_host_vec(backend)
+        let mut scores_host = scores_buffer
+            .to_host_vec(backend)
             .map_err(|e| AttentionError::Transfer(e))?;
         let mut softmax_scores = vec![0.0f32; scores_host.len()];
 
@@ -538,21 +550,20 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         let softmax_buf = DeviceBuffer::from_host_device(backend, &softmax_scores_f16)
             .map_err(|e| AttentionError::Cuda(format!("softmax buf alloc: {e}")))?;
 
-        let mut output_buffer =
-            DeviceBuffer::<f32>::zeros_device(backend, s_m * v_n)
-                .map_err(|e| AttentionError::Cuda(format!("output alloc: {e}")))?;
+        let mut output_buffer = DeviceBuffer::<f32>::zeros_device(backend, s_m * v_n)
+            .map_err(|e| AttentionError::Cuda(format!("output alloc: {e}")))?;
 
         // Launch S @ V via GEMM (need to transpose V)
         self.gemm_kernel
             .matmul(
-                1.0,                                         // alpha
-                &softmax_buf,                                // S (f16)
-                value_cache.buffer(),                        // V (f16)
-                0.0,                                         // beta
+                1.0,                  // alpha
+                &softmax_buf,         // S (f16)
+                value_cache.buffer(), // V (f16)
+                0.0,                  // beta
                 &mut output_buffer,
-                s_m,                                         // m = query_seq_len * num_heads
-                v_n,                                         // n = head_dim
-                s_k,                                         // k = cache_seq_len (V is transposed)
+                s_m, // m = query_seq_len * num_heads
+                v_n, // n = head_dim
+                s_k, // k = cache_seq_len (V is transposed)
             )
             .map_err(|e| AttentionError::Gemm(e))?;
 
@@ -584,7 +595,11 @@ pub enum AttentionError {
     BufferSizeMismatch { expected: usize, got: usize },
 
     #[error("invalid dimensions: num_heads={num_heads}, head_dim={head_dim}")]
-    InvalidDimensions { num_heads: usize, head_dim: usize, seq_len: usize },
+    InvalidDimensions {
+        num_heads: usize,
+        head_dim: usize,
+        seq_len: usize,
+    },
 
     #[error("GEMM error: {0}")]
     Gemm(#[from] crate::kernel::gemm::GemmError),

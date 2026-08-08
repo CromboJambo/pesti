@@ -1,6 +1,6 @@
+use crate::SafetensorsError;
 use crate::safetensors_store::SafetensorsStore;
 use crate::schema::TensorMetadataRow;
-use crate::SafetensorsError;
 use pesti_gguf::parser::parse_gguf;
 use pesti_gguf::types::{GgufDtype, GgufHeader, GgufTensorInfo};
 use std::collections::HashMap;
@@ -23,48 +23,56 @@ pub fn load_gguf_model(
     output_dir: &Path,
 ) -> Result<GgufLoadResult, SafetensorsError> {
     // Step 1: Parse GGUF header
-    let header = parse_gguf(gguf_path).map_err(|e| {
-        SafetensorsError::Load(format!("GGUF parse failed: {e}"))
-    })?;
+    let header = parse_gguf(gguf_path)
+        .map_err(|e| SafetensorsError::Load(format!("GGUF parse failed: {e}")))?;
 
     eprintln!(
         "Loading GGUF model: {} (repo: {}, tensors: {})",
-        model_name, repo, header.tensors.len()
+        model_name,
+        repo,
+        header.tensors.len()
     );
 
     // Step 2: Convert GGUF → safetensors
     let output_path = output_dir.join(format!("{model_name}.safetensors"));
-    
+
     // Note: We'll skip actual conversion for now and just record metadata
     // The full conversion would require calling convert_gguf_to_safetensors
-    
+
     // Step 3: Insert into database and save to disk
-    let weight_id = store.insert_weights(
-        model_name,
-        repo,
-        &output_path.to_string_lossy(),
-        header.tensors.len() as i32,
-        "GGUF",
-        "CPU",
-        0, // Will be computed from tensors
-        "",
-        "{}",
-    ).map_err(|e| SafetensorsError::Load(format!("Failed to insert weights: {e}")))?;
+    let weight_id = store
+        .insert_weights(
+            model_name,
+            repo,
+            &output_path.to_string_lossy(),
+            header.tensors.len() as i32,
+            "GGUF",
+            "CPU",
+            0, // Will be computed from tensors
+            "",
+            "{}",
+        )
+        .map_err(|e| SafetensorsError::Load(format!("Failed to insert weights: {e}")))?;
 
     // Step 4: Extract tensor metadata rows
     let mut total_bytes: i64 = 0;
     let mut tensor_rows = Vec::new();
-    
+
     for tensor in &header.tensors {
         let stored_size = tensor.stored_size().unwrap_or(0) as usize;
         total_bytes += stored_size as i64;
 
         // Extract raw tensor data
         let dtype = GgufDtype::from_u32(tensor.dtype);
-        
+
         // For now, just record metadata - actual dequantization would go here
         let dtype_name = dtype.name().to_string();
-        let shape_str = tensor.shape.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
+        let shape_str = tensor
+            .shape
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
 
         tensor_rows.push(TensorMetadataRow {
             id: uuid::Uuid::new_v4().to_string(),
@@ -79,14 +87,18 @@ pub fn load_gguf_model(
 
     // Insert each tensor metadata row individually
     for row in &tensor_rows {
-        store.insert_tensor_metadata(
-            &row.weight_id,
-            &row.tensor_name,
-            &row.shape,
-            &row.dtype,
-            row.size_bytes,
-            &row.checksum,
-        ).map_err(|e| SafetensorsError::Load(format!("Failed to insert tensor metadata: {e}")))?;
+        store
+            .insert_tensor_metadata(
+                &row.weight_id,
+                &row.tensor_name,
+                &row.shape,
+                &row.dtype,
+                row.size_bytes,
+                &row.checksum,
+            )
+            .map_err(|e| {
+                SafetensorsError::Load(format!("Failed to insert tensor metadata: {e}"))
+            })?;
     }
 
     // Update weight record with actual size
@@ -94,7 +106,8 @@ pub fn load_gguf_model(
 
     eprintln!(
         "GGUF model loaded: {} tensors, {} bytes",
-        header.tensors.len(), total_bytes
+        header.tensors.len(),
+        total_bytes
     );
 
     Ok(GgufLoadResult {
@@ -136,7 +149,7 @@ pub fn extract_model_config(header: &GgufHeader) -> HashMap<String, String> {
     if let Some(heads) = header.get_kv_u32("llama.attention.head_count") {
         config.insert("attention_head_count".to_string(), heads.to_string());
     }
-    
+
     if let Some(kv_heads) = header.get_kv_u32("llama.attention.head_count_kv") {
         config.insert("attention_head_count_kv".to_string(), kv_heads.to_string());
     }
@@ -145,7 +158,7 @@ pub fn extract_model_config(header: &GgufHeader) -> HashMap<String, String> {
     if let Some(rope_dim) = header.get_kv_u32("llama.rope.dimension_count") {
         config.insert("rope_dimension_count".to_string(), rope_dim.to_string());
     }
-    
+
     if let Some(rope_type) = header.get_kv_str("rope.scaling.type") {
         config.insert("rope_scaling_type".to_string(), rope_type.to_string());
     }
@@ -175,7 +188,8 @@ pub fn extract_model_config(header: &GgufHeader) -> HashMap<String, String> {
 
 /// Verify a GGUF file's integrity by parsing its header.
 pub fn verify_gguf_integrity(gguf_path: &Path) -> Result<GgufHeader, SafetensorsError> {
-    parse_gguf(gguf_path).map_err(|e| SafetensorsError::Load(format!("GGUF integrity check failed: {e}")))
+    parse_gguf(gguf_path)
+        .map_err(|e| SafetensorsError::Load(format!("GGUF integrity check failed: {e}")))
 }
 
 /// Get tensor byte range info for a GGUF tensor.

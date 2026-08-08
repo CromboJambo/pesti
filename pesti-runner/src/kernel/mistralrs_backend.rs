@@ -12,8 +12,8 @@
 
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::{
-    AttentionArch, AttentionConfig, AttentionError, AttentionKernel,
-    GemmArch, GemmError, GemmKernel, Kvcache,
+    AttentionArch, AttentionConfig, AttentionError, AttentionKernel, GemmArch, GemmError,
+    GemmKernel, Kvcache,
 };
 use half::f16;
 
@@ -258,17 +258,13 @@ impl MistralRsBackend {
     /// Try to create a GEMM kernel for this backend.
     pub fn create_gemm_kernel(&self, arch: GemmArch) -> Option<Box<dyn GemmKernel + Send + Sync>> {
         match self {
-            Self::MistralRs => {
-                MistralRsGemmKernel::try_new(arch)
-                    .map(|k| Box::new(k) as Box<dyn GemmKernel + Send + Sync>)
-            }
+            Self::MistralRs => MistralRsGemmKernel::try_new(arch)
+                .map(|k| Box::new(k) as Box<dyn GemmKernel + Send + Sync>),
             Self::Cuda => {
                 // Fall through to the existing CUDA path
                 None
             }
-            Self::Cpu => {
-                Some(Box::new(crate::kernel::CpuGemmKernel::new()))
-            }
+            Self::Cpu => Some(Box::new(crate::kernel::CpuGemmKernel::new())),
         }
     }
 
@@ -278,18 +274,15 @@ impl MistralRsBackend {
         arch: AttentionArch,
     ) -> Option<Box<dyn AttentionKernel + Send + Sync>> {
         match self {
-            Self::MistralRs => {
-                MistralRsAttentionKernel::try_new(arch)
-                    .map(|k| Box::new(k) as Box<dyn AttentionKernel + Send + Sync>)
-            }
+            Self::MistralRs => MistralRsAttentionKernel::try_new(arch)
+                .map(|k| Box::new(k) as Box<dyn AttentionKernel + Send + Sync>),
             Self::Cuda => {
                 // Fall through to the existing CUDA path
                 None
             }
-            Self::Cpu => {
-                Some(Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)))
-            }
+            Self::Cpu => Some(Box::new(crate::kernel::CpuAttentionKernel::new(
+                AttentionArch::Cpu,
+            ))),
         }
     }
 }
-

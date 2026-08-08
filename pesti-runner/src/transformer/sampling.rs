@@ -132,4 +132,3 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
         vec![1.0 / logits.len() as f32; logits.len()]
     }
 }
-

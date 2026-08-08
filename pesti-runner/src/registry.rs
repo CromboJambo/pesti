@@ -531,10 +531,10 @@ impl ModelDiscovery {
             .iter()
             .filter(|(k, _)| {
                 // Look for weight tensors (not metadata)
-                k.starts_with("model.") || 
-                k.starts_with("layers.") ||
-                k.contains(".weight") ||
-                k.contains(".bias")
+                k.starts_with("model.")
+                    || k.starts_with("layers.")
+                    || k.contains(".weight")
+                    || k.contains(".bias")
             })
             .map(|(_, v)| {
                 if let Ok(map) = serde_json::from_str::<HashMap<String, serde_json::Value>>(v) {
@@ -564,4 +564,3 @@ impl ModelDiscovery {
         (model_type, parameter_count)
     }
 }
-

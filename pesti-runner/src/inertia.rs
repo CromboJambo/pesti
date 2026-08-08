@@ -5,8 +5,8 @@
 //! replayed with priority ordering and resident tensor references.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -95,21 +95,13 @@ pub enum WorkType {
     },
 
     /// RMSNorm: y = x / mean(x^2) * weight * eps
-    RmsNorm {
-        dim: u32,
-        eps: f32,
-    },
+    RmsNorm { dim: u32, eps: f32 },
 
     /// Softmax: exp(x - max(x)) / sum(exp(x - max(x)))
-    Softmax {
-        dim: u32,
-    },
+    Softmax { dim: u32 },
 
     /// Embedding lookup: token → vector
-    Embedding {
-        vocab_size: u32,
-        embed_dim: u32,
-    },
+    Embedding { vocab_size: u32, embed_dim: u32 },
 }
 
 impl WorkType {
@@ -121,12 +113,17 @@ impl WorkType {
                 // C matrix size (f32) is the dominant factor
                 (*m as usize) * (*n as usize) * 4
             }
-            Self::Attention { num_heads, head_dim, cache_seq_len, .. } => {
+            Self::Attention {
+                num_heads,
+                head_dim,
+                cache_seq_len,
+                ..
+            } => {
                 // KV cache size: 2 * num_heads * head_dim * cache_seq_len * f16
                 2 * (*num_heads as usize) * (*head_dim as usize) * (*cache_seq_len as usize) * 2
             }
             Self::RmsNorm { dim, .. } => *dim as usize * 4, // weight + input
-            Self::Softmax { dim } => *dim as usize * 4, // logits
+            Self::Softmax { dim } => *dim as usize * 4,     // logits
             Self::Embedding { embed_dim, .. } => *embed_dim as usize * 4, // embedding vector
         }
     }
@@ -136,11 +133,29 @@ impl WorkType {
         // Derive UUID from work parameters (deterministic)
         let mut hash = 0u64;
         match self {
-            Self::Gemm { m, n, k, alpha, beta } => {
-                hash ^= *m as u64 ^ (*n as u64) ^ (*k as u64) ^ (*alpha as u32 as u64) ^ (*beta as u32 as u64);
+            Self::Gemm {
+                m,
+                n,
+                k,
+                alpha,
+                beta,
+            } => {
+                hash ^= *m as u64
+                    ^ (*n as u64)
+                    ^ (*k as u64)
+                    ^ (*alpha as u32 as u64)
+                    ^ (*beta as u32 as u64);
             }
-            Self::Attention { query_seq_len, num_heads, head_dim, cache_seq_len } => {
-                hash ^= *query_seq_len as u64 ^ *num_heads as u64 ^ *head_dim as u64 ^ *cache_seq_len as u64;
+            Self::Attention {
+                query_seq_len,
+                num_heads,
+                head_dim,
+                cache_seq_len,
+            } => {
+                hash ^= *query_seq_len as u64
+                    ^ *num_heads as u64
+                    ^ *head_dim as u64
+                    ^ *cache_seq_len as u64;
             }
             Self::RmsNorm { dim, eps } => {
                 hash ^= *dim as u64 ^ (*eps as u32 as u64);
@@ -148,7 +163,10 @@ impl WorkType {
             Self::Softmax { dim } => {
                 hash ^= *dim as u64;
             }
-            Self::Embedding { vocab_size, embed_dim } => {
+            Self::Embedding {
+                vocab_size,
+                embed_dim,
+            } => {
                 hash ^= *vocab_size as u64 ^ *embed_dim as u64;
             }
         }
@@ -201,7 +219,10 @@ impl Demand {
 
     /// Calculate age in milliseconds.
     pub fn age_ms(&self) -> u128 {
-        self.timestamp.elapsed().unwrap_or(Duration::MAX).as_millis()
+        self.timestamp
+            .elapsed()
+            .unwrap_or(Duration::MAX)
+            .as_millis()
     }
 }
 
@@ -253,7 +274,7 @@ impl DemandQueue {
         // Find highest priority item (highest value first due to Ord impl)
         let mut max_idx = 0;
         let demands: Vec<&Demand> = self.queue.iter().collect();
-        
+
         for (idx, demand) in demands.iter().enumerate() {
             if demand.priority > demands[max_idx].priority {
                 max_idx = idx;
@@ -400,10 +421,10 @@ impl InertiaManager {
     /// Get pending work for execution after GPU recovery.
     pub fn get_pending_for_execution(&mut self) -> Vec<Demand> {
         let demands = self.demand_queue.drain();
-        
+
         // Increment replayed counter using Arc::make_mut
         Arc::make_mut(&mut self.stats).total_replayed += demands.len() as u64;
-        
+
         demands
     }
 
@@ -444,7 +465,11 @@ mod tests {
         manager.set_gpu_available(true);
 
         let result = manager.request_work(WorkType::Gemm {
-            m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0,
+            m: 128,
+            n: 128,
+            k: 4096,
+            alpha: 1.0,
+            beta: 0.0,
         });
 
         assert!(matches!(result, WorkResult::ReadyForExecution(_)));
@@ -460,7 +485,11 @@ mod tests {
         manager.set_gpu_available(false);
 
         let result = manager.request_work(WorkType::Gemm {
-            m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0,
+            m: 256,
+            n: 256,
+            k: 8192,
+            alpha: 1.0,
+            beta: 0.0,
         });
 
         assert!(matches!(result, WorkResult::LoggedForLater));
@@ -472,13 +501,17 @@ mod tests {
     #[test]
     fn test_gpu_return_drains_queue() {
         let mut manager = InertiaManager::new(10);
-        
+
         // GPU unavailable: log demand
         manager.set_gpu_available(false);
         manager.request_work(WorkType::Gemm {
-            m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0,
+            m: 256,
+            n: 256,
+            k: 8192,
+            alpha: 1.0,
+            beta: 0.0,
         });
-        
+
         // GPU returns
         manager.set_gpu_available(true);
         let pending = manager.get_pending_for_execution();
@@ -488,32 +521,43 @@ mod tests {
     #[test]
     fn test_stats() {
         let mut manager = InertiaManager::new(5); // Small capacity to test backpressure
-        
+
         // Phase 1: GPU available
         manager.set_gpu_available(true);
         for _ in 0..10 {
-            manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+            manager.request_work(WorkType::Gemm {
+                m: 64,
+                n: 64,
+                k: 2048,
+                alpha: 1.0,
+                beta: 0.0,
+            });
         }
-        
+
         // Phase 2: GPU unavailable + backpressure
         manager.set_gpu_available(false);
         for _ in 0..20 {
             let result = manager.request_work(WorkType::Attention {
-                query_seq_len: 1, num_heads: 8, head_dim: 64, cache_seq_len: 128,
+                query_seq_len: 1,
+                num_heads: 8,
+                head_dim: 64,
+                cache_seq_len: 128,
             });
             match result {
                 WorkResult::LoggedForLater => {}
                 WorkResult::Dropped => {} // Expected due to backpressure
-                WorkResult::ReadyForExecution(_) => panic!("Should not execute when GPU unavailable"),
+                WorkResult::ReadyForExecution(_) => {
+                    panic!("Should not execute when GPU unavailable")
+                }
             }
         }
-        
+
         let stats = manager.stats();
         assert_eq!(stats.total_submitted, 30);
         assert_eq!(stats.total_executed, 10); // First phase
         assert!(stats.total_deferred > 0); // Second phase logged some
         assert!(stats.total_dropped >= 0); // May have dropped some due to backpressure
-        
+
         // Phase 3: GPU returns + replay
         let pending = manager.get_pending_for_execution();
         let total_from_queue = pending.len() as u64;
@@ -524,23 +568,50 @@ mod tests {
     #[test]
     fn test_priority_ordering() {
         let mut queue = DemandQueue::new(10);
-        
+
         // Add demands with different priorities (in random order)
-        let low = Demand::with_priority(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 }, Priority::Low);
-        let high = Demand::with_priority(WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 }, Priority::High);
-        let normal = Demand::with_priority(WorkType::Gemm { m: 256, n: 256, k: 8192, alpha: 1.0, beta: 0.0 }, Priority::Normal);
-        
+        let low = Demand::with_priority(
+            WorkType::Gemm {
+                m: 64,
+                n: 64,
+                k: 2048,
+                alpha: 1.0,
+                beta: 0.0,
+            },
+            Priority::Low,
+        );
+        let high = Demand::with_priority(
+            WorkType::Gemm {
+                m: 128,
+                n: 128,
+                k: 4096,
+                alpha: 1.0,
+                beta: 0.0,
+            },
+            Priority::High,
+        );
+        let normal = Demand::with_priority(
+            WorkType::Gemm {
+                m: 256,
+                n: 256,
+                k: 8192,
+                alpha: 1.0,
+                beta: 0.0,
+            },
+            Priority::Normal,
+        );
+
         queue.try_push(normal).unwrap();
         queue.try_push(high).unwrap();
         queue.try_push(low).unwrap();
-        
+
         // Pop should return highest priority first
         let popped = queue.pop().unwrap();
         assert_eq!(popped.priority, Priority::High);
-        
+
         let popped = queue.pop().unwrap();
         assert_eq!(popped.priority, Priority::Normal);
-        
+
         let popped = queue.pop().unwrap();
         assert_eq!(popped.priority, Priority::Low);
     }
@@ -548,18 +619,30 @@ mod tests {
     #[test]
     fn test_backpressure() {
         let mut manager = InertiaManager::new(3); // Very small capacity
-        
+
         // Fill queue to capacity
         manager.set_gpu_available(false);
         for _ in 0..3 {
-            let result = manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+            let result = manager.request_work(WorkType::Gemm {
+                m: 64,
+                n: 64,
+                k: 2048,
+                alpha: 1.0,
+                beta: 0.0,
+            });
             assert!(matches!(result, WorkResult::LoggedForLater));
         }
-        
+
         // Next request should be dropped
-        let result = manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+        let result = manager.request_work(WorkType::Gemm {
+            m: 64,
+            n: 64,
+            k: 2048,
+            alpha: 1.0,
+            beta: 0.0,
+        });
         assert!(matches!(result, WorkResult::Dropped));
-        
+
         let stats = manager.stats();
         assert_eq!(stats.total_dropped, 1);
     }
@@ -568,28 +651,58 @@ mod tests {
     fn test_demand_timestamps() {
         let mut manager = InertiaManager::new(10);
         manager.set_gpu_available(false);
-        
+
         // Submit two demands with a small delay
-        manager.request_work(WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 });
+        manager.request_work(WorkType::Gemm {
+            m: 64,
+            n: 64,
+            k: 2048,
+            alpha: 1.0,
+            beta: 0.0,
+        });
         std::thread::sleep(Duration::from_millis(1));
-        manager.request_work(WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 });
-        
+        manager.request_work(WorkType::Gemm {
+            m: 128,
+            n: 128,
+            k: 4096,
+            alpha: 1.0,
+            beta: 0.0,
+        });
+
         let pending = manager.get_pending_for_execution();
         assert_eq!(pending.len(), 2);
-        
+
         // Verify timestamps are ordered (first should be older)
         assert!(pending[0].timestamp <= pending[1].timestamp);
     }
 
     #[test]
     fn test_demand_id_uniqueness() {
-        let work1 = WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 };
-        let work2 = WorkType::Gemm { m: 64, n: 64, k: 2048, alpha: 1.0, beta: 0.0 };
-        
+        let work1 = WorkType::Gemm {
+            m: 64,
+            n: 64,
+            k: 2048,
+            alpha: 1.0,
+            beta: 0.0,
+        };
+        let work2 = WorkType::Gemm {
+            m: 64,
+            n: 64,
+            k: 2048,
+            alpha: 1.0,
+            beta: 0.0,
+        };
+
         // Same parameters should produce same ID (deterministic)
         assert_eq!(work1.id(), work2.id());
-        
-        let work3 = WorkType::Gemm { m: 128, n: 128, k: 4096, alpha: 1.0, beta: 0.0 };
+
+        let work3 = WorkType::Gemm {
+            m: 128,
+            n: 128,
+            k: 4096,
+            alpha: 1.0,
+            beta: 0.0,
+        };
         assert_ne!(work1.id(), work3.id()); // Different parameters = different ID
     }
 
@@ -600,7 +713,7 @@ mod tests {
         stats.total_executed = 70;
         stats.total_deferred = 25;
         stats.total_dropped = 5;
-        
+
         assert_eq!(stats.utilization_ratio(), 0.7);
         assert_eq!(stats.deferral_ratio(), 0.25);
         assert_eq!(stats.drop_ratio(), 0.05);

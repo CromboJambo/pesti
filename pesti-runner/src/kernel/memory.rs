@@ -98,7 +98,13 @@ impl CpuMemoryBackend {
 
     /// Total bytes allocated across all live allocations.
     pub fn used_bytes(&self) -> usize {
-        self.slab.lock().unwrap().iter().filter(|e| e.allocated).map(|e| e.data.len()).sum()
+        self.slab
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.allocated)
+            .map(|e| e.data.len())
+            .sum()
     }
 }
 
@@ -113,7 +119,11 @@ impl MemoryBackend for CpuMemoryBackend {
             return Ok(RawHandle(idx as u64));
         }
 
-        let total_used: usize = slab.iter().filter(|e| e.allocated).map(|e| e.data.len()).sum();
+        let total_used: usize = slab
+            .iter()
+            .filter(|e| e.allocated)
+            .map(|e| e.data.len())
+            .sum();
         if total_used + bytes > self.capacity {
             return Err(MemoryError::AllocationFailed {
                 requested: bytes,
@@ -177,7 +187,9 @@ impl MemoryBackend for CpuMemoryBackend {
         if dst_idx >= slab.len() || !slab[dst_idx].allocated {
             return Err(MemoryError::InvalidHandle(dst));
         }
-        let copy_len = bytes.min(slab[src_idx].data.len()).min(slab[dst_idx].data.len());
+        let copy_len = bytes
+            .min(slab[src_idx].data.len())
+            .min(slab[dst_idx].data.len());
         let src_data = slab[src_idx].data[..copy_len].to_vec();
         slab[dst_idx].data[..copy_len].copy_from_slice(&src_data);
         Ok(())
@@ -297,13 +309,11 @@ impl MemoryBackend for CudaMemoryBackend {
             });
         }
 
-        let ptr = unsafe {
-            cuda_core::memory::malloc_async(self.stream.cu_stream(), bytes)
-        }
-        .map_err(|e| {
-            tracing::warn!(error = %e, "cuMemAllocAsync failed");
-            MemoryError::Cuda(format!("cuMemAllocAsync: {}", e))
-        })?;
+        let ptr = unsafe { cuda_core::memory::malloc_async(self.stream.cu_stream(), bytes) }
+            .map_err(|e| {
+                tracing::warn!(error = %e, "cuMemAllocAsync failed");
+                MemoryError::Cuda(format!("cuMemAllocAsync: {}", e))
+            })?;
 
         Ok(RawHandle(ptr as u64))
     }
@@ -313,10 +323,8 @@ impl MemoryBackend for CudaMemoryBackend {
         if ptr == 0 {
             return Ok(());
         }
-        unsafe {
-            cuda_core::memory::free_async(ptr, self.stream.cu_stream())
-        }
-        .map_err(|e| MemoryError::Cuda(format!("cuMemFreeAsync failed: {e}")))
+        unsafe { cuda_core::memory::free_async(ptr, self.stream.cu_stream()) }
+            .map_err(|e| MemoryError::Cuda(format!("cuMemFreeAsync failed: {e}")))
     }
 
     fn h2d(&self, src: &[u8], dst: RawHandle) -> Result<(), MemoryError> {
@@ -467,4 +475,3 @@ impl Default for MemoryManager {
         Self::new()
     }
 }
-

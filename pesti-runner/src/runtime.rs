@@ -34,8 +34,8 @@ use crate::model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats}
 use crate::registry::{DiscoveredModel, ModelDiscovery, ModelEntry, ModelFormat, Registry};
 #[cfg(feature = "cuda")]
 use crate::transformer::{LlamaConfig, LlamaModel};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 /// Configuration for the Runtime.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -214,9 +214,7 @@ impl Runtime {
             *self.current_model.write().await = Some(state);
 
             // Track in model manager
-            self.model_manager
-                .load_model(name.to_string(), spec)
-                .await;
+            self.model_manager.load_model(name.to_string(), spec).await;
 
             info!(model = name, "Model loaded successfully");
         } else if format == ModelFormat::SafeTensors && spec.base_path.exists() {
@@ -227,9 +225,14 @@ impl Runtime {
             );
 
             // Extract config from safetensors metadata
-            let _meta = crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
-                .map_err(|e| crate::error::RunnerError::ModelLoad(format!("Failed to extract safetensors config: {e}")))
-                .map(|_| ())?;
+            let _meta =
+                crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
+                    .map_err(|e| {
+                        crate::error::RunnerError::ModelLoad(format!(
+                            "Failed to extract safetensors config: {e}"
+                        ))
+                    })
+                    .map(|_| ())?;
 
             // Load model from safetensors
             // Stub - actual implementation only exists with CUDA
@@ -247,9 +250,7 @@ impl Runtime {
             *self.current_model.write().await = Some(state);
 
             // Track in model manager
-            self.model_manager
-                .load_model(name.to_string(), spec)
-                .await;
+            self.model_manager.load_model(name.to_string(), spec).await;
 
             info!(model = name, "SafeTensors model loaded successfully");
         } else {
@@ -296,9 +297,10 @@ impl Runtime {
 
     /// Run batch inference on the loaded GGUF model (llama.cpp path).
     pub fn generate(&self, prompt: &str, config: &SamplingConfig) -> Result<GenerationResult> {
-        let runner = self.runner.try_read().map_err(|e| {
-            crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e))
-        })?;
+        let runner = self
+            .runner
+            .try_read()
+            .map_err(|e| crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e)))?;
         let Some(RunnerBackend::Llama(runner)) = runner.as_ref() else {
             return Err(crate::error::RunnerError::Internal(
                 "No GGUF model loaded. Call load_model() with a .gguf file.".to_string(),
@@ -331,17 +333,26 @@ impl Runtime {
     ///
     /// This uses the transformer-based inference engine, not llama.cpp.
     /// The prompt must be tokenized first using the model's tokenizer.
-    pub fn generate_rust(&self, _prompt_tokens: &[u32], _max_tokens: usize, _temp: f32) -> Result<Vec<u32>> {
-        let model = self.runner.try_read().map_err(|e| {
-            crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e))
-        })?;
+    pub fn generate_rust(
+        &self,
+        _prompt_tokens: &[u32],
+        _max_tokens: usize,
+        _temp: f32,
+    ) -> Result<Vec<u32>> {
+        let model = self
+            .runner
+            .try_read()
+            .map_err(|e| crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e)))?;
         let RunnerBackend::RustModel(model) = model.as_ref().ok_or_else(|| {
             crate::error::RunnerError::Internal(
-                "No SafeTensors model loaded. Call load_model() with a .safetensors file.".to_string(),
+                "No SafeTensors model loaded. Call load_model() with a .safetensors file."
+                    .to_string(),
             )
-        })? else {
+        })?
+        else {
             return Err(crate::error::RunnerError::Internal(
-                "Loaded model is not a SafeTensors model. Use generate() for GGUF models.".to_string(),
+                "Loaded model is not a SafeTensors model. Use generate() for GGUF models."
+                    .to_string(),
             ));
         };
 
@@ -396,12 +407,14 @@ impl Runtime {
     where
         F: FnMut(&TokenInfo) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>,
     {
-        let runner = self.runner.try_read().map_err(|e| {
-            crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e))
-        })?;
+        let runner = self
+            .runner
+            .try_read()
+            .map_err(|e| crate::error::RunnerError::Internal(format!("RWLock poisoned: {}", e)))?;
         let Some(RunnerBackend::Llama(runner)) = runner.as_ref() else {
             return Err(crate::error::RunnerError::Internal(
-                "Streaming requires a GGUF model. Use generate_rust() for SafeTensors models.".to_string(),
+                "Streaming requires a GGUF model. Use generate_rust() for SafeTensors models."
+                    .to_string(),
             ));
         };
 
@@ -486,7 +499,8 @@ impl Runtime {
     }
 
     /// Get the current device preference.
-    pub fn device_preference(&self) -> () { // Stub - actual implementation only exists with CUDA
+    pub fn device_preference(&self) -> () {
+        // Stub - actual implementation only exists with CUDA
         self.config.device_preference.clone()
     }
 }

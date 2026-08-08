@@ -14,9 +14,7 @@ use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::memory::CudaMemoryBackend;
-use pesti_runner::kernel::{
-    CudaGemmKernelBuilder, GemmArch, GemmError, GemmKernel, MemoryBackend,
-};
+use pesti_runner::kernel::{CudaGemmKernelBuilder, GemmArch, GemmError, GemmKernel, MemoryBackend};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -66,18 +64,24 @@ fn run_device(
         info.name, info.compute_capability.0, info.compute_capability.1, arch
     );
 
-    let kernel = match CudaGemmKernelBuilder::new(arch, rt.context().clone(), stream.clone(), info.clone()).build() {
-        Ok(k) => k,
-        Err(GemmError::UnsupportedArch(msg)) => {
-            println!("  ⏭️  {msg}");
-            return Ok(());
-        }
-        Err(e) => {
-            println!("  ❌ kernel build failed: {e}");
-            return Ok(());
-        }
-    };
-    println!("  ✅ Kernel loaded: {} (arch {:?})", "gemm_mma_kernel", arch);
+    let kernel =
+        match CudaGemmKernelBuilder::new(arch, rt.context().clone(), stream.clone(), info.clone())
+            .build()
+        {
+            Ok(k) => k,
+            Err(GemmError::UnsupportedArch(msg)) => {
+                println!("  ⏭️  {msg}");
+                return Ok(());
+            }
+            Err(e) => {
+                println!("  ❌ kernel build failed: {e}");
+                return Ok(());
+            }
+        };
+    println!(
+        "  ✅ Kernel loaded: {} (arch {:?})",
+        "gemm_mma_kernel", arch
+    );
 
     // Memory backend on the same stream (with real device info so
     // allocation capacity is nonzero)
@@ -128,7 +132,10 @@ fn run_device(
 
     println!("  GPU GEMM: {:.3} ms", gpu_time.as_secs_f64() * 1000.0);
     println!("  CPU GEMM: {:.3} ms", cpu_time.as_secs_f64() * 1000.0);
-    println!("  Speedup: {:.1}x", cpu_time.as_secs_f64() / gpu_time.as_secs_f64());
+    println!(
+        "  Speedup: {:.1}x",
+        cpu_time.as_secs_f64() / gpu_time.as_secs_f64()
+    );
     println!("  Max error vs CPU: {:.3e}", max_err);
     println!("  Elements > 0.5 abs error: {n_bad}/{}", m * n);
     println!("  C[0][0] = {:.4} (cpu {:.4})", c_gpu[0], c_cpu[0]);

@@ -46,7 +46,9 @@ fn main() {
     // Allocate on GPU
     let a_dev = device.htod_slice(&a_host).expect("A allocation failed");
     let b_dev = device.htod_slice(&b_host).expect("B allocation failed");
-    let mut c_dev = device.create_zeros::<f16>(m * n).expect("C allocation failed");
+    let mut c_dev = device
+        .create_zeros::<f16>(m * n)
+        .expect("C allocation failed");
 
     println!(
         "✅ Allocated tensors on GPU: A[{}x{}], B[{}x{}], C[{}x{}]",

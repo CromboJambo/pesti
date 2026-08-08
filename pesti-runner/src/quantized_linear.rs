@@ -4,9 +4,9 @@
 //! quantized bytes and dequantizes tiles during forward pass. This reduces memory
 //! bandwidth by ~4-8x for large models where weight loading is the bottleneck.
 
-use crate::tile_dequant::{self, QuantDtype};
 use crate::error::Result;
 use crate::error::RunnerError;
+use crate::tile_dequant::{self, QuantDtype};
 
 /// A linear layer backed by quantized (compressed) weight data.
 pub struct QuantizedLinear {
@@ -59,7 +59,7 @@ impl QuantizedLinear {
                 return Err(RunnerError::Internal(format!(
                     "Unsupported quantization type for QuantizedLinear: {}",
                     gguf_dtype
-                )))
+                )));
             }
         };
 
@@ -73,8 +73,7 @@ impl QuantizedLinear {
 
     /// Equivalent f32 memory footprint.
     pub fn f32_memory_bytes(&self) -> usize {
-        self.in_features * self.out_features * 4
-            + self.bias.as_ref().map_or(0, |b| b.len() * 4)
+        self.in_features * self.out_features * 4 + self.bias.as_ref().map_or(0, |b| b.len() * 4)
     }
 
     /// Memory savings ratio (f32 / quantized).

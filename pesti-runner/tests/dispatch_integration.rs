@@ -3,11 +3,11 @@
 //! These tests verify the correctness of the dispatch layer against CPU baselines
 //! using real model files from the conformance corpus.
 
-use pesti_gguf::{GgufKvPair, GgufKvValue, GgufValueType};
-use pesti_runner::kernel::dispatch::{DispatchContext, LinearDispatch};
-use pesti_runner::gguf_weight_loader::load_gguf_weights;
-use pesti_runner::model::CpuModel;
 use half::f16;
+use pesti_gguf::{GgufKvPair, GgufKvValue, GgufValueType};
+use pesti_runner::gguf_weight_loader::load_gguf_weights;
+use pesti_runner::kernel::dispatch::{DispatchContext, LinearDispatch};
+use pesti_runner::model::CpuModel;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -245,8 +245,12 @@ fn test_dispatch_vs_cpu_output() {
     dispatch_model.reset();
 
     let dispatch_hidden = dispatch_model.embed(token, 0).expect("embed failed");
-    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("forward_with_dispatch failed");
-    let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("apply_output_head failed");
+    let dispatch_hidden = dispatch_model
+        .forward_with_dispatch(&dispatch_hidden, 0)
+        .expect("forward_with_dispatch failed");
+    let dispatch_logits = dispatch_model
+        .apply_output_head(&dispatch_hidden)
+        .expect("apply_output_head failed");
 
     assert_eq!(
         cpu_logits.len(),
@@ -259,7 +263,11 @@ fn test_dispatch_vs_cpu_output() {
         assert!(
             diff < tol,
             "Logit mismatch at index {}: cpu={:.6} dispatch={:.6} diff={:.6} tol={:.6}",
-            i, cpu, dispatch, diff, tol
+            i,
+            cpu,
+            dispatch,
+            diff,
+            tol
         );
     }
 }
@@ -268,9 +276,9 @@ fn test_dispatch_vs_cpu_output() {
 fn test_dispatch_conformance_real_model() {
     // Use conformance corpus model (Q4_K_M quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: conformance corpus not found");
         return;
@@ -298,10 +306,7 @@ fn test_dispatch_conformance_real_model() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -349,9 +354,9 @@ fn test_dispatch_conformance_real_model() {
 fn test_dispatch_conformance_q8_0() {
     // Use conformance corpus model (Q8_0 quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q8_0.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q8_0.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q8_0 conformance corpus not found");
         return;
@@ -379,10 +384,7 @@ fn test_dispatch_conformance_q8_0() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -430,9 +432,9 @@ fn test_dispatch_conformance_q8_0() {
 fn test_dispatch_conformance_q2_k() {
     // Use conformance corpus model (Q2_K quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q2_k.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q2_k.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q2_K conformance corpus not found");
         return;
@@ -460,10 +462,7 @@ fn test_dispatch_conformance_q2_k() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -511,9 +510,9 @@ fn test_dispatch_conformance_q2_k() {
 fn test_dispatch_conformance_q3_k() {
     // Use conformance corpus model (Q3_K quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q3_k.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q3_k.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q3_K conformance corpus not found");
         return;
@@ -541,10 +540,7 @@ fn test_dispatch_conformance_q3_k() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -592,9 +588,9 @@ fn test_dispatch_conformance_q3_k() {
 fn test_dispatch_conformance_q4_0() {
     // Use conformance corpus model (Q4_0 quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_0.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_0.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q4_0 conformance corpus not found");
         return;
@@ -622,10 +618,7 @@ fn test_dispatch_conformance_q4_0() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -673,9 +666,9 @@ fn test_dispatch_conformance_q4_0() {
 fn test_dispatch_conformance_q5_k() {
     // Use conformance corpus model (Q5_K quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q5_k.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q5_k.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q5_K conformance corpus not found");
         return;
@@ -703,10 +696,7 @@ fn test_dispatch_conformance_q5_k() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -754,9 +744,9 @@ fn test_dispatch_conformance_q5_k() {
 fn test_dispatch_conformance_q6_k() {
     // Use conformance corpus model (Q6_K quantization)
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q6_k.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q6_k.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: Q6_K conformance corpus not found");
         return;
@@ -784,10 +774,7 @@ fn test_dispatch_conformance_q6_k() {
     let cpu_logits = cpu_model.decode(token).expect("CPU decode failed");
 
     // Dispatch path
-    let dispatch_hidden = dispatch_model
-
-        .embed(token, 0)
-        .expect("Embed failed");
+    let dispatch_hidden = dispatch_model.embed(token, 0).expect("Embed failed");
     let dispatch_hidden = dispatch_model
         .forward_with_dispatch(&dispatch_hidden, 0)
         .expect("Forward failed");
@@ -852,11 +839,11 @@ fn test_dispatch_cpu_fallback() {
 #[ignore = "Requires conformance-corpus/qwen2.5-0.5b-instruct-f16.gguf"]
 fn test_dispatch_conformance_f16_model() {
     use pesti_runner::model::CpuModel;
-    
+
     let model_path = std::path::Path::new(
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-f16.gguf"
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-f16.gguf",
     );
-    
+
     if !model_path.exists() {
         println!("Skipping conformance test: F16 model not found");
         return;
@@ -889,15 +876,20 @@ fn test_dispatch_conformance_f16_model() {
 
     // Dispatch path - using new CpuModel API directly
     let dispatch_hidden = dispatch_model.embed(token, 0).expect("embed failed");
-    let dispatch_hidden = dispatch_model.forward_with_dispatch(&dispatch_hidden, 0).expect("forward_with_dispatch failed");
-    let dispatch_logits = dispatch_model.apply_output_head(&dispatch_hidden).expect("Output head failed");
+    let dispatch_hidden = dispatch_model
+        .forward_with_dispatch(&dispatch_hidden, 0)
+        .expect("forward_with_dispatch failed");
+    let dispatch_logits = dispatch_model
+        .apply_output_head(&dispatch_hidden)
+        .expect("Output head failed");
     println!("Dispatch logits shape: {}", dispatch_logits.len());
 
     // Compare with tolerance (1e-2 accounts for f16 precision loss)
     if cpu_logits.len() != dispatch_logits.len() {
         panic!(
             "Length mismatch: CPU len={} vs Dispatch len={}",
-            cpu_logits.len(), dispatch_logits.len()
+            cpu_logits.len(),
+            dispatch_logits.len()
         );
     }
 
@@ -919,7 +911,10 @@ fn test_dispatch_conformance_f16_model() {
     );
 
     if max_diff > 1e-2 {
-        panic!("Conformance failed: max diff {:.6e} exceeds tolerance 1e-2", max_diff);
+        panic!(
+            "Conformance failed: max diff {:.6e} exceeds tolerance 1e-2",
+            max_diff
+        );
     }
 
     println!("✅ CPU and dispatch outputs match within tolerance");

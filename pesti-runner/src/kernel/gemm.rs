@@ -334,11 +334,7 @@ impl CudaGemmKernel {
         ];
 
         // mma.sync kernel: one warp (32 threads) per 16x8 output tile.
-        let grid = (
-            ((n + 7) / 8) as u32,
-            ((m + 15) / 16) as u32,
-            1u32,
-        );
+        let grid = (((n + 7) / 8) as u32, ((m + 15) / 16) as u32, 1u32);
         let block = (32u32, 1u32, 1u32);
 
         // Launch: grid, block, shared_mem_bytes, stream, params
@@ -411,4 +407,3 @@ pub enum GemmError {
 }
 
 // --- Tests ---
-

@@ -22,8 +22,7 @@ impl GgufHeaderExt for GgufHeader {
     }
 
     fn rope_dimension_count(&self) -> Option<i32> {
-        self.get_kv_u32("rope.dimension_count")
-            .map(|v| v as i32)
+        self.get_kv_u32("rope.dimension_count").map(|v| v as i32)
     }
 
     fn normalization_epsilon(&self) -> Option<f32> {
@@ -129,10 +128,9 @@ impl ModelLoader {
 
     /// Verify weight checksum integrity.
     pub fn verify_checksum(&self, weight_id: &str, expected: &str) -> Result<bool, RunnerError> {
-        pesti_safetensors::schema::verify_weight_checksum(&self.conn, weight_id, expected)
-            .map_err(|_: SafetensorsSchemaError| {
-                RunnerError::Sqlite(rusqlite::Error::QueryReturnedNoRows)
-            })
+        pesti_safetensors::schema::verify_weight_checksum(&self.conn, weight_id, expected).map_err(
+            |_: SafetensorsSchemaError| RunnerError::Sqlite(rusqlite::Error::QueryReturnedNoRows),
+        )
     }
 
     /// List active weights for model selection.
@@ -186,11 +184,15 @@ impl ModelLoader {
     /// Extract raw tensor bytes from a GGUF file by tensor name.
     pub fn extract_gguf_tensor(path: &Path, tensor_name: &str) -> Result<Vec<u8>, RunnerError> {
         let header = Self::load_gguf_header(path)?;
-        let tensor = header.tensors.iter().find(|t| t.name == tensor_name).ok_or_else(|| {
-            RunnerError::Gguf(pesti_gguf::GgufError::InvalidTensor(format!(
-                "tensor '{tensor_name}' not found"
-            )))
-        })?;
+        let tensor = header
+            .tensors
+            .iter()
+            .find(|t| t.name == tensor_name)
+            .ok_or_else(|| {
+                RunnerError::Gguf(pesti_gguf::GgufError::InvalidTensor(format!(
+                    "tensor '{tensor_name}' not found"
+                )))
+            })?;
 
         let size = tensor.stored_size()? as usize;
         pesti_gguf::parser::extract_tensor_bytes_from_path(path, tensor.offset, size)
@@ -243,4 +245,3 @@ impl ModelLoader {
         })
     }
 }
-

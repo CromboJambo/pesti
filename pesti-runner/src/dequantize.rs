@@ -3,7 +3,6 @@
 //! This module provides dequantization functions for GGUF tensor formats
 //! using the `ggml-quants` crate, avoiding C dependencies where possible.
 
-
 use crate::error::{Result, RunnerError};
 
 /// Dequantize Q4_0 data using ggml-quants.
@@ -24,7 +23,8 @@ pub fn dequantize_q4_0_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
             "Q4_0 data too small: got {} bytes, need {}",
-            data.len(), expected_size
+            data.len(),
+            expected_size
         )));
     }
 
@@ -32,7 +32,7 @@ pub fn dequantize_q4_0_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
 
     for block in 0..num_full_blocks {
         let base = block * 18;
-        
+
         // Parse scale (f16)
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
@@ -84,7 +84,8 @@ pub fn dequantize_q4_1_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
             "Q4_1 data too small: got {} bytes, need {}",
-            data.len(), expected_size
+            data.len(),
+            expected_size
         )));
     }
 
@@ -92,11 +93,11 @@ pub fn dequantize_q4_1_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
 
     for block in 0..num_full_blocks {
         let base = block * 20;
-        
+
         // Parse scale and min
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
-        
+
         let min_f16 = data[base + 2] as u16 | (data[base + 3] as u16) << 8;
         let min = f16_to_f32_le(min_f16);
 
@@ -115,7 +116,7 @@ pub fn dequantize_q4_1_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
         let base = num_full_blocks * 20;
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
-        
+
         let min_f16 = data[base + 2] as u16 | (data[base + 3] as u16) << 8;
         let min = f16_to_f32_le(min_f16);
 
@@ -142,7 +143,8 @@ pub fn dequantize_q8_0_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
             "Q8_0 data too small: got {} bytes, need {}",
-            data.len(), expected_size
+            data.len(),
+            expected_size
         )));
     }
 
@@ -150,7 +152,7 @@ pub fn dequantize_q8_0_ggml(data: &[u8], element_count: usize) -> Result<Vec<f32
 
     for block in 0..num_blocks {
         let base = block * 34;
-        
+
         // Parse scale
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
@@ -194,7 +196,8 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
             "Q5_0 data too small: got {} bytes, need {}",
-            data.len(), expected_size
+            data.len(),
+            expected_size
         )));
     }
 

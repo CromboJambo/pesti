@@ -73,7 +73,13 @@ impl Kvcache {
         }
     }
 
-    pub fn new(num_heads: usize, num_kv_heads: usize, head_dim: usize, max_seq: usize, on_device: bool) -> Self {
+    pub fn new(
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        max_seq: usize,
+        on_device: bool,
+    ) -> Self {
         let total = num_heads * head_dim * 2 * max_seq;
         Self {
             buffer: DeviceBuffer::zeros(total),
@@ -467,4 +473,3 @@ pub enum KvError {
     #[error("resize failed: {reason}")]
     ResizeFailed { reason: String },
 }
-

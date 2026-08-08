@@ -5,11 +5,11 @@
 //!   k_m' = k_m * cos(pos * theta) - k_{m+head_dim/2} * sin(pos * theta)
 
 use crate::cuda_runtime::CudaDeviceInfo;
-use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::attention::{AttentionArch, AttentionError};
+use crate::kernel::device_buf::DeviceBuffer;
+use cuda_core::CudaFunction;
 use half::f16;
 use std::sync::Arc;
-use cuda_core::CudaFunction;
 
 /// GPU RoPE kernel for Blackwell tensor cores.
 pub struct CudaRopeKernel {

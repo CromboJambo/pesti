@@ -8,11 +8,11 @@
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::kernel::Kvcache;
+use pesti_runner::kernel::attention::{AttentionConfig, AttentionKernel, GemmBasedAttentionKernel};
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::gemm::{CudaGemmKernelBuilder, GemmArch};
 use pesti_runner::kernel::memory::{CudaMemoryBackend, MemoryBackend};
-use pesti_runner::kernel::attention::{AttentionConfig, AttentionKernel, GemmBasedAttentionKernel};
-use pesti_runner::kernel::Kvcache;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,17 +90,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Copy host buffer to device
-    let host_slice = k_host_cache.buffer().as_slice().expect("host Kvcache must have data");
+    let host_slice = k_host_cache
+        .buffer()
+        .as_slice()
+        .expect("host Kvcache must have data");
     let _kv_device_buf = DeviceBuffer::from_host_device(&*backend, host_slice)?;
 
     // Create device-backed Kvcache from the device pointer
     let kv_ptr = _kv_device_buf.device_ptr();
-    let mut k_cache = unsafe {
-        Kvcache::from_device(kv_ptr, num_heads, num_heads, head_dim, seq_len)
-    };
+    let mut k_cache =
+        unsafe { Kvcache::from_device(kv_ptr, num_heads, num_heads, head_dim, seq_len) };
     k_cache.set_seq_len(seq_len);
 
-    println!("✅ K/V caches on GPU (ptr={:#x}, seq_len={})", kv_ptr, seq_len);
+    println!(
+        "✅ K/V caches on GPU (ptr={:#x}, seq_len={})",
+        kv_ptr, seq_len
+    );
 
     // Configure attention
     let config = AttentionConfig::new(num_heads, head_dim).with_max_seq(seq_len);
@@ -114,11 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Execute attention: Q @ K^T -> softmax -> S @ V
     println!("\n--- Running GEMM-based attention ---");
     let output = attn_kernel.forward(
-        &q_buf,
-        &k_cache,
-        &k_cache, // V = K for this test
-        None,
-        &config,
+        &q_buf, &k_cache, &k_cache, // V = K for this test
+        None, &config,
     )?;
 
     // Retrieve and verify results

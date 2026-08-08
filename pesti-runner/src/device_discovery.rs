@@ -185,4 +185,3 @@ pub fn select_best_gpu(model_bytes: u64) -> Option<LocalDevice> {
 
     gpus.into_iter().max_by_key(|d| d.free_vram)
 }
-

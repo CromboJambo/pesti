@@ -205,7 +205,8 @@ impl DeviceRouter {
     }
 
     /// Create a router with explicit device priority.
-    pub fn with_priority(_config: RunnerConfig, _priority: Vec<()>) -> Self { // Stub - actual implementation only exists with CUDA
+    pub fn with_priority(_config: RunnerConfig, _priority: Vec<()>) -> Self {
+        // Stub - actual implementation only exists with CUDA
         Self {
             selector: (),
             bridge: RunnerBridge::new(_config),
@@ -220,7 +221,8 @@ impl DeviceRouter {
         &mut self,
         _request: InferenceRequest,
         _model_bytes: u64,
-    ) -> Result<RouteResult, RunnerError> { // Stub - actual implementation only exists with CUDA
+    ) -> Result<RouteResult, RunnerError> {
+        // Stub - actual implementation only exists with CUDA
         debug!("Device router: stub routing");
 
         Ok(RouteResult {
@@ -234,7 +236,8 @@ impl DeviceRouter {
         &self,
         _request: InferenceRequest,
         _model_bytes: u64,
-    ) -> Result<RouteResult, RunnerError> { // Stub - actual implementation only exists with CUDA
+    ) -> Result<RouteResult, RunnerError> {
+        // Stub - actual implementation only exists with CUDA
         debug!("Device router: stub quick routing");
 
         Ok(RouteResult {
@@ -244,12 +247,14 @@ impl DeviceRouter {
     }
 
     /// List all available devices with current status.
-    pub fn list_devices(&self) -> Vec<()> { // Stub - actual implementation only exists with CUDA
+    pub fn list_devices(&self) -> Vec<()> {
+        // Stub - actual implementation only exists with CUDA
         vec![]
     }
 
     /// Get the current device selection priority.
-    pub fn priority(&self) -> Vec<()> { // Stub - actual implementation only exists with CUDA
+    pub fn priority(&self) -> Vec<()> {
+        // Stub - actual implementation only exists with CUDA
         vec![]
     }
 

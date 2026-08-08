@@ -18,7 +18,7 @@ pub mod templates;
 pub use error::{PlugInError, Result};
 pub use manifest::WeightManifest;
 pub use protocol::{InferenceRequest, InferenceResponse, RunnerConfig};
-pub use templates::{infer_template, TemplateFamily};
+pub use templates::{TemplateFamily, infer_template};
 
 #[cfg(test)]
 mod tests {

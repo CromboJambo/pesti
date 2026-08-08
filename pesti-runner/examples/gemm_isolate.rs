@@ -10,25 +10,37 @@ fn main() {
     let w: Vec<f32> = vec![0.0f32; n * k];
     let mut output = vec![0.0f32; m * n];
 
-    eprintln!("gemm: m={}, n={}, k={}, w.len={}, x.len={}, output.len={}", m, n, k, w.len(), x.len(), output.len());
+    eprintln!(
+        "gemm: m={}, n={}, k={}, w.len={}, x.len={}, output.len={}",
+        m,
+        n,
+        k,
+        w.len(),
+        x.len(),
+        output.len()
+    );
     std::io::stderr().flush().unwrap();
 
     unsafe {
         gemm::gemm(
-            m, n, k,
+            m,
+            n,
+            k,
             output.as_mut_ptr(),
-            1_isize,        // dst_cs
-            n as isize,     // dst_rs
-            false,          // read_dst
-            x.as_ptr(),     // lhs
-            k as isize,     // lhs_cs
-            1_isize,        // lhs_rs
-            w.as_ptr(),     // rhs
-            k as isize,     // rhs_cs
-            1_isize,        // rhs_rs
+            1_isize,    // dst_cs
+            n as isize, // dst_rs
+            false,      // read_dst
+            x.as_ptr(), // lhs
+            k as isize, // lhs_cs
+            1_isize,    // lhs_rs
+            w.as_ptr(), // rhs
+            k as isize, // rhs_cs
+            1_isize,    // rhs_rs
             1.0f32,
             0.0f32,
-            false, false, false,
+            false,
+            false,
+            false,
             gemm::Parallelism::Rayon(0),
         );
     }

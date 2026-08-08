@@ -34,14 +34,18 @@ use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{
-    AttentionArch, AttentionConfig, AttentionKernel,
-    CpuAttentionKernel,
+    AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
 };
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::attention_stub::{
-    AttentionArch, AttentionConfig, AttentionKernel,
-    CpuAttentionKernel,
+    AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
 };
+use crate::kernel::candle_bridge;
+use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
+use crate::kernel::gemm::{GemmArch, GemmKernel};
+#[cfg(not(feature = "cuda"))]
+use crate::kernel::gemm_stub::{GemmArch, GemmKernel};
 #[cfg(feature = "cuda")]
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
@@ -50,12 +54,6 @@ use crate::kernel::kvcache_stub::Kvcache;
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
-use crate::kernel::candle_bridge;
-use crate::kernel::device_buf::DeviceBuffer;
-#[cfg(feature = "cuda")]
-use crate::kernel::gemm::{GemmArch, GemmKernel};
-#[cfg(not(feature = "cuda"))]
-use crate::kernel::gemm_stub::{GemmArch, GemmKernel};
 use candle_core::{DType, Device};
 use half::f16;
 use tracing::{debug, warn};
@@ -87,11 +85,15 @@ pub enum DispatchError {
 impl From<RunnerError> for DispatchError {
     fn from(e: RunnerError) -> Self {
         match e {
-            RunnerError::Gemm { arch, m, n, k, detail } => {
-                DispatchError::GpuKernel(format!(
-                    "GEMM(arch={arch}, m={m}, n={n}, k={k}): {detail}"
-                ))
-            }
+            RunnerError::Gemm {
+                arch,
+                m,
+                n,
+                k,
+                detail,
+            } => DispatchError::GpuKernel(format!(
+                "GEMM(arch={arch}, m={m}, n={n}, k={k}): {detail}"
+            )),
             RunnerError::Attention {
                 num_heads,
                 head_dim,
@@ -136,7 +138,9 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, "DispatchContext initialized");
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
+                1024 * 1024,
+            )),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
@@ -150,7 +154,9 @@ impl DispatchContext {
         tracing::info!(backend = %backend_desc, prefer_gpu, "DispatchContext initialized with GPU preference");
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
+                1024 * 1024,
+            )),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
@@ -162,7 +168,9 @@ impl DispatchContext {
         let prefer_gpu = engine.gpu_available();
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024)),
+            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
+                1024 * 1024,
+            )),
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
@@ -270,7 +278,9 @@ impl DispatchContext {
         }
 
         // Dispatch to GPU or CPU fallback
-        let _result = self.engine.matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k);
+        let _result = self
+            .engine
+            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k);
 
         // Transfer result back to host
         let mut c_host = vec![0.0f32; c_len];
@@ -475,13 +485,10 @@ impl DispatchContext {
 
         // Dispatch to GPU or CPU
         let result_buf = if self.prefer_gpu && self.gpu_available() {
-            match self.engine.attention(
-                &query_buf,
-                key_cache,
-                value_cache,
-                None,
-                &config,
-            ) {
+            match self
+                .engine
+                .attention(&query_buf, key_cache, value_cache, None, &config)
+            {
                 Ok(buf) => buf,
                 Err(e) => {
                     warn!(error = %e, "Attention: GPU failed, falling back to CPU");
@@ -501,8 +508,9 @@ impl DispatchContext {
         let result_len = query_seq_len * out_dim;
         let result_bytes = result_len * std::mem::size_of::<f32>();
         let mut result_host = vec![0.0f32; result_len];
-        let result_bytes_mut: &mut [u8] =
-            unsafe { std::slice::from_raw_parts_mut(result_host.as_mut_ptr() as *mut u8, result_bytes) };
+        let result_bytes_mut: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(result_host.as_mut_ptr() as *mut u8, result_bytes)
+        };
         self.memory
             .d2h(result_buf.handle(), result_bytes_mut)
             .map_err(|e| DispatchError::Transfer(format!("D2H attention: {e}")))?;
@@ -519,7 +527,9 @@ impl DispatchContext {
 
     /// Get device info string.
     pub fn device_info(&self) -> String {
-        self.engine.full_device_info().unwrap_or_else(|_| "unknown".to_string())
+        self.engine
+            .full_device_info()
+            .unwrap_or_else(|_| "unknown".to_string())
     }
 
     /// List available devices.
@@ -729,9 +739,8 @@ impl AttentionDispatch {
                     for h in 0..self.num_heads {
                         let q_start = q_idx + h * self.head_dim;
                         let group = h / (self.num_heads / self.num_kv_heads);
-                        let k_slice = Self::extract_head_slice(
-                            key_cache, true, group, j, self.head_dim,
-                        );
+                        let k_slice =
+                            Self::extract_head_slice(key_cache, true, group, j, self.head_dim);
                         if k_slice.len() == self.head_dim {
                             for d in 0..self.head_dim {
                                 sum += q_rope[q_start + d] * k_slice[d].to_f32();
@@ -761,7 +770,11 @@ impl AttentionDispatch {
                         let mut sum = 0.0f32;
                         for j in 0..cache_len {
                             let v_slice = Self::extract_head_slice(
-                                value_cache, false, group, j, self.head_dim,
+                                value_cache,
+                                false,
+                                group,
+                                j,
+                                self.head_dim,
                             );
                             if !v_slice.is_empty() {
                                 sum += softmax_out[j] * v_slice[d].to_f32();
@@ -860,25 +873,27 @@ impl AttentionDispatch {
             .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
 
         let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter().map(|v| half::f16::from_f32(*v)).collect::<Vec<_>>(),
+            &q.iter()
+                .map(|v| half::f16::from_f32(*v))
+                .collect::<Vec<_>>(),
             &[1, seq_len, head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
 
         let k_tensor = candle_bridge::f16_to_tensor(
-            &k.iter().map(|v| half::f16::from_f32(*v)).collect::<Vec<_>>(),
+            &k.iter()
+                .map(|v| half::f16::from_f32(*v))
+                .collect::<Vec<_>>(),
             &[1, seq_len, head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
 
-        let q_out =
-            candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
-                .map_err(|e| DispatchError::Kernel(format!("apply_rope(q): {e}")))?;
-        let k_out =
-            candle_bridge::apply_rope(&k_tensor, &cos, &sin, start_pos)
-                .map_err(|e| DispatchError::Kernel(format!("apply_rope(k): {e}")))?;
+        let q_out = candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
+            .map_err(|e| DispatchError::Kernel(format!("apply_rope(q): {e}")))?;
+        let k_out = candle_bridge::apply_rope(&k_tensor, &cos, &sin, start_pos)
+            .map_err(|e| DispatchError::Kernel(format!("apply_rope(k): {e}")))?;
 
         let q_result = candle_bridge::tensor_to_f32(&q_out)
             .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32(q): {e}")))?;
@@ -910,7 +925,9 @@ impl AttentionDispatch {
 
         // Build Q tensor: [1, seq_len, num_heads, head_dim]
         let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter().map(|v| half::f16::from_f32(*v)).collect::<Vec<_>>(),
+            &q.iter()
+                .map(|v| half::f16::from_f32(*v))
+                .collect::<Vec<_>>(),
             &[1, seq_len, num_heads, head_dim],
             None,
         )
@@ -923,24 +940,17 @@ impl AttentionDispatch {
         let k_slice: Vec<f16> = k_buffer.as_slice().map_or(vec![], |b| b.to_vec());
         let v_slice: Vec<f16> = v_buffer.as_slice().map_or(vec![], |b| b.to_vec());
 
-        let k_tensor = candle_bridge::f16_to_tensor(
-            &k_slice,
-            &[1, cache_len, num_kv_heads, head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
+        let k_tensor =
+            candle_bridge::f16_to_tensor(&k_slice, &[1, cache_len, num_kv_heads, head_dim], None)
+                .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
 
-        let v_tensor = candle_bridge::f16_to_tensor(
-            &v_slice,
-            &[1, cache_len, num_kv_heads, head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v): {e}")))?;
+        let v_tensor =
+            candle_bridge::f16_to_tensor(&v_slice, &[1, cache_len, num_kv_heads, head_dim], None)
+                .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v): {e}")))?;
 
         // Run SDPA
-        let attn_out =
-            candle_bridge::sdpa(&q_tensor, &k_tensor, &v_tensor, scale)
-                .map_err(|e| DispatchError::Kernel(format!("sdpa: {e}")))?;
+        let attn_out = candle_bridge::sdpa(&q_tensor, &k_tensor, &v_tensor, scale)
+            .map_err(|e| DispatchError::Kernel(format!("sdpa: {e}")))?;
 
         let result = candle_bridge::tensor_to_f32(&attn_out)
             .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32: {e}")))?;
@@ -984,12 +994,14 @@ impl AttentionDispatch {
         }
 
         // Extract K/V from cache for SDPA
-        let k_buf = key_cache.buffer().as_slice().ok_or_else(|| {
-            DispatchError::Kernel("KV cache buffer not available".into())
-        })?;
-        let v_buf = value_cache.buffer().as_slice().ok_or_else(|| {
-            DispatchError::Kernel("Value cache buffer not available".into())
-        })?;
+        let k_buf = key_cache
+            .buffer()
+            .as_slice()
+            .ok_or_else(|| DispatchError::Kernel("KV cache buffer not available".into()))?;
+        let v_buf = value_cache
+            .buffer()
+            .as_slice()
+            .ok_or_else(|| DispatchError::Kernel("Value cache buffer not available".into()))?;
 
         // Build K/V tensors: [1, cache_len, num_kv_heads, head_dim]
         let k_tensor = candle_bridge::f16_to_tensor(
@@ -1012,15 +1024,16 @@ impl AttentionDispatch {
             .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
 
         let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter().map(|&val| half::f16::from_f32(val)).collect::<Vec<_>>(),
+            &q.iter()
+                .map(|&val| half::f16::from_f32(val))
+                .collect::<Vec<_>>(),
             &[1, seq_len, self.num_heads, self.head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
 
-        let q_rope_tensor =
-            candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
-                .map_err(|e| DispatchError::Kernel(format!("apply_rope: {e}")))?;
+        let q_rope_tensor = candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
+            .map_err(|e| DispatchError::Kernel(format!("apply_rope: {e}")))?;
 
         // Run SDPA
         let attn_out = candle_bridge::sdpa(&q_rope_tensor, &k_tensor, &v_tensor, scale)
@@ -1074,7 +1087,13 @@ impl LayerDispatch {
         // Attention sub-layer: x + attn(RMSNorm(x))
         let normed = self.attention_norm.forward(x, batch_size)?;
         let attn_out = self.attention.forward(
-            ctx, &normed, batch_size, seq_len, start_pos, key_cache, value_cache,
+            ctx,
+            &normed,
+            batch_size,
+            seq_len,
+            start_pos,
+            key_cache,
+            value_cache,
         )?;
 
         // Residual: x + attn_out
@@ -1155,7 +1174,7 @@ impl RmsNormDispatch {
         // RMSNorm is simple enough to do on CPU — no GPU dispatch needed
         let embed_dim = x.len() / batch_size;
         let weight_len = self.weight.len();
-        
+
         // Ensure embed_dim matches weight length
         if embed_dim != weight_len {
             return Err(DispatchError::Kernel(format!(
@@ -1163,7 +1182,7 @@ impl RmsNormDispatch {
                 embed_dim, weight_len
             )));
         }
-        
+
         let mut output = vec![0.0f32; x.len()];
 
         for b in 0..batch_size {
@@ -1184,4 +1203,3 @@ impl RmsNormDispatch {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
-

@@ -10,12 +10,13 @@
 //!   cargo run --package pesti-runner --features cuda,llama-cpp-2/cuda \
 //!     --example llama_gpu_vs_cpu
 
-use pesti_runner::llama::SamplingConfig;
 use pesti_runner::LlamaRunner;
+use pesti_runner::llama::SamplingConfig;
 use std::path::Path;
 use std::time::Instant;
 
-const MODEL: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const PROMPT: &str = "The quick brown fox jumps over the lazy dog. Summarize:";
 
 fn bench(label: &str, n_gpu_layers: i32) -> Result<(), Box<dyn std::error::Error>> {
@@ -47,9 +48,15 @@ fn bench(label: &str, n_gpu_layers: i32) -> Result<(), Box<dyn std::error::Error
     let n_tokens = result.generated_tokens;
     let tok_s = n_tokens as f64 / gen_time.as_secs_f64();
 
-    println!("Generated {n_tokens} tokens in {:.3}s", gen_time.as_secs_f64());
+    println!(
+        "Generated {n_tokens} tokens in {:.3}s",
+        gen_time.as_secs_f64()
+    );
     println!("Throughput: {:.1} tok/s", tok_s);
-    println!("Output: \"{}...\"", &result.text[..result.text.len().min(80)]);
+    println!(
+        "Output: \"{}...\"",
+        &result.text[..result.text.len().min(80)]
+    );
     Ok(())
 }
 

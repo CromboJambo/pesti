@@ -70,7 +70,9 @@ pub struct LlamaConfig {
 }
 
 impl LlamaConfig {
-    pub fn from_gguf_header(_header: &pesti_gguf::types::GgufHeader) -> Result<Self, crate::error::RunnerError> {
+    pub fn from_gguf_header(
+        _header: &pesti_gguf::types::GgufHeader,
+    ) -> Result<Self, crate::error::RunnerError> {
         Ok(Self {
             arch: ModelArch::default(),
             num_layers: 32,
@@ -83,7 +85,9 @@ impl LlamaConfig {
         })
     }
 
-    pub fn from_safetensors_metadata(_meta: &std::collections::HashMap<String, String>) -> Result<Self, crate::error::RunnerError> {
+    pub fn from_safetensors_metadata(
+        _meta: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, crate::error::RunnerError> {
         Ok(Self {
             arch: ModelArch::default(),
             num_layers: 32,
@@ -170,7 +174,10 @@ pub struct RmsNorm {
 
 impl RmsNorm {
     pub fn new(_weight: Vec<f32>, _eps: f32) -> Self {
-        Self { weight: _weight, eps: _eps }
+        Self {
+            weight: _weight,
+            eps: _eps,
+        }
     }
 
     pub fn forward(&self, _input: &[f32], _batch_size: usize) -> Vec<f32> {
@@ -254,7 +261,8 @@ pub struct GgufTokenizerConfig {
 /// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf)
 pub fn load_tokenizer_from_gguf(_path: &Path) -> Result<Tokenizer, crate::error::RunnerError> {
     use tokenizers::Tokenizer;
-    Ok(Tokenizer::from_file(_path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?)
+    Ok(Tokenizer::from_file(_path)
+        .map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?)
 }
 
 /// Stub Llama model (mirrors real LlamaModel from transformer/model.rs)
@@ -280,7 +288,9 @@ impl LlamaModel {
         })
     }
 
-    pub fn from_gguf_weights(_weights: crate::gguf_weight_loader::GgufWeights) -> Result<Self, crate::error::RunnerError> {
+    pub fn from_gguf_weights(
+        _weights: crate::gguf_weight_loader::GgufWeights,
+    ) -> Result<Self, crate::error::RunnerError> {
         Ok(Self {
             config: LlamaConfig::default(),
             token_embeddings: None,
@@ -291,7 +301,10 @@ impl LlamaModel {
         })
     }
 
-    pub fn from_safetensors_weights(_weights: crate::safetensors_weight_loader::SafetensorsWeights, _config: LlamaConfig) -> Result<Self, crate::error::RunnerError> {
+    pub fn from_safetensors_weights(
+        _weights: crate::safetensors_weight_loader::SafetensorsWeights,
+        _config: LlamaConfig,
+    ) -> Result<Self, crate::error::RunnerError> {
         Ok(Self {
             config: _config,
             token_embeddings: None,
@@ -302,7 +315,10 @@ impl LlamaModel {
         })
     }
 
-    pub fn load_safetensors(_path: &Path, _config: LlamaConfig) -> Result<Self, crate::error::RunnerError> {
+    pub fn load_safetensors(
+        _path: &Path,
+        _config: LlamaConfig,
+    ) -> Result<Self, crate::error::RunnerError> {
         Ok(Self {
             config: _config,
             token_embeddings: None,
@@ -313,19 +329,34 @@ impl LlamaModel {
         })
     }
 
-    pub fn forward_with_dispatch(&self, _hidden: &[f32], _start_pos: usize) -> Result<Vec<f32>, crate::error::RunnerError> {
+    pub fn forward_with_dispatch(
+        &self,
+        _hidden: &[f32],
+        _start_pos: usize,
+    ) -> Result<Vec<f32>, crate::error::RunnerError> {
         Ok(vec![0.0; _hidden.len()])
     }
 
-    pub fn embed(&self, _token: u32, _seq_len: usize) -> Result<Vec<f32>, crate::error::RunnerError> {
+    pub fn embed(
+        &self,
+        _token: u32,
+        _seq_len: usize,
+    ) -> Result<Vec<f32>, crate::error::RunnerError> {
         Ok(vec![0.0; 4096])
     }
 
-    pub fn forward_layers(&self, _hidden: &[f32], _seq_len: usize) -> Result<Vec<f32>, crate::error::RunnerError> {
+    pub fn forward_layers(
+        &self,
+        _hidden: &[f32],
+        _seq_len: usize,
+    ) -> Result<Vec<f32>, crate::error::RunnerError> {
         Ok(vec![0.0; _hidden.len()])
     }
 
-    pub fn apply_output_head(&self, _hidden: &[f32]) -> Result<Vec<f32>, crate::error::RunnerError> {
+    pub fn apply_output_head(
+        &self,
+        _hidden: &[f32],
+    ) -> Result<Vec<f32>, crate::error::RunnerError> {
         Ok(vec![0.0; 32000])
     }
 
