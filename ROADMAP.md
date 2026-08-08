@@ -23,7 +23,8 @@ It's organized by milestones, not product features.
 - [x] CUTLASS GEMM wrapper via `cudarc`
 - [x] GEMM-based attention kernel (Q @ K^T → softmax → S @ V)
 - [x] End-to-end GPU inference verification with real GGUF model
-- **Learning outcome:** Understanding how GPUs accelerate inference
+- [x] **GPU softmax kernel** - Optional CUDA-accelerated softmax with feature gating
+- **Learning outcome**: Understanding how GPUs accelerate inference
 
 ### Forward Pass
 - [x] CPU forward pass works (full autoregressive generation)
