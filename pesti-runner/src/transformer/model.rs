@@ -12,6 +12,7 @@ use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::DispatchContext;
 use crate::kernel::kvcache::Kvcache;
+use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
 use crate::transformer::GgufTokenizer;
 use crate::transformer::layer::{Attention, FeedForward, TransformerLayer};
@@ -67,7 +68,8 @@ impl LlamaConfig {
         let embed_dim = header.embedding_length().ok_or_else(|| {
             RunnerError::MissingHeaderField("embedding_length".to_string())
         })? as usize;
-        let num_heads = header.attention_head_count().unwrap_or(32) as usize;
+        let num_heads = pesti_gguf::parser::get_kv_u32(&header, "attention.head_count")
+        .unwrap_or(32) as usize;
 
         let num_kv_heads = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
