@@ -28,7 +28,7 @@ description = "Portable Execution Substrate for Transformer Inference"
 
 [workspace.dependencies]
 # GGUF parser
-pesti-gguf = "0.2.1"
+pesti-gguf = "0.2.2"
 
 # LLM inference (FFI path)
 llama-cpp-2 = "0.1.146"
