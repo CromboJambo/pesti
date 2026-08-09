@@ -69,8 +69,7 @@ impl LlamaConfig {
             .embedding_length()
             .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
             as usize;
-        let num_heads =
-            header.get_kv_u32("attention.head_count").unwrap_or(32) as usize;
+        let num_heads = header.get_kv_u32("attention.head_count").unwrap_or(32) as usize;
 
         let num_kv_heads = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header

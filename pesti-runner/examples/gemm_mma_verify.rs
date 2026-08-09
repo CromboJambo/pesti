@@ -17,7 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = rt.new_stream()?;
     let info = rt.device_info();
 
-    println!("Device: {} (sm_{}.{})", info.name, info.compute_capability.0, info.compute_capability.1);
+    println!(
+        "Device: {} (sm_{}.{})",
+        info.name, info.compute_capability.0, info.compute_capability.1
+    );
 
     // Build GEMM kernel with mma.sync architecture
     let gemm_kernel = CudaGemmKernelBuilder::new(
@@ -41,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_host: Vec<f16> = (0..m * k)
         .map(|i| f16::from_f32((i as f32 * 0.1).sin()))
         .collect();
-    
+
     let b_host: Vec<f16> = (0..k * n)
         .map(|i| f16::from_f32((i as f32 * 0.05).cos()))
         .collect();

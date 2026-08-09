@@ -469,9 +469,10 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         let mut scores_host = scores_buffer
             .to_host_vec(backend)
             .map_err(|e| AttentionError::Transfer(e))?;
-        
+
         // Use softmax kernel (CPU or GPU depending on feature flags)
-        let softmax_scores = self.softmax_kernel
+        let softmax_scores = self
+            .softmax_kernel
             .forward(&scores_host)
             .map_err(|e| AttentionError::Softmax(e))?;
 
@@ -554,7 +555,7 @@ pub enum AttentionError {
 
     #[error("transfer error: {0}")]
     Transfer(#[from] crate::kernel::device_buf::DeviceBufferError),
-    
+
     #[error("softmax error: {0}")]
     Softmax(#[from] crate::kernel::softmax::SoftmaxError),
 

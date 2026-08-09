@@ -1,5 +1,5 @@
 //! Full forward pass through transformer layers (CPU-only).
-//! 
+//!
 //! Demonstrates loading GGUF weights with proper dequantization using pesti-runner's
 //! built-in CpuTransformerModel, which handles Q4_K/Q5_K/Q6_K quantization correctly.
 
@@ -9,13 +9,13 @@ use std::time::Instant;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_path =
         "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
-    
+
     println!("Loading model from: {}", model_path);
     let load_start = Instant::now();
-    
+
     // Use pesti-runner's built-in loader which handles dequantization correctly
     let weights = pesti_runner::load_gguf_weights(Path::new(model_path))?;
-    
+
     // Extract config
     let embed_dim = weights.header.embedding_length().unwrap_or(896) as usize;
     let num_heads = weights
@@ -74,7 +74,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  - Vocab size (inferred): {}", vocab_size);
 
     // Load token embeddings - GGUF stores as [embed_dim, vocab_size] (transposed!)
-    let token_embeddings_data = weights.tensors.get("token_embd.weight").ok_or("Missing token_embd.weight")?;
+    let token_embeddings_data = weights
+        .tensors
+        .get("token_embd.weight")
+        .ok_or("Missing token_embd.weight")?;
 
     // Convert dequantized bytes to f32
     let raw_embeddings: Vec<f32> = token_embeddings_data
@@ -100,33 +103,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for layer_idx in 0..num_layers {
         // Get attention weights (already dequantized)
-        let wq_data = weights.tensors.get(&format!("blk.{}.attn.q_proj.weight", layer_idx))
+        let wq_data = weights
+            .tensors
+            .get(&format!("blk.{}.attn.q_proj.weight", layer_idx))
             .ok_or("Missing attn_q.weight")?;
-        let wk_data = weights.tensors.get(&format!("blk.{}.attn.k_proj.weight", layer_idx))
+        let wk_data = weights
+            .tensors
+            .get(&format!("blk.{}.attn.k_proj.weight", layer_idx))
             .ok_or("Missing attn_k.weight")?;
-        let wv_data = weights.tensors.get(&format!("blk.{}.attn.v_proj.weight", layer_idx))
+        let wv_data = weights
+            .tensors
+            .get(&format!("blk.{}.attn.v_proj.weight", layer_idx))
             .ok_or("Missing attn_v.weight")?;
-        let wo_data = weights.tensors.get(&format!("blk.{}.attn.o_proj.weight", layer_idx))
+        let wo_data = weights
+            .tensors
+            .get(&format!("blk.{}.attn.o_proj.weight", layer_idx))
             .ok_or("Missing attn_output.weight")?;
 
         // Convert dequantized bytes to f32
-        let wq: Vec<f32> = wq_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let wk: Vec<f32> = wk_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let wv: Vec<f32> = wv_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let wo: Vec<f32> = wo_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let wq: Vec<f32> = wq_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let wk: Vec<f32> = wk_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let wv: Vec<f32> = wv_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let wo: Vec<f32> = wo_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
 
         // Get FFN weights (already dequantized)
-        let w1_data = weights.tensors.get(&format!("blk.{}.ffn_gate_proj.weight", layer_idx))
+        let w1_data = weights
+            .tensors
+            .get(&format!("blk.{}.ffn_gate_proj.weight", layer_idx))
             .ok_or("Missing ffn_gate.weight")?;
-        let w2_data = weights.tensors.get(&format!("blk.{}.ffn_down_proj.weight", layer_idx))
+        let w2_data = weights
+            .tensors
+            .get(&format!("blk.{}.ffn_down_proj.weight", layer_idx))
             .ok_or("Missing ffn_down.weight")?;
-        let w3_data = weights.tensors.get(&format!("blk.{}.ffn_up_proj.weight", layer_idx))
+        let w3_data = weights
+            .tensors
+            .get(&format!("blk.{}.ffn_up_proj.weight", layer_idx))
             .ok_or("Missing ffn_up.weight")?;
 
         // Convert dequantized bytes to f32
-        let w1: Vec<f32> = w1_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let w2: Vec<f32> = w2_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let w3: Vec<f32> = w3_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let w1: Vec<f32> = w1_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let w2: Vec<f32> = w2_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let w3: Vec<f32> = w3_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
 
         // Get actual dimensions from tensor shape (logical dimensions, not storage)
         let gate_shape = weights.tensor_shape(&format!("blk.{}.ffn_gate_proj.weight", layer_idx));
@@ -161,12 +199,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let attention = pesti_runner::transformer_cpu::Attention::new(
-            wq, wk, wv, wo, 
+            wq,
+            wk,
+            wv,
+            wo,
             pesti_runner::transformer_cpu::RopeConfig::new(embed_dim / 2, 10000.0, 2048),
-            num_heads, num_kv_heads, head_dim,
+            num_heads,
+            num_kv_heads,
+            head_dim,
         );
 
-        let feed_forward = pesti_runner::transformer_cpu::SwiGLUFFN::new(w1_transposed, w2_transposed, w3_transposed, embed_dim);
+        let feed_forward = pesti_runner::transformer_cpu::SwiGLUFFN::new(
+            w1_transposed,
+            w2_transposed,
+            w3_transposed,
+            embed_dim,
+        );
 
         let layer = pesti_runner::transformer_cpu::TransformerLayer::new(
             pesti_runner::transformer_cpu::RmsNorm::new(1e-5, embed_dim), // attn_norm
@@ -184,7 +232,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_norm = pesti_runner::transformer_cpu::RmsNorm::new(1e-5, embed_dim);
 
     // Load output projection - GGUF stores as [embed_dim, vocab_size] (transposed!)
-    let output_data = weights.tensors.get("output.weight").ok_or("Missing output.weight")?;
+    let output_data = weights
+        .tensors
+        .get("output.weight")
+        .ok_or("Missing output.weight")?;
 
     let (in_feat, out_feat) = weights.tensor_shape("output.weight");
     println!(
@@ -192,7 +243,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         in_feat, out_feat
     );
 
-    let raw_output: Vec<f32> = output_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let raw_output: Vec<f32> = output_data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
 
     // Transpose output weights
     let mut output_proj_weight = vec![0.0f32; out_feat * in_feat];
@@ -225,7 +279,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hidden[d] = model.token_embeddings.weight[start_idx + d];
     }
 
-    println!("\n✓ Embedded token {} → hidden dim {}", first_token, hidden.len());
+    println!(
+        "\n✓ Embedded token {} → hidden dim {}",
+        first_token,
+        hidden.len()
+    );
 
     // Forward through transformer layers
     let forward_start = Instant::now();
@@ -235,7 +293,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let max_val: f32 = hidden.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
         if max_val > 100.0 {
-            println!("⚠ Layer {} has large activations (max={:.2})", layer_idx, max_val);
+            println!(
+                "⚠ Layer {} has large activations (max={:.2})",
+                layer_idx, max_val
+            );
         }
     }
 
@@ -263,7 +324,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Verification ===");
     println!("✓ Real transformer weights loaded from GGUF with proper dequantization");
-    println!("✓ Full forward pass through all {} layers", model.layers.len());
+    println!(
+        "✓ Full forward pass through all {} layers",
+        model.layers.len()
+    );
     println!("✓ KV cache integration working (forward_with_cache_single)");
     println!("✓ Hidden state propagation verified");
     println!("\nNext steps: Implement full autoregressive loop with sampling");

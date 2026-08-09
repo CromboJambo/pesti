@@ -13,7 +13,12 @@ pub struct Linear {
 }
 
 impl Linear {
-    pub fn new(weight: Vec<f32>, bias: Option<Vec<f32>>, out_features: usize, in_features: usize) -> Self {
+    pub fn new(
+        weight: Vec<f32>,
+        bias: Option<Vec<f32>>,
+        out_features: usize,
+        in_features: usize,
+    ) -> Self {
         Self {
             weight,
             bias,

@@ -10,7 +10,11 @@ pub struct RopeConfig {
 
 impl RopeConfig {
     pub fn new(dim: usize, base: f32, max_seq_len: usize) -> Self {
-        Self { dim, base, max_seq_len }
+        Self {
+            dim,
+            base,
+            max_seq_len,
+        }
     }
 
     /// Precompute the inverse frequencies (cos/sin table).
@@ -31,13 +35,7 @@ impl RopeConfig {
     }
 
     /// Apply RoPE to a single position for one head.
-    pub fn apply_single_head(
-        &self,
-        x: &mut [f32],
-        pos: usize,
-        cos: &[f32],
-        sin: &[f32],
-    ) {
+    pub fn apply_single_head(&self, x: &mut [f32], pos: usize, cos: &[f32], sin: &[f32]) {
         assert_eq!(x.len(), self.dim * 2); // Expect pairs
 
         for i in 0..self.dim / 2 {

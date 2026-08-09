@@ -49,7 +49,8 @@ impl ModelConfig {
     /// Create a model config from loaded GGUF weights.
     pub fn from_gguf(header: &pesti_gguf::types::GgufHeader) -> Result<Self> {
         // Use the same logic as CpuModel::load_gguf for consistency
-        let embed_dim = header.embedding_length()
+        let embed_dim = header
+            .embedding_length()
             .or_else(|| header.get_kv_u32("llama.embedding_length"))
             .or_else(|| header.get_kv_u32("embedding_length"))
             .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
@@ -66,9 +67,7 @@ impl ModelConfig {
             .or_else(|| header.get_kv_u32("attention.head_count_kv"))
             .unwrap_or(num_heads as u32) as usize; // Default to same as num_heads
 
-        let num_layers = header
-            .get_kv_u32("block_count")
-            .unwrap_or(24) as usize; // Default for Qwen2.5-0.5B
+        let num_layers = header.get_kv_u32("block_count").unwrap_or(24) as usize; // Default for Qwen2.5-0.5B
 
         let head_dim = if num_heads > 0 {
             embed_dim / num_heads as usize
@@ -254,8 +253,8 @@ impl Model {
 }
 
 // Real CpuModel for CPU-only builds with GGUF loading support
-use crate::gguf_weight_loader::{load_gguf_weights, GgufWeights};
-use crate::transformer_stub::{load_tokenizer_from_gguf, GgufTokenizerConfig};
+use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
+use crate::transformer_stub::{GgufTokenizerConfig, load_tokenizer_from_gguf};
 use std::path::Path;
 
 /// CPU model implementation for testing K-family dequantization.
@@ -303,10 +302,12 @@ impl CpuModel {
             .map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
 
         // Debug: print tokenizer info
-        println!("DEBUG: Tokenizer loaded - {} vocab, BOS={}, EOS={}", 
-                 tokenizer_config.vocab_size,
-                 tokenizer_config.bos_token_id.unwrap_or(0),
-                 tokenizer_config.eos_token_id.unwrap_or(0));
+        println!(
+            "DEBUG: Tokenizer loaded - {} vocab, BOS={}, EOS={}",
+            tokenizer_config.vocab_size,
+            tokenizer_config.bos_token_id.unwrap_or(0),
+            tokenizer_config.eos_token_id.unwrap_or(0)
+        );
 
         // Extract hidden_size from GGUF header or tensor shapes
         println!("DEBUG: Checking embedding_length in header");
@@ -498,9 +499,9 @@ impl CpuModel {
             crate::error::RunnerError::Internal("Tokenizer not loaded".to_string())
         })?;
 
-        let encoding = tokenizer.encode(text, true).map_err(|e| {
-            crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e))
-        })?;
+        let encoding = tokenizer
+            .encode(text, true)
+            .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e)))?;
 
         Ok(encoding.get_ids().iter().map(|&id| id as u32).collect())
     }

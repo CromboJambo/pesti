@@ -72,7 +72,8 @@ impl GgufTokenizerConfig {
             })
             .collect();
 
-        let pre_tokenizer_type = header            .get_kv_str("tokenizer.ggml.pre")
+        let pre_tokenizer_type = header
+            .get_kv_str("tokenizer.ggml.pre")
             .map(|s| s.to_string());
 
         let post_processor_type = header

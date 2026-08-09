@@ -5,14 +5,17 @@ use std::path::PathBuf;
 
 /// Path to the conformance test corpus (Qwen2.5 models)
 fn corpus_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../conformance-corpus/")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance-corpus/")
 }
 
 #[test]
 fn test_parse_qwen2_5_q4_k_m() {
     let model_path = corpus_path().join("qwen2.5-0.5b-instruct-q4_k_m.gguf");
-    assert!(model_path.exists(), "Corpus file not found: {:?}", model_path);
+    assert!(
+        model_path.exists(),
+        "Corpus file not found: {:?}",
+        model_path
+    );
 
     // Run conformance test on the model
     let config = ConformanceConfig {
@@ -74,16 +77,15 @@ fn test_quantization_variants() {
     ];
 
     for quant in &quantizations {
-        let model_path =
-            corpus_path().join(format!("qwen2.5-0.5b-instruct-{}.gguf", quant));
-        
+        let model_path = corpus_path().join(format!("qwen2.5-0.5b-instruct-{}.gguf", quant));
+
         if model_path.exists() {
             println!("✓ Found: {}", quant);
-            
+
             // Verify GGUF header parses correctly
             let header = pesti_gguf::parser::parse_gguf(&model_path)
                 .expect(format!("Failed to parse {} header", quant).as_str());
-            
+
             assert!(header.tensors.len() > 0, "No tensors in {} model", quant);
             println!("  Tensors: {}", header.tensors.len());
         } else {
@@ -96,10 +98,10 @@ fn test_quantization_variants() {
 fn test_llama_embedding_length_metadata() {
     // Test the "llama.embedding_length" metadata gap mentioned in checkpoint
     let model_path = corpus_path().join("qwen2.5-0.5b-instruct-q4_k_m.gguf");
-    
+
     if model_path.exists() {
-        let header = pesti_gguf::parser::parse_gguf(&model_path)
-            .expect("Failed to parse GGUF header");
+        let header =
+            pesti_gguf::parser::parse_gguf(&model_path).expect("Failed to parse GGUF header");
 
         // Check for llama.embedding_length key (used by llama.cpp models)
         // Qwen2.5 uses "embedding_length" instead, but we should handle both

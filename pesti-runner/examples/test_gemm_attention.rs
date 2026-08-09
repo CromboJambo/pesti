@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_host: Vec<f16> = (0..m * k)
         .map(|i| f16::from_f32((i as f32 * 0.1).sin()))
         .collect();
-    
+
     let b_host: Vec<f16> = (0..k * n)
         .map(|i| f16::from_f32((i as f32 * 0.05).cos()))
         .collect();
@@ -63,13 +63,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Sample output[0]: {:.4}", c_result[0]);
 
     // Verify numerical correctness with a simple check
-    let expected_sum: f32 = a_host.iter()
+    let expected_sum: f32 = a_host
+        .iter()
         .zip(b_host.iter())
         .map(|(a, b)| a.to_f32() * b.to_f32())
         .sum();
-    
+
     let actual_sum: f32 = c_result.iter().take(10).sum(); // Just check first 10 elements
-    
+
     println!("\n--- Verification ---");
     println!("Expected partial sum (first 10): {:.4}", expected_sum);
     println!("Actual partial sum (first 10):   {:.4}", actual_sum);
@@ -82,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Test Complete ===");
     println!("GEMM-based attention kernel is operational on this GPU.");
-    
+
     Ok(())
 }
 

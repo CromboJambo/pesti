@@ -34,9 +34,11 @@ fn main() {
 
             // Show top-k tokens
             let k = 3;
-            let mut indexed_probs: Vec<(f32, usize)> = probs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
-            indexed_probs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            
+            let mut indexed_probs: Vec<(f32, usize)> =
+                probs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+            indexed_probs
+                .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
             println!("\nTop-{} tokens:", k);
             for &(p, idx) in indexed_probs.iter().take(k) {
                 println!("  Token {} with probability {:.4}", idx, p);
@@ -51,7 +53,10 @@ fn main() {
     println!("\n\nNumerical Stability Test");
     println!("========================");
     let large_logits = vec![1000.0, 1001.0, 1002.0];
-    println!("\nLarge logits (would overflow without max subtraction): {:?}", large_logits);
+    println!(
+        "\nLarge logits (would overflow without max subtraction): {:?}",
+        large_logits
+    );
 
     match kernel.forward(&large_logits) {
         Ok(probs) => {

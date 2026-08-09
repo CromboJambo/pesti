@@ -29,11 +29,11 @@ impl Attention {
         // Infer dimensions from weight tensor shapes (GGUF stores as [in_features, out_features])
         // For attn_q: shape is [embed_dim, embed_dim] = [896, 896] → out=896, in=896
         let embed_dim = 896; // Q and output projections map to/from hidden dimension
-        
-        // For attn_k/v: shape is [embed_dim, kv_head_dim * num_kv_heads] 
+
+        // For attn_k/v: shape is [embed_dim, kv_head_dim * num_kv_heads]
         // From GGUF: [896x128], so out_features=128, in_features=896
         let kv_output_dim = 128; // Total KV output dimension from tensor shape
-        
+
         Self {
             wq: Linear::new(wq, None, embed_dim, embed_dim),
             wk: Linear::new(wk, None, kv_output_dim, embed_dim),
@@ -59,23 +59,24 @@ impl Attention {
         // Apply RoPE (simplified: apply to Q and K with their respective dimensions)
         let mut q_rope = q.clone();
         let k_rope = k.clone();
-        
+
         // For simplicity, apply to all dimensions
         let cos = vec![0.0f32; 1024]; // Placeholder
         let sin = vec![0.0f32; 1024]; // Placeholder
-        
+
         // Apply RoPE to Q (896 dims) and K (128 dims) separately
-        self.rope_config.apply_single_head(&mut q_rope, pos, &cos, &sin);
+        self.rope_config
+            .apply_single_head(&mut q_rope, pos, &cos, &sin);
         // For K, we'd need a separate RoPE config with dim=64, but for now skip or use same
         // Note: This is a simplification - real implementation would handle different dims
 
         // Scaled dot-product attention (single token, no cache)
         let scale = 1.0 / (self.head_dim as f32).sqrt();
-        
+
         // Simplified: just do Q @ K^T for single position
         let dot: f32 = q_rope.iter().zip(k_rope.iter()).map(|(a, b)| a * b).sum();
         let attn_score = dot * scale;
-        
+
         // Output projection needs to match v's dimension (kv_output_dim), not embed_dim
         let mut attn_output = vec![0.0f32; self.kv_output_dim];
         for i in 0..self.kv_output_dim {

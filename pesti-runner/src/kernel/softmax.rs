@@ -37,12 +37,14 @@ pub fn softmax_cuda(
     use cudarc::driver::DeviceSlice;
 
     // Allocate device memory and copy input to GPU
-    let _d_logits = logits.to_device(stream).map_err(|e| SoftmaxError::Transfer(e.to_string()))?;
+    let _d_logits = logits
+        .to_device(stream)
+        .map_err(|e| SoftmaxError::Transfer(e.to_string()))?;
 
     // Launch softmax kernel (simplified - uses host-side max for now)
     // In production, this would launch a parallel kernel that:
     // 1. Finds max in parallel using reduction
-    // 2. Computes exp(x - max) in parallel  
+    // 2. Computes exp(x - max) in parallel
     // 3. Normalizes in parallel
 
     // For now, fall back to CPU for the actual computation (but demonstrate GPU transfer)

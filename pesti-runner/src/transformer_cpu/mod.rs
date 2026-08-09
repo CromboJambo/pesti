@@ -4,16 +4,16 @@
 //! using only CPU computation (no CUDA dependencies). It wires together the primitive
 //! operations: RMSNorm, RoPE, attention, and SwiGLU feed-forward networks.
 
+pub mod layer;
 pub mod primitives;
 pub mod rope;
 pub mod swiglu;
-pub mod layer;
 
 // Re-export public API
+pub use layer::{Attention, TransformerLayer};
 pub use primitives::{Linear, RmsNorm};
 pub use rope::RopeConfig;
 pub use swiglu::SwiGLUFFN;
-pub use layer::{Attention, TransformerLayer};
 
 // Re-export argmax from transformer_stub to avoid duplicate (already exported in lib.rs)
 // pub use crate::transformer_stub::argmax; // Disabled - causes duplicate export

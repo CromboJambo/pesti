@@ -6,7 +6,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use half::f16;
     use pesti_runner::CudaRuntime;
     use pesti_runner::kernel::Kvcache;
-    use pesti_runner::kernel::attention::{AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel, GemmBasedAttentionKernel};
+    use pesti_runner::kernel::attention::{
+        AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
+        GemmBasedAttentionKernel,
+    };
     use pesti_runner::kernel::device_buf::DeviceBuffer;
     use pesti_runner::kernel::gemm::{CudaGemmKernelBuilder, GemmArch};
     use pesti_runner::kernel::memory::CudaMemoryBackend;
@@ -20,7 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = rt.new_stream()?;
     let info = rt.device_info();
 
-    println!("Device: {} (sm_{}.{})", info.name, info.compute_capability.0, info.compute_capability.1);
+    println!(
+        "Device: {} (sm_{}.{})",
+        info.name, info.compute_capability.0, info.compute_capability.1
+    );
 
     // Build GEMM kernel for GPU attention
     let gemm_kernel = CudaGemmKernelBuilder::new(
@@ -31,7 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .build()?;
 
-    let backend = Arc::new(CudaMemoryBackend::with_device_info(stream.clone(), info.clone()));
+    let backend = Arc::new(CudaMemoryBackend::with_device_info(
+        stream.clone(),
+        info.clone(),
+    ));
     let gpu_kernel = GemmBasedAttentionKernel::new(gemm_kernel, backend);
 
     // Config
@@ -40,7 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq_len = 256;
     let query_len = 1;
 
-    println!("\nConfig: {} heads, {} dim, seq={}", num_heads, head_dim, seq_len);
+    println!(
+        "\nConfig: {} heads, {} dim, seq={}",
+        num_heads, head_dim, seq_len
+    );
 
     // Generate test data
     let q_size = query_len * num_heads * head_dim;
@@ -49,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let q_host: Vec<f16> = (0..q_size)
         .map(|i| f16::from_f32((i as f32 * 0.1).sin()))
         .collect();
-    
+
     let kv_host: Vec<f16> = (0..kv_size * 2) // K and V
         .map(|i| f16::from_f32((i as f32 * 0.05).cos()))
         .collect();
@@ -60,7 +72,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for pos in 0..seq_len {
         let k_start = pos * head_stride;
         let v_start = pos * head_stride + kv_size / 2;
-        kvc.write_kv_at(pos, &kv_host[k_start..k_start + head_stride], &kv_host[v_start..v_start + head_stride])?;
+        kvc.write_kv_at(
+            pos,
+            &kv_host[k_start..k_start + head_stride],
+            &kv_host[v_start..v_start + head_stride],
+        )?;
     }
 
     let q_buf = DeviceBuffer::from_host(q_host);
@@ -70,13 +86,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_seq(seq_len);
 
     // Warmup
-    let _ = CpuAttentionKernel::new(AttentionArch::Cpu).forward(&q_buf, &kvc, &kvc, None, &config)?;
+    let _ =
+        CpuAttentionKernel::new(AttentionArch::Cpu).forward(&q_buf, &kvc, &kvc, None, &config)?;
     let _ = gpu_kernel.forward(&q_buf, &kvc, &kvc, None, &config)?;
 
     // Benchmark CPU
     let start = Instant::now();
     for _ in 0..10 {
-        let _ = CpuAttentionKernel::new(AttentionArch::Cpu).forward(&q_buf, &kvc, &kvc, None, &config)?;
+        let _ = CpuAttentionKernel::new(AttentionArch::Cpu)
+            .forward(&q_buf, &kvc, &kvc, None, &config)?;
     }
     let cpu_time = start.elapsed() / 10;
 

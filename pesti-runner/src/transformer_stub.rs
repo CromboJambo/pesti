@@ -1,5 +1,5 @@
 //! Stub implementations for CPU-only builds (no CUDA).
-//! 
+//!
 //! This module provides minimal placeholder implementations that allow the
 //! workspace to compile without CUDA dependencies, using only standard library
 //! and existing workspace crates.
@@ -23,7 +23,11 @@ pub struct LlamaModel {
 
 impl LlamaModel {
     /// Stub forward_with_dispatch (mirrors real implementation from transformer/model.rs)
-    pub fn forward_with_dispatch(&self, _hidden: &[f32], _start_pos: usize) -> crate::error::Result<Vec<f32>> {
+    pub fn forward_with_dispatch(
+        &self,
+        _hidden: &[f32],
+        _start_pos: usize,
+    ) -> crate::error::Result<Vec<f32>> {
         // Return dummy logits for testing
         Ok(vec![0.0; self.vocab_size])
     }
@@ -91,7 +95,8 @@ impl GgufTokenizerConfig {
     /// Build tokenizer config from GGUF header (stub - uses defaults)
     pub fn from_gguf_header(header: &GgufHeader) -> Self {
         // Extract vocab size from metadata if available, otherwise use default
-        let vocab_size = header.get_kv_u32("tokenizer.ggml.tokens")
+        let vocab_size = header
+            .get_kv_u32("tokenizer.ggml.tokens")
             .map(|_| 0) // Just check existence; we'll use default below
             .unwrap_or(32000);
 
@@ -109,11 +114,11 @@ impl GgufTokenizerConfig {
     /// Convert to tokenizers::Tokenizer (stub - creates simple BPE tokenizer)
     pub fn to_tokenizer(&self) -> TokenizerType {
         use tokenizers::Tokenizer;
-        
+
         // Create a minimal tokenizer for testing
         // Since we can't load from GGUF directly, create a default one
         let tokenizer = Tokenizer::new(tokenizers::models::bpe::BPE::default());
-        
+
         // Add special tokens if we have IDs
         if let Some(_bos) = self.bos_token_id {
             // Could add BOS token here
@@ -121,21 +126,24 @@ impl GgufTokenizerConfig {
         if let Some(_eos) = self.eos_token_id {
             // Could add EOS token here
         }
-        
+
         tokenizer
     }
 }
 
 /// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf from transformer/tokenizer.rs)
-pub fn load_tokenizer_from_gguf(path: &Path) -> Result<(GgufTokenizerConfig, TokenizerType), crate::error::RunnerError> {
+pub fn load_tokenizer_from_gguf(
+    path: &Path,
+) -> Result<(GgufTokenizerConfig, TokenizerType), crate::error::RunnerError> {
     use pesti_gguf::parser::parse_gguf;
-    
+
     // Parse GGUF header to get tokenizer config
-    let header = parse_gguf(path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
+    let header =
+        parse_gguf(path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
     let config = GgufTokenizerConfig::from_gguf_header(&header);
-    
+
     // Create a simple tokenizer with the config
     let tokenizer = config.to_tokenizer();
-    
+
     Ok((config, tokenizer))
 }

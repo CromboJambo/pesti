@@ -42,9 +42,9 @@ pub mod tile_dequant; // Tile-by-tile dequantization for memory efficiency
 pub mod tokenizer;
 #[cfg(feature = "cuda")]
 pub mod transformer;
+pub mod transformer_cpu;
 #[cfg(not(feature = "cuda"))]
-pub mod transformer_stub;
-pub mod transformer_cpu; // CPU-only full forward pass implementation
+pub mod transformer_stub; // CPU-only full forward pass implementation
 
 // Re-export CPU transformer primitives for external use
 #[cfg(not(feature = "cuda"))]

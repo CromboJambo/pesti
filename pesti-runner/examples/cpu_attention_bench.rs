@@ -7,7 +7,9 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use half::f16;
     use pesti_runner::kernel::device_buf::DeviceBuffer;
-    use pesti_runner::kernel::{AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel};
+    use pesti_runner::kernel::{
+        AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
+    };
     use std::time::Instant;
 
     println!("=== CPU Attention SIMD Benchmark ===\n");

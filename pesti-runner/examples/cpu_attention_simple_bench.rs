@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== CPU Attention + Softmax Benchmark ===\n");
 
     let (num_heads, head_dim, seq_len, label) = (8, 64, 256, "Qwen2.5-0.5B style");
-    
+
     println!(
         "Testing: {} ({} heads × {} dim × {} seq)",
         label, num_heads, head_dim, seq_len
@@ -30,13 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|i| f16::from_f32(((i as f32 * 0.03).sin() + 1.0) / 2.0))
         .collect();
 
-    let mut kvc = pesti_runner::kernel::Kvcache::new(
-        num_heads,
-        num_heads,
-        head_dim,
-        seq_len,
-        false,
-    );
+    let mut kvc =
+        pesti_runner::kernel::Kvcache::new(num_heads, num_heads, head_dim, seq_len, false);
     let head_stride = num_heads * head_dim;
     for pos in 0..seq_len {
         kvc.write_kv_at(
@@ -60,10 +55,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match kernel.forward(&q_buf, &kvc, &kvc, None, &config) {
         Ok(output) => {
             println!("✅ Forward pass succeeded!");
-            
+
             let out_vec: Vec<f32> = output.to_host();
             println!("Output size: {} elements", out_vec.len());
-            
+
             let has_nan = out_vec.iter().any(|&x| x.is_nan());
             let has_inf = out_vec.iter().any(|&x| x.is_infinite());
 

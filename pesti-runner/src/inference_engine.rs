@@ -4,7 +4,6 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-
 use crate::error::RunnerError;
 use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
@@ -22,10 +21,10 @@ use crate::kernel::gemm::{CudaGemmKernel, GemmKernel};
 use crate::kernel::gemm_stub::GemmKernel;
 
 // Import AttentionKernel trait and its Error type to ensure CpuAttentionKernel methods are in scope
-#[cfg(feature = "cuda")]
-use crate::kernel::attention::{AttentionKernel, GemmBasedAttentionKernel};
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::AttentionKernel;
+#[cfg(feature = "cuda")]
+use crate::kernel::attention::{AttentionKernel, GemmBasedAttentionKernel};
 
 /// Inference engine for tensor computation with computational inertia support.
 pub struct InferenceEngine {
@@ -74,10 +73,8 @@ impl InferenceEngine {
 
         #[cfg(feature = "cuda")]
         {
-            use crate::cuda_runtime::{is_available, CudaRuntime};
-            use crate::kernel::{
-                AttentionArch, CudaGemmKernelBuilder, GemmArch,
-            };
+            use crate::cuda_runtime::{CudaRuntime, is_available};
+            use crate::kernel::{AttentionArch, CudaGemmKernelBuilder, GemmArch};
 
             // Try to initialize CUDA only if the caller requested a CUDA device.
             let (cuda_runtime, stream) = match &device {
@@ -114,7 +111,10 @@ impl InferenceEngine {
                 None
             };
 
-            let (gemm, cuda_gemm_for_attention): (Box<dyn GemmKernel + Send + Sync>, Option<CudaGemmKernel>) = if let (Some(cuda_rt), Some(s), Some(arch)) = (&cuda_runtime, &stream, &arch) {
+            let (gemm, cuda_gemm_for_attention): (
+                Box<dyn GemmKernel + Send + Sync>,
+                Option<CudaGemmKernel>,
+            ) = if let (Some(cuda_rt), Some(s), Some(arch)) = (&cuda_runtime, &stream, &arch) {
                 match CudaGemmKernelBuilder::new(
                     arch.clone(),
                     cuda_rt.context().clone(),
@@ -139,24 +139,34 @@ impl InferenceEngine {
             };
 
             // Initialize attention kernel using the GEMM kernel if available
-            let (attention, backend): (Box<dyn AttentionKernel + Send + Sync>, Option<Arc<crate::kernel::memory::CudaMemoryBackend>>) = if is_available() {
-                if let (Some(cuda_rt), Some(gemm_kernel)) = (&cuda_runtime, cuda_gemm_for_attention) {
+            let (attention, backend): (
+                Box<dyn AttentionKernel + Send + Sync>,
+                Option<Arc<crate::kernel::memory::CudaMemoryBackend>>,
+            ) = if is_available() {
+                if let (Some(cuda_rt), Some(gemm_kernel)) = (&cuda_runtime, cuda_gemm_for_attention)
+                {
                     let s = stream.as_ref().unwrap();
                     let info = cuda_rt.device_info().clone();
-                    let backend = Arc::new(crate::kernel::memory::CudaMemoryBackend::with_device_info(
-                        s.clone(),
-                        info,
-                    ));
+                    let backend = Arc::new(
+                        crate::kernel::memory::CudaMemoryBackend::with_device_info(s.clone(), info),
+                    );
 
                     // GemmBasedAttentionKernel::new() returns the struct directly (no Result)
-                    let attention_kernel = GemmBasedAttentionKernel::new(gemm_kernel, backend.clone());
+                    let attention_kernel =
+                        GemmBasedAttentionKernel::new(gemm_kernel, backend.clone());
                     tracing::info!("Using GEMM-based attention kernel (Option A)");
                     (Box::new(attention_kernel), Some(backend))
                 } else {
-                    (Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)), None)
+                    (
+                        Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)),
+                        None,
+                    )
                 }
             } else {
-                (Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)), None)
+                (
+                    Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)),
+                    None,
+                )
             };
 
             Self {
@@ -301,7 +311,11 @@ impl InferenceEngine {
     /// Get backend description string.
     pub fn backend_description(&self) -> String {
         if self.gpu_available() {
-            format!("GPU ({} @ {})", self.gemm_arch().name(), self.device_info().unwrap_or_default())
+            format!(
+                "GPU ({} @ {})",
+                self.gemm_arch().name(),
+                self.device_info().unwrap_or_default()
+            )
         } else {
             "CPU".to_string()
         }
@@ -316,7 +330,10 @@ impl InferenceEngine {
         mask: Option<&crate::kernel::DeviceBuffer<f32>>,
         config: &crate::kernel::AttentionConfig,
     ) -> Result<crate::kernel::DeviceBuffer<f32>, RunnerError> {
-        match self.attention.forward(query, key_cache, value_cache, mask, config) {
+        match self
+            .attention
+            .forward(query, key_cache, value_cache, mask, config)
+        {
             Ok(output) => Ok(output),
             Err(crate::kernel::AttentionError::NotAvailable) => {
                 warn!("Attention: GPU not available, falling back to CPU");
