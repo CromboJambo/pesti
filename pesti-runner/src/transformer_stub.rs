@@ -112,7 +112,7 @@ impl GgufTokenizerConfig {
         
         // Create a minimal tokenizer for testing
         // Since we can't load from GGUF directly, create a default one
-        let mut tokenizer = Tokenizer::new(tokenizers::models::bpe::BPE::default());
+        let tokenizer = Tokenizer::new(tokenizers::models::bpe::BPE::default());
         
         // Add special tokens if we have IDs
         if let Some(_bos) = self.bos_token_id {
