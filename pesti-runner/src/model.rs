@@ -253,13 +253,17 @@ impl Model {
 }
 
 // Real CpuModel for CPU-only builds with GGUF loading support
+#[cfg(not(feature = "cuda"))]
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
+#[cfg(not(feature = "cuda"))]
 use crate::transformer_stub::{GgufTokenizerConfig, load_tokenizer_from_gguf};
+#[cfg(not(feature = "cuda"))]
 use std::path::Path;
 
 /// CPU model implementation for testing K-family dequantization.
 ///
 /// Loads token_embeddings and output.weight tensors for single-token inference.
+#[cfg(not(feature = "cuda"))]
 pub struct CpuModel {
     /// GGUF weights loaded from file
     pub weights: GgufWeights,
@@ -281,6 +285,7 @@ pub struct CpuModel {
     pub config: crate::ModelConfig,
 }
 
+#[cfg(not(feature = "cuda"))]
 impl CpuModel {
     /// Load minimal GGUF model for conformance testing.
     ///

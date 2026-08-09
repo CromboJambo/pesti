@@ -134,7 +134,10 @@ impl CpuTransformerModel {
     }
 }
 
-// Re-export argmax from transformer_stub to avoid duplicate
+// Re-export argmax from transformer module to avoid duplicate
+#[cfg(feature = "cuda")]
+pub use crate::transformer::argmax;
+#[cfg(not(feature = "cuda"))]
 pub use crate::transformer_stub::argmax;
 
 /// Softmax sampling with temperature.

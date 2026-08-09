@@ -70,7 +70,9 @@ pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
 pub use kernel::{DeviceBuffer, HostTmaDescriptor, Kvcache};
 #[cfg(not(feature = "cuda"))]
 pub use kernel::{DeviceBuffer, kvcache_stub::Kvcache};
-pub use model::{CpuModel, Model, ModelConfig};
+pub use model::{Model, ModelConfig};
+#[cfg(not(feature = "cuda"))]
+pub use model::CpuModel;
 pub use model_loader::ModelLoader;
 pub use model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
 pub use plug_in::PlugInProtocol;

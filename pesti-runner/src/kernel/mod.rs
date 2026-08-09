@@ -142,7 +142,7 @@ pub use memory::{
 #[cfg(not(feature = "cuda"))]
 pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle};
 #[cfg(feature = "cuda")]
-pub use softmax::{SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
+pub use softmax::{SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder, CpuSoftmaxKernel};
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]
