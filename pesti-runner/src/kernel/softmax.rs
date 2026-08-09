@@ -173,6 +173,7 @@ pub enum SoftmaxError {
     #[error("softmax config invalid: length={length}")]
     InvalidConfig { length: usize },
 
+    #[cfg(feature = "cuda")]
     #[error("CUDA error: {0}")]
     Cuda(#[from] cudarc::driver::DriverError),
 

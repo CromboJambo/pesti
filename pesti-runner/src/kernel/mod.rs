@@ -94,7 +94,6 @@ pub mod memory_stub;
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
 pub mod rope;
-#[cfg(feature = "cuda")]
 pub mod softmax;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
