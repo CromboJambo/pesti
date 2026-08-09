@@ -1,209 +1,35 @@
-//! Stub transformer module for CPU-only builds.
-//!
-//! Provides stub implementations matching the real transformer API
-//! to allow compilation without CUDA dependencies.
+//! Stub implementations for CPU-only builds (no CUDA).
+//! 
+//! This module provides minimal placeholder implementations that allow the
+//! workspace to compile without CUDA dependencies, using only standard library
+//! and existing workspace crates.
 
+use pesti_gguf::types::GgufHeader;
 use std::path::Path;
-use tokenizers::Tokenizer;
+use tokenizers::Tokenizer as TokenizerType;
 
-// Forward declare stub types for TransformerLayer fields
-#[derive(Debug, Clone)]
-pub struct Attention {
-    pub wq: Linear,
-    pub wk: Linear,
-    pub wv: Linear,
-    pub wo: Linear,
-}
+// ── Core Types ───────────────────────────────────────────────────────────────
 
-impl Attention {
-    pub fn new() -> Self {
-        Self {
-            wq: Linear::from_f32_weight(&[], None),
-            wk: Linear::from_f32_weight(&[], None),
-            wv: Linear::from_f32_weight(&[], None),
-            wo: Linear::from_f32_weight(&[], None),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FeedForward {
-    pub w1: Linear,
-    pub w2: Linear,
-    pub w3: Linear,
-}
-
-impl FeedForward {
-    pub fn new() -> Self {
-        Self {
-            w1: Linear::from_f32_weight(&[], None),
-            w2: Linear::from_f32_weight(&[], None),
-            w3: Linear::from_f32_weight(&[], None),
-        }
-    }
-}
-
-/// Stub model architecture (mirrors real ModelArch)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ModelArch {
-    #[default]
-    Llama,
-    Gemma,
-    Qwen2,
-    Qwen3,
-    Phi3,
-    Mixtral,
-    Starcoder2,
-}
-
-/// Stub model config (mirrors real LlamaConfig)
-#[derive(Debug, Clone)]
-pub struct LlamaConfig {
-    pub arch: ModelArch,
+/// Stub LlamaModel (mirrors real LlamaModel from transformer/model.rs)
+#[derive(Debug, Default)]
+pub struct LlamaModel {
+    pub hidden_size: usize,
     pub num_layers: usize,
-    pub num_heads: usize,
-    pub num_kv_heads: usize,
-    pub head_dim: usize,
-    pub embed_dim: usize,
-    pub intermediate_dim: usize,
-    pub max_seq_len: usize,
-}
-
-impl LlamaConfig {
-    pub fn from_gguf_header(
-        _header: &pesti_gguf::types::GgufHeader,
-    ) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            arch: ModelArch::default(),
-            num_layers: 32,
-            num_heads: 32,
-            num_kv_heads: 8,
-            head_dim: 64,
-            embed_dim: 4096,
-            intermediate_dim: 11008,
-            max_seq_len: 4096,
-        })
-    }
-
-    pub fn from_safetensors_metadata(
-        _meta: &std::collections::HashMap<String, String>,
-    ) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            arch: ModelArch::default(),
-            num_layers: 32,
-            num_heads: 32,
-            num_kv_heads: 8,
-            head_dim: 64,
-            embed_dim: 4096,
-            intermediate_dim: 11008,
-            max_seq_len: 4096,
-        })
-    }
-}
-
-impl Default for LlamaConfig {
-    fn default() -> Self {
-        Self {
-            arch: ModelArch::default(),
-            num_layers: 32,
-            num_heads: 32,
-            num_kv_heads: 8,
-            head_dim: 64,
-            embed_dim: 4096,
-            intermediate_dim: 11008,
-            max_seq_len: 4096,
-        }
-    }
-}
-
-/// Stub transformer layer (mirrors real TransformerLayer from transformer/layer.rs)
-#[derive(Debug, Clone)]
-pub struct TransformerLayer {
-    pub attention: Attention,
-    pub feed_forward: FeedForward,
-    pub attention_norm: RmsNorm,
-    pub ffn_norm: RmsNorm,
-}
-
-impl TransformerLayer {
-    pub fn new() -> Self {
-        Self {
-            attention: Attention::new(),
-            feed_forward: FeedForward::new(),
-            attention_norm: RmsNorm::new(vec![], 1e-5),
-            ffn_norm: RmsNorm::new(vec![], 1e-5),
-        }
-    }
-}
-
-/// Stub linear layer (mirrors real Linear)
-#[derive(Debug, Clone)]
-pub struct Linear {
-    weight: Vec<f32>,
-}
-
-impl Linear {
-    pub fn from_f32_weight(_weight: &[f32], _bias: Option<&[f32]>) -> Self {
-        Self {
-            weight: _weight.to_vec(),
-        }
-    }
-
-    pub fn from_f32_weight_with_shape(
-        _weight: &[f32],
-        _bias: Option<&[f32]>,
-        _in_features: usize,
-        _out_features: usize,
-    ) -> Self {
-        Self {
-            weight: _weight.to_vec(),
-        }
-    }
-
-    pub fn forward(&self, _input: &[f32], _batch_size: usize) -> Vec<f32> {
-        vec![0.0; self.weight.len()]
-    }
-}
-
-/// Stub RMS norm (mirrors real RmsNorm)
-#[derive(Debug, Clone)]
-pub struct RmsNorm {
-    weight: Vec<f32>,
-    eps: f32,
-}
-
-impl RmsNorm {
-    pub fn new(_weight: Vec<f32>, _eps: f32) -> Self {
-        Self {
-            weight: _weight,
-            eps: _eps,
-        }
-    }
-
-    pub fn forward(&self, _input: &[f32], _batch_size: usize) -> Vec<f32> {
-        vec![0.0; _input.len()]
-    }
-}
-
-/// Stub rope config (mirrors real RopeConfig)
-#[derive(Debug, Clone)]
-pub struct RopeConfig {
+    pub vocab_size: usize,
     pub head_dim: usize,
     pub rope_base: f32,
     pub max_seq_len: usize,
 }
 
-impl RopeConfig {
-    pub fn new(_head_dim: usize, _rope_base: f32, _max_seq_len: usize) -> Self {
-        Self {
-            head_dim: _head_dim,
-            rope_base: _rope_base,
-            max_seq_len: _max_seq_len,
-        }
+impl LlamaModel {
+    /// Stub forward_with_dispatch (mirrors real implementation from transformer/model.rs)
+    pub fn forward_with_dispatch(&self, _hidden: &[f32], _start_pos: usize) -> crate::error::Result<Vec<f32>> {
+        // Return dummy logits for testing
+        Ok(vec![0.0; self.vocab_size])
     }
 }
 
-/// Stub SamplingConfig (mirrors real SamplingConfig from sampling.rs)
+/// Stub SamplingConfig (mirrors real SamplingConfig from transformer/sampling.rs)
 #[derive(Debug, Clone)]
 pub struct SamplingConfig {
     pub seed: u64,
@@ -223,7 +49,7 @@ impl Default for SamplingConfig {
     }
 }
 
-/// Stub argmax (mirrors real argmax from sampling.rs)
+/// Stub argmax (mirrors real argmax from transformer/sampling.rs)
 pub fn argmax(logits: &[f32]) -> u32 {
     logits
         .iter()
@@ -233,13 +59,13 @@ pub fn argmax(logits: &[f32]) -> u32 {
         .unwrap_or(0)
 }
 
-/// Stub sample (mirrors real sample from sampling.rs)
-pub fn sample(logits: &[f32], _config: &SamplingConfig, _rng: &mut rand::rngs::StdRng) -> u32 {
+/// Stub sample (mirrors real sample from transformer/sampling.rs)
+pub fn sample(logits: &[f32], config: &SamplingConfig, rng: &mut rand::rngs::StdRng) -> u32 {
     let sum: f32 = logits.iter().map(|&x| x.exp()).sum();
     let probs: Vec<f32> = logits.iter().map(|&x| x.exp() / sum).collect();
 
     // Use explicit distribution for rand 0.10+ compatibility
-    let rng_seed = _config.seed;
+    let rng_seed = config.seed;
     let r = (rng_seed as f32) / u64::MAX as f32;
     let mut cumsum = 0.0;
     for (i, &p) in probs.iter().enumerate() {
@@ -251,129 +77,65 @@ pub fn sample(logits: &[f32], _config: &SamplingConfig, _rng: &mut rand::rngs::S
     (probs.len() - 1) as u32
 }
 
-/// Stub tokenizer config (mirrors real GgufTokenizerConfig)
+// ── Tokenizer Types ──────────────────────────────────────────────────────────
+
+/// Stub tokenizer config (mirrors real GgufTokenizerConfig from transformer/tokenizer.rs)
 #[derive(Debug, Clone)]
 pub struct GgufTokenizerConfig {
     pub vocab_size: usize,
-    pub eos_token_id: u32,
+    pub bos_token_id: Option<u32>,
+    pub eos_token_id: Option<u32>,
 }
 
-/// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf)
-pub fn load_tokenizer_from_gguf(_path: &Path) -> Result<Tokenizer, crate::error::RunnerError> {
-    use tokenizers::Tokenizer;
-    Ok(Tokenizer::from_file(_path)
-        .map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?)
-}
+impl GgufTokenizerConfig {
+    /// Build tokenizer config from GGUF header (stub - uses defaults)
+    pub fn from_gguf_header(header: &GgufHeader) -> Self {
+        // Extract vocab size from metadata if available, otherwise use default
+        let vocab_size = header.get_kv_u32("tokenizer.ggml.tokens")
+            .map(|_| 0) // Just check existence; we'll use default below
+            .unwrap_or(32000);
 
-/// Stub Llama model (mirrors real LlamaModel from transformer/model.rs)
-#[derive(Debug, Clone)]
-pub struct LlamaModel {
-    pub config: LlamaConfig,
-    pub token_embeddings: Option<Linear>,
-    pub output: Option<Linear>,
-    pub final_norm: Option<RmsNorm>,
-    pub layers: Vec<TransformerLayer>,
-    pub vocab_size: u32,
-}
+        // Extract BOS/EOS token IDs from metadata
+        let bos_id = header.get_kv_u32("tokenizer.ggml.bos_token_id");
+        let eos_id = header.get_kv_u32("tokenizer.ggml.eos_token_id");
 
-impl LlamaModel {
-    pub fn load_gguf(_path: &Path) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            config: LlamaConfig::default(),
-            token_embeddings: None,
-            output: None,
-            final_norm: None,
-            layers: vec![TransformerLayer::new(); 32],
-            vocab_size: 32000,
-        })
-    }
-
-    pub fn from_gguf_weights(
-        _weights: crate::gguf_weight_loader::GgufWeights,
-    ) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            config: LlamaConfig::default(),
-            token_embeddings: None,
-            output: None,
-            final_norm: None,
-            layers: vec![TransformerLayer::new(); 32],
-            vocab_size: 32000,
-        })
-    }
-
-    pub fn from_safetensors_weights(
-        _weights: crate::safetensors_weight_loader::SafetensorsWeights,
-        _config: LlamaConfig,
-    ) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            config: _config,
-            token_embeddings: None,
-            output: None,
-            final_norm: None,
-            layers: vec![TransformerLayer::new(); 32],
-            vocab_size: 32000,
-        })
-    }
-
-    pub fn load_safetensors(
-        _path: &Path,
-        _config: LlamaConfig,
-    ) -> Result<Self, crate::error::RunnerError> {
-        Ok(Self {
-            config: _config,
-            token_embeddings: None,
-            output: None,
-            final_norm: None,
-            layers: vec![TransformerLayer::new(); 32],
-            vocab_size: 32000,
-        })
-    }
-
-    pub fn forward_with_dispatch(
-        &self,
-        _hidden: &[f32],
-        _start_pos: usize,
-    ) -> Result<Vec<f32>, crate::error::RunnerError> {
-        Ok(vec![0.0; _hidden.len()])
-    }
-
-    pub fn embed(
-        &self,
-        _token: u32,
-        _seq_len: usize,
-    ) -> Result<Vec<f32>, crate::error::RunnerError> {
-        Ok(vec![0.0; 4096])
-    }
-
-    pub fn forward_layers(
-        &self,
-        _hidden: &[f32],
-        _seq_len: usize,
-    ) -> Result<Vec<f32>, crate::error::RunnerError> {
-        Ok(vec![0.0; _hidden.len()])
-    }
-
-    pub fn apply_output_head(
-        &self,
-        _hidden: &[f32],
-    ) -> Result<Vec<f32>, crate::error::RunnerError> {
-        Ok(vec![0.0; 32000])
-    }
-
-    pub fn is_some(&self) -> bool {
-        true
-    }
-}
-
-impl Default for LlamaModel {
-    fn default() -> Self {
         Self {
-            config: LlamaConfig::default(),
-            token_embeddings: None,
-            output: None,
-            final_norm: None,
-            layers: vec![TransformerLayer::new(); 32],
-            vocab_size: 32000,
+            vocab_size,
+            bos_token_id: bos_id,
+            eos_token_id: eos_id,
         }
     }
+
+    /// Convert to tokenizers::Tokenizer (stub - creates simple BPE tokenizer)
+    pub fn to_tokenizer(&self) -> TokenizerType {
+        use tokenizers::Tokenizer;
+        
+        // Create a minimal tokenizer for testing
+        // Since we can't load from GGUF directly, create a default one
+        let mut tokenizer = Tokenizer::new(tokenizers::models::bpe::BPE::default());
+        
+        // Add special tokens if we have IDs
+        if let Some(_bos) = self.bos_token_id {
+            // Could add BOS token here
+        }
+        if let Some(_eos) = self.eos_token_id {
+            // Could add EOS token here
+        }
+        
+        tokenizer
+    }
+}
+
+/// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf from transformer/tokenizer.rs)
+pub fn load_tokenizer_from_gguf(path: &Path) -> Result<(GgufTokenizerConfig, TokenizerType), crate::error::RunnerError> {
+    use pesti_gguf::parser::parse_gguf;
+    
+    // Parse GGUF header to get tokenizer config
+    let header = parse_gguf(path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
+    let config = GgufTokenizerConfig::from_gguf_header(&header);
+    
+    // Create a simple tokenizer with the config
+    let tokenizer = config.to_tokenizer();
+    
+    Ok((config, tokenizer))
 }

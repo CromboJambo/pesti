@@ -44,6 +44,11 @@ pub mod tokenizer;
 pub mod transformer;
 #[cfg(not(feature = "cuda"))]
 pub mod transformer_stub;
+pub mod transformer_cpu; // CPU-only full forward pass implementation
+
+// Re-export CPU transformer primitives for external use
+#[cfg(not(feature = "cuda"))]
+pub use transformer_cpu::{CpuTransformerModel, Linear, RmsNorm, TransformerConfig};
 
 #[cfg(feature = "cuda")]
 pub use cuda_runtime::{

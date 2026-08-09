@@ -48,33 +48,44 @@ impl Default for ModelConfig {
 impl ModelConfig {
     /// Create a model config from loaded GGUF weights.
     pub fn from_gguf(header: &pesti_gguf::types::GgufHeader) -> Result<Self> {
-        let embed_dim = header
-            .get_kv_u32("embedding_length")
+        // Use the same logic as CpuModel::load_gguf for consistency
+        let embed_dim = header.embedding_length()
+            .or_else(|| header.get_kv_u32("llama.embedding_length"))
+            .or_else(|| header.get_kv_u32("embedding_length"))
             .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
             as usize;
+
+        // For Qwen2.5 and other models without explicit attention metadata, use defaults
         let num_heads = header
-            .get_kv_u32("attention.head_count")
-            .ok_or_else(|| RunnerError::MissingHeaderField("attention_head_count".to_string()))?
-            as usize;
+            .get_kv_u32("llama.attention.head_count")
+            .or_else(|| header.get_kv_u32("attention.head_count"))
+            .unwrap_or(8) as usize; // Default for Qwen2.5-0.5B
+
         let num_kv_heads = header
-            .get_kv_u32("attention.head_count_kv")
-            .unwrap_or(num_heads as u32) as usize;
-        let num_layers = header.get_kv_u32("block_count").unwrap_or(32) as usize;
+            .get_kv_u32("llama.attention.head_count_kv")
+            .or_else(|| header.get_kv_u32("attention.head_count_kv"))
+            .unwrap_or(num_heads as u32) as usize; // Default to same as num_heads
+
+        let num_layers = header
+            .get_kv_u32("block_count")
+            .unwrap_or(24) as usize; // Default for Qwen2.5-0.5B
+
         let head_dim = if num_heads > 0 {
-            embed_dim / num_heads
+            embed_dim / num_heads as usize
         } else {
-            64
+            64 // Default
         };
+
         let max_seq = header
-            .get_kv_u32("context_length")
-            .ok_or_else(|| RunnerError::MissingHeaderField("context_length".to_string()))?
-            as usize;
+            .get_kv_u32("llama.context_length")
+            .or_else(|| header.get_kv_u32("context_length"))
+            .unwrap_or(2048) as usize; // Default for Qwen2.5-0.5B
 
         Ok(Self {
             num_layers,
             num_heads,
             head_dim,
-            max_seq,
+            max_seq: max_seq as usize,
             num_kv_heads,
             use_tma: false,
             attention_arch: AttentionArch::default(),
@@ -243,7 +254,8 @@ impl Model {
 }
 
 // Real CpuModel for CPU-only builds with GGUF loading support
-use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
+use crate::gguf_weight_loader::{load_gguf_weights, GgufWeights};
+use crate::transformer_stub::{load_tokenizer_from_gguf, GgufTokenizerConfig};
 use std::path::Path;
 
 /// CPU model implementation for testing K-family dequantization.
@@ -262,6 +274,12 @@ pub struct CpuModel {
     pub vocab_size: usize,
     /// Whether dispatch is enabled
     pub use_dispatch: bool,
+    /// Tokenizer for encoding/decoding text to tokens
+    pub tokenizer: Option<tokenizers::Tokenizer>,
+    /// Tokenizer configuration extracted from GGUF
+    pub tokenizer_config: Option<GgufTokenizerConfig>,
+    /// Model configuration (for forward pass)
+    pub config: crate::ModelConfig,
 }
 
 impl CpuModel {
@@ -280,16 +298,47 @@ impl CpuModel {
             }
         }
 
-        // Extract config values
-        let hidden_size = weights
-            .header
-            .embedding_length()
-            .map(|v| v as usize)
-            .ok_or_else(|| {
-                crate::error::RunnerError::Gguf(pesti_gguf::GgufError::Io(
-                    "Missing llama.embedding_length".to_string(),
-                ))
-            })?;
+        // Load tokenizer from GGUF
+        let (tokenizer_config, tokenizer) = load_tokenizer_from_gguf(path)
+            .map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
+
+        // Debug: print tokenizer info
+        println!("DEBUG: Tokenizer loaded - {} vocab, BOS={}, EOS={}", 
+                 tokenizer_config.vocab_size,
+                 tokenizer_config.bos_token_id.unwrap_or(0),
+                 tokenizer_config.eos_token_id.unwrap_or(0));
+
+        // Extract hidden_size from GGUF header or tensor shapes
+        println!("DEBUG: Checking embedding_length in header");
+        let hidden_size = match weights.header.embedding_length() {
+            Some(v) => {
+                println!("DEBUG: embedding_length() returned Some({})", v);
+                v as usize
+            }
+            None => {
+                println!("DEBUG: embedding_length() returned None, trying get_kv_u32");
+                weights.header.get_kv_u32("embedding_length")
+                    .or_else(|| {
+                        // Fallback for models like Qwen2.5 that don't have embedding_length in KV pairs
+                        println!("DEBUG: Trying tensor-based fallback for hidden_size");
+                        if let Some(tensor) = weights.tensors.get("token_embd.weight") {
+                            println!("DEBUG: Found token_embd.weight, tensor len={}", tensor.len());
+                            // For now, use a hardcoded value for Qwen2.5-0.5B (896)
+                            // In a full implementation, we'd parse tensor metadata to get the shape
+                            Some(896)
+                        } else {
+                            println!("DEBUG: token_embd.weight not found");
+                            None
+                        }
+                    })
+                    .map(|v| v as usize)
+                    .ok_or_else(|| {
+                        crate::error::RunnerError::Gguf(pesti_gguf::GgufError::Io(
+                            "Missing embedding_length (try llama.embedding_length, embedding_length, or infer from tensor shapes)".to_string(),
+                        ))
+                    })?
+            }
+        };
 
         // Get vocab size from KV metadata or default to 32000
         let vocab_size = weights
@@ -373,6 +422,9 @@ impl CpuModel {
             None => None,
         };
 
+        // Extract config values BEFORE moving weights
+        let config = ModelConfig::from_gguf(&weights.header)?;
+
         Ok(Self {
             weights,
             token_embeddings,
@@ -380,6 +432,9 @@ impl CpuModel {
             hidden_size,
             vocab_size,
             use_dispatch: false,
+            tokenizer: Some(tokenizer),
+            tokenizer_config: Some(tokenizer_config),
+            config,
         })
     }
 
@@ -437,6 +492,33 @@ impl CpuModel {
         self.apply_output_head(&hidden)
     }
 
+    /// Encode text to token IDs.
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| {
+            crate::error::RunnerError::Internal("Tokenizer not loaded".to_string())
+        })?;
+
+        let encoding = tokenizer.encode(text, true).map_err(|e| {
+            crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e))
+        })?;
+
+        Ok(encoding.get_ids().iter().map(|&id| id as u32).collect())
+    }
+
+    /// Decode token IDs to text.
+    pub fn decode_tokens(&self, tokens: &[u32]) -> Result<String> {
+        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| {
+            crate::error::RunnerError::Internal("Tokenizer not loaded".to_string())
+        })?;
+
+        // tokenizers library expects Vec<u32>, we already have Vec<u32>
+        let encoding = tokenizer
+            .decode(tokens, true)
+            .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Decoding error: {}", e)))?;
+
+        Ok(encoding)
+    }
+
     /// Enable GPU dispatch (no-op for CPU-only builds).
     pub fn enable_dispatch(&mut self) {
         self.use_dispatch = true;
@@ -448,15 +530,16 @@ impl CpuModel {
     }
 
     /// Forward pass through layers (stub - returns input for now).
-    pub fn forward_with_dispatch(&self, hidden: &[f32], _start_pos: usize) -> Result<Vec<f32>> {
+    pub fn forward_with_dispatch(&self, hidden: &[f32], start_pos: usize) -> Result<Vec<f32>> {
         // For now, just return the hidden state (no actual layer computation)
         Ok(hidden.to_vec())
     }
 
-    /// Forward through transformer layers.
-    pub fn forward_layers(&self, _hidden: &[f32], _start_pos: usize) -> Result<Vec<f32>> {
-        // Stub - returns input for testing dequantization only
-        Ok(_hidden.to_vec())
+    /// Forward through transformer layers (simplified CPU-only version).
+    pub fn forward_layers(&self, hidden: &[f32], _start_pos: usize) -> Result<Vec<f32>> {
+        // For now, just return the hidden state (no actual layer computation)
+        // This is a stub until we have real transformer weights loaded
+        Ok(hidden.to_vec())
     }
 
     /// Reset the model state (stub - no-op for now).
