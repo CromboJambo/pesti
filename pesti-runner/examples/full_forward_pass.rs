@@ -26,11 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let num_layers = weights.header.block_count().unwrap_or(24) as usize;
     let head_dim = if num_heads > 0 { embed_dim / num_heads } else { 64 };
     
-    // Infer vocab_size from actual token_embd.weight tensor size
+    // Infer vocab_size from actual token_embd.weight tensor size using helper method
     let token_embd_tensor = weights.tensors.get("token_embd.weight")
         .ok_or("Missing token_embd.weight")?;
-    let vocab_size = if embed_dim > 0 {
-        token_embd_tensor.shape[1] // Second dimension is vocab_size in GGUF
+    let (embed_dim_inferred, vocab_size) = weights.tensor_shape("token_embd.weight");
+    let vocab_size = if embed_dim_inferred > 0 {
+        vocab_size // Use actual tensor shape
     } else {
         32000
     };
@@ -156,6 +157,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load output projection - GGUF stores as [embed_dim, vocab_size] (transposed!)
     let output_data = weights.tensors.get("output.weight")
         .ok_or("Missing output.weight")?;
+    
+    // Debug: print tensor info
+    let (in_feat, out_feat) = weights.tensor_shape("output.weight");
+    println!("DEBUG: output.weight shape from GGUF: [{}x{}]", in_feat, out_feat);
     let raw_output: Vec<f32> = output_data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     
     // Transpose output weights too
