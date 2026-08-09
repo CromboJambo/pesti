@@ -22,6 +22,14 @@ It's organized by milestones, not product features.
 - [x] encode/decode API in CpuModel
 - [x] **Learning outcome:** Understanding tokenization pipeline
 
+### End-to-End Generation Example
+- [x] `examples/generate.rs` - Full autoregressive generation pipeline
+- [x] Tokenizer config extraction and model loading verification
+- [x] Real weight dequantization (Q4_K_M tested with Qwen2.5-0.5B)
+- [x] Embedding lookup + output head projection
+- [x] Argmax sampling loop with performance metrics
+- [x] **Learning outcome:** Understanding complete inference pipeline architecture
+
 ### Benchmarking Baseline
 - [x] CPU-only generation example (`examples/cpu_generation.rs`)
 - [x] llama.cpp comparison (110.9 t/s on Qwen2.5-0.5B)
@@ -46,7 +54,7 @@ It's organized by milestones, not product features.
 ### Forward Pass
 - [x] CPU forward pass works (full autoregressive generation)
 - [x] GPU forward pass via dispatch layer
-- [ ] Byte-exact comparison between CPU and GPU paths (optional refinement)
+- [x] Byte-exact comparison between CPU and GPU paths (optional refinement)
 - **Learning outcome:** Understanding the difference between CPU and GPU execution
 
 ### Notes
