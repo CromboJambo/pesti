@@ -3,54 +3,110 @@
 /// SwiGLU FFN: x -> (x @ W1) * SiLU(x @ W2) @ V
 pub struct SwiGLUFFN {
     pub w1: crate::transformer_cpu::Linear, // Gate projection
-    pub w2: crate::transformer_cpu::Linear, // Project down
-    pub w3: crate::transformer_cpu::Linear, // Output projection (V)
+    pub w2: crate::transformer_cpu::Linear, // Project down  
+    pub w3: crate::transformer_cpu::Linear, // Up projection
 }
 
 impl SwiGLUFFN {
-    pub fn new(w1: Vec<f32>, w2_transposed: Vec<f32>, w3: Vec<f32>, actual_out_features: usize) -> Self {
-        // Infer dimensions from weight tensor shapes (GGUF stores as [in_features, out_features])
-        // For ffn_gate: shape is [embed_dim, intermediate_dim] = [896, 4864] → out=4864, in=896
-        let embed_dim = 896; // Input dimension matches transformer hidden size
-        let intermediate_dim = 4864; // FFN expansion dimension
+    /// Create a new SwiGLU FFN from dequantized weight tensors.
+    /// 
+    /// This uses architecture-aware dimension inference to handle GGUF metadata mismatches.
+    /// For Qwen2/Qwen3 models with SwiGLU:
+    /// - W1 (gate): [embed_dim, intermediate_dim]  
+    /// - W3 (up):   [embed_dim, intermediate_dim]
+    /// - W2 (down): [intermediate_dim, embed_dim]
+    pub fn new(
+        w1_data: Vec<f32>,
+        w2_data: Vec<f32>,
+        w3_data: Vec<f32>,
+        embed_dim: usize,
+    ) -> Self {
+        let w1_len = w1_data.len();
+        let w3_len = w3_data.len();
+
+        // Infer intermediate_dim from gate/up projections (more reliable than down)
+        let intermediate_dim = w1_len / embed_dim;
+
+        // Verify consistency with w3
+        assert_eq!(
+            w3_len,
+            intermediate_dim * embed_dim,
+            "w3 length mismatch: expected {}, got {}",
+            intermediate_dim * embed_dim,
+            w3_len
+        );
+
+        // For w2 (down projection), use the inferred intermediate_dim even if metadata is wrong
+        let w2_len = w2_data.len();
+        let expected_w2_len = intermediate_dim * embed_dim;
         
-        Self {
-            w1: crate::transformer_cpu::Linear::new(w1, None, intermediate_dim, embed_dim),
-            // Use inferred dimensions for w2 based on actual dequantized size
-            w2: crate::transformer_cpu::Linear::new(
-                w2_transposed,
-                None,
-                actual_out_features,
-                intermediate_dim,
-            ),
-            w3: crate::transformer_cpu::Linear::new(w3, None, embed_dim, intermediate_dim), // Output projection back to embed_dim
+        if w2_len != expected_w2_len {
+            tracing::warn!(
+                "FFN down projection dimension mismatch: expected {} elements ({}x{}), got {}",
+                expected_w2_len, intermediate_dim, embed_dim, w2_len
+            );
+            
+            // Try to infer the actual intermediate_dim from w2 data
+            let inferred_intermediate_from_w2 = if embed_dim > 0 {
+                w2_len / embed_dim
+            } else {
+                intermediate_dim
+            };
+            
+            tracing::warn!(
+                "Using inferred intermediate_dim={} from w2 instead of {}",
+                inferred_intermediate_from_w2, intermediate_dim
+            );
+            
+            // Use the inferred value for w2 dimensions
+            Self {
+                w1: crate::transformer_cpu::Linear::new(w1_data, None, intermediate_dim, embed_dim),
+                w2: crate::transformer_cpu::Linear::new(
+                    w2_data,
+                    None,
+                    embed_dim, // Output to hidden dimension
+                    inferred_intermediate_from_w2, // Input from inferred intermediate layer
+                ),
+                w3: crate::transformer_cpu::Linear::new(w3_data, None, intermediate_dim, embed_dim),
+            }
+        } else {
+            // Normal case - dimensions match
+            Self {
+                w1: crate::transformer_cpu::Linear::new(w1_data, None, intermediate_dim, embed_dim),
+                w2: crate::transformer_cpu::Linear::new(
+                    w2_data,
+                    None,
+                    embed_dim, // Output to hidden dimension
+                    intermediate_dim, // Input from intermediate layer
+                ),
+                w3: crate::transformer_cpu::Linear::new(w3_data, None, intermediate_dim, embed_dim),
+            }
         }
     }
 
-    /// SiLU activation: x * sigmoid(x)
-    fn silu(x: f32) -> f32 {
-        let sig = 1.0 / (1.0 + (-x).exp());
-        x * sig
-    }
-
-    /// Forward pass through SwiGLU FFN
+    /// Forward pass through SwiGLU FFN.
+    /// 
+    /// Architecture: x -> (x @ W1) * SiLU(x @ W2) @ V
     pub fn forward(&self, x: &[f32], _batch_size: usize) -> Vec<f32> {
-        let intermediate_dim = self.w1.out_features;
+        let embed_dim = self.w1.in_features;
 
-        // Gate projection (W1 @ x) - projects from embed_dim to intermediate_dim
-        let gate = self.w1.forward(x, _batch_size);
+        // Compute gate projection: (batch, intermediate_dim)
+        let gate = self.w1.forward(x, 0);
 
-        // Up projection (W3 @ x) - projects from embed_dim to intermediate_dim
-        let proj = self.w3.forward(x, _batch_size);
+        // Compute down projection: (batch, intermediate_dim)  
+        let down = self.w2.forward(x, 0);
 
-        // Apply SiLU to gate and element-wise multiply with up projection
-        let gated: Vec<f32> = gate
-            .iter()
-            .zip(proj.iter())
-            .map(|(g, p)| Self::silu(*g) * p)
-            .collect();
+        // Apply SiLU to gate and multiply
+        let mut hidden = vec![0.0; embed_dim];
+        for i in 0..embed_dim {
+            let g = gate[i] / _batch_size as f32; // Simplified scaling
+            let d = down[i];
+            let silu_g = g / (1.0 + (-g).exp());
+            hidden[i] = silu_g * d;
+        }
 
-        // Down projection (W2 @ fused) - projects from intermediate_dim back to embed_dim
-        self.w2.forward(&gated, _batch_size)
+        // Project up: (batch, embed_dim)
+        let output = self.w3.forward(&hidden, 0);
+        output
     }
 }
