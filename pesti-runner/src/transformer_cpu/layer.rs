@@ -58,7 +58,7 @@ impl Attention {
 
         // Apply RoPE (simplified: apply to Q and K with their respective dimensions)
         let mut q_rope = q.clone();
-        let mut k_rope = k.clone();
+        let k_rope = k.clone();
         
         // For simplicity, apply to all dimensions
         let cos = vec![0.0f32; 1024]; // Placeholder
