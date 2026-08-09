@@ -243,7 +243,7 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
     let seq_len = 4usize; // Small context for conformance test (deterministic)
 
     // Initialize token embeddings from loaded weights
-    let embed_dim = model.config.embed_dim;
+    let embed_dim = model.embed_dim;
     let _vocab_size = model.vocab_size as usize;
 
     // Create a simple input: single token [0] for conformance test
@@ -260,18 +260,27 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
         .map_err(|e| ConformanceError::ModelLoad(format!("Runner error: {e}")))?;
 
     // Apply final norm if available (qwen2/qwen3)
-    if let Some(final_norm) = &model.final_norm {
-        hidden = final_norm.forward(&hidden, batch_size);
-    }
-
-    // Compute output logits via LM head (optional - some quantization types omit it)
-    let output_logits = if let Some(output_layer) = &model.output {
+    let output_logits = if let Some(ref final_norm) = model.final_norm {
+        let hidden = final_norm.forward(&hidden, batch_size);
+        if let Some(ref output_layer) = model.output {
+            output_layer.forward(&hidden, batch_size)
+        } else {
+            // No output layer: use hidden states directly (some models train without lm_head)
+            tracing::warn!(
+                "Model {} missing output layer, using hidden states for conformance",
+                model_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+            );
+            hidden
+        }
+    } else if let Some(ref output_layer) = model.output {
         output_layer.forward(&hidden, batch_size)
     } else {
-        // No output layer: use hidden states directly (some models train without lm_head)
-        // This is acceptable for conformance testing - we're verifying the transformer forward pass
+        // No final norm and no output layer: use hidden states directly
         tracing::warn!(
-            "Model {} missing output layer, using hidden states for conformance",
+            "Model {} missing final_norm and output layer, using hidden states for conformance",
             model_path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -287,10 +296,10 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
     Ok(format!(
         "peasti: tokens={} embed_dim={} layers={} heads={} kv_heads={} sampled_token={}",
         input_tokens.len(),
-        model.config.embed_dim,
-        model.config.num_layers,
-        model.config.num_heads,
-        model.config.num_kv_heads,
+        model.embed_dim,
+        model.num_layers,
+        model.num_heads,
+        model.num_kv_heads,
         sampled_token
     ))
 }
