@@ -104,7 +104,7 @@ hex = "0.4"
 byteorder = { version = "1.4.3", default-features = false }
 
 # HTTP
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 [profile.profiling]
 inherits = "release"
