@@ -47,6 +47,12 @@ PESTI gives you:
 - **GPU softmax kernel** - Optional CUDA acceleration with feature gating
 - **End-to-end verification** - Real GGUF model inference
 
+### Phase 2.5: Unsloth Studio SDK 🆕 (Complete)
+- **Sync client** (`unsloth_client.rs`) - Blocking reqwest for CLI workflows
+- **Async client** (`unsloth_client_async.rs`) - Tokio runtime for concurrent execution
+- **TRL integration** (`src/trl/`) - Full training loop with Unsloth optimizations
+- **Type-safe API** - Rust structs matching API responses exactly
+
 
 ## Quick Start
 
