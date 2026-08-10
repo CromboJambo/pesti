@@ -2,7 +2,7 @@
 name = "pesti-runner"
 publish = false
 version.workspace = true
-edition.workspace = true
+edition = "2024"
 license.workspace = true
 authors.workspace = true
 description = "LLM inference engine: tensor computation, model loading, tokenizer, device backend, external runner bridge"

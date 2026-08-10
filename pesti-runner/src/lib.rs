@@ -33,7 +33,8 @@ pub mod quantized_linear; // Quantized linear layer using tile dequantization
 pub mod peft; // Parameter-efficient fine-tuning adapters (LoRA, QLoRA)
 pub mod trl; // TRL-like training orchestrator
 pub mod unsloth; // Unsloth-style efficient training optimizations
-pub mod unsloth_client; // Unsloth Studio SDK bridge (Rust rewrite of Python SDK)
+pub mod unsloth_client; // Unsloth Studio SDK bridge (sync version)
+pub mod unsloth_client_async; // Unsloth Studio SDK bridge (async version with tokio)
 pub mod registry;
 #[cfg(feature = "cuda")]
 pub mod remote_discovery;
