@@ -79,7 +79,7 @@ pub unsafe fn launch_kernel(
     stream: sys::CUstream,
     params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
-    result::launch_kernel(function, grid_dims, block_dims, shared_mem, stream, params)
+    unsafe { result::launch_kernel(function, grid_dims, block_dims, shared_mem, stream, params) }
 }
 
 /// Get the raw CUstream from a CudaStream.

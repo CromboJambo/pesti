@@ -193,6 +193,41 @@ impl GemmKernel for CpuGemmKernel {
     }
 }
 
+impl CpuGemmKernel {
+    /// Direct f32 GEMM for testing: C = alpha * A @ B + beta * C
+    /// A: [m x k] f32, B: [k x n] f32, C: [m x n] f32
+    pub fn gemm_f32(
+        &self,
+        a: &[f32],
+        b: &[f32],
+        c: &mut [f32],
+        m: usize,
+        n: usize,
+        k: usize,
+        alpha: f32,
+        beta: f32,
+    ) -> Result<(), GemmError> {
+        if a.len() < m * k || b.len() < k * n || c.len() < m * n {
+            return Err(GemmError::BufferSizeMismatch {
+                expected: m * k,
+                got: a.len().min(m * k),
+            });
+        }
+
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0.0f32;
+                for l in 0..k {
+                    sum += a[i * k + l] * b[l * n + j];
+                }
+                c[i * n + j] = alpha * sum + beta * c[i * n + j];
+            }
+        }
+
+        Ok(())
+    }
+}
+
 // --- GPU Implementation (Real cudarc backed) ---
 
 #[cfg(feature = "cuda")]

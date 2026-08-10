@@ -63,7 +63,18 @@ impl CudaDeviceInfo {
         self.free_memory > model_bytes + 2 * 1024 * 1024 * 1024
     }
 
-    /// Whether this device supports tcgen05 (sm_100a/sm_103a, datacenter
+    /// Default info for consumer Blackwell RTX 50-series GPUs (sm_12.0).
+    pub fn default_for_consumer() -> Self {
+        Self {
+            ordinal: 0, // default device
+            name: "NVIDIA GeForce RTX 5060 Ti".to_string(), // example model
+            compute_capability: (12, 0), // sm_12.0 for Blackwell consumer GPUs
+            total_memory: 8 * 1024 * 1024 * 1024, // 8 GiB typical
+            free_memory: 7 * 1024 * 1024 * 1024, // ~7 GiB available
+        }
+    }
+
+    /// Whether this device supports tcgen05 (sm_100a/sm_103a, datacenter...[truncated]
     /// Blackwell B200/B300). Consumer Blackwell (sm_120, RTX 50-series) has
     /// no tensor memory and no tcgen05 — ptxas rejects it for sm_120a.
     pub fn supports_tcgen05(&self) -> bool {

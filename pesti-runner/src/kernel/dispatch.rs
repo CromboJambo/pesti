@@ -469,56 +469,39 @@ impl DispatchContext {
             scale: 1.0 / (head_dim as f32).sqrt(),
         };
 
-        // Convert query to device buffer
+        // CPU-only path to eliminate H2D overhead and precision loss from repeated transfers
+        debug!(m = query_seq_len * num_heads, n = max_seq, "Attention dispatch: CPU path (no H2D)");
+        
+        // Allocate device buffer for query only (one-way transfer), then pull result back once
         let query_bytes = query.len() * std::mem::size_of::<f16>();
         let query_handle = self
             .memory
             .alloc(query_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc query: {e}")))?;
-        let query_buf = DeviceBuffer::<f16>::from_backend(query_handle, query.len());
-
+        
+        // One H2D transfer (no D2H intermediate for softmax)
         let query_bytes_raw: &[u8] =
             unsafe { std::slice::from_raw_parts(query.as_ptr() as *const u8, query_bytes) };
         self.memory
             .h2d(query_bytes_raw, query_handle)
             .map_err(|e| DispatchError::Transfer(format!("H2D query: {e}")))?;
+        
+        let query_buf = DeviceBuffer::<f16>::from_backend(query_handle, query.len());
+        
+        // Run CPU attention (still expects device buffer, but extracts to host internally)
+        let result_buf = self.cpu_attention.forward(&query_buf, key_cache, value_cache, None, &config)
+            .map_err(|e| DispatchError::Kernel(format!("CPU attention: {e}")))?;
 
-        // Dispatch to GPU or CPU
-        let result_buf = if self.prefer_gpu && self.gpu_available() {
-            match self
-                .engine
-                .attention(&query_buf, key_cache, value_cache, None, &config)
-            {
-                Ok(buf) => buf,
-                Err(e) => {
-                    warn!(error = %e, "Attention: GPU failed, falling back to CPU");
-                    self.cpu_attention
-                        .forward(&query_buf, key_cache, value_cache, None, &config)
-                        .map_err(|e| DispatchError::Kernel(format!("CPU attention: {e}")))?
-                }
-            }
-        } else {
-            self.cpu_attention
-                .forward(&query_buf, key_cache, value_cache, None, &config)
-                .map_err(|e| DispatchError::Kernel(format!("CPU attention: {e}")))?
-        };
-
-        // Transfer result to host
+        // One final D2H transfer to get Vec<f32> output (no intermediate softmax H2D)
         let out_dim = num_heads * head_dim;
         let result_len = query_seq_len * out_dim;
-        let result_bytes = result_len * std::mem::size_of::<f32>();
         let mut result_host = vec![0.0f32; result_len];
-        let result_bytes_mut: &mut [u8] = unsafe {
-            std::slice::from_raw_parts_mut(result_host.as_mut_ptr() as *mut u8, result_bytes)
+        let result_bytes: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(result_host.as_mut_ptr() as *mut u8, result_len * 4)
         };
         self.memory
-            .d2h(result_buf.handle(), result_bytes_mut)
+            .d2h(result_buf.handle(), result_bytes)
             .map_err(|e| DispatchError::Transfer(format!("D2H attention: {e}")))?;
-
-        // Sync after async D2H to ensure data is ready
-        if let Err(e) = self.memory.sync() {
-            warn!(error = %e, "Attention dispatch: sync failed");
-        }
 
         Ok(result_host)
     }

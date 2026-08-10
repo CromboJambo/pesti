@@ -70,6 +70,10 @@ pub mod attention;
 #[cfg(not(feature = "cuda"))]
 pub mod attention_stub;
 #[cfg(feature = "cuda")]
+pub mod fused_attention_conformant;
+#[cfg(feature = "cuda")]
+pub mod fused_attention_wrapper_conformant;
+#[cfg(feature = "cuda")]
 pub mod builder;
 #[cfg(not(feature = "cuda"))]
 pub mod builder_stub;

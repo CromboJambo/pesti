@@ -1240,7 +1240,32 @@ impl LlamaModel {
             h = norm.forward(&h, 1);
         }
 
-        Ok(h)
+        // Output head projection: hidden → logits via GEMM
+        let output = self.output.as_ref().ok_or_else(|| {
+            RunnerError::ModelLoad("missing output layer for GPU forward".to_string())
+        })?;
+
+        // Use dispatch's GEMM kernel to compute: logits = h @ output.weight.T
+        // A: [1, hidden] (single token), B: [hidden, vocab_size], C: [1, vocab_size]
+        let alpha = 1.0f32;
+        let beta = 0.0f32;
+
+        // Convert weights to f16 for dispatch_gemm_cpu fallback (or GPU if available)
+        let output_f16: Vec<half::f16> = output.weight.iter().map(|&v| half::f16::from_f32(v)).collect();
+
+        // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
+        let logits_vec = ctx.dispatch_gemm_cpu(
+            &h.iter().map(|&v| half::f16::from_f32(v)).collect::<Vec<half::f16>>(),
+            &output_f16,
+            None,
+            1, // m: output batch (1 token)
+            self.vocab_size as usize, // n: vocab_size logits
+            self.config.embed_dim,   // k: hidden dimension
+            alpha,
+            beta,
+        )?;
+
+        Ok(logits_vec)
     }
 
     /// Get the model architecture string from GGUF header.
