@@ -30,6 +30,7 @@ pub mod model_loader;
 pub mod model_manager;
 pub mod plug_in;
 pub mod quantized_linear; // Quantized linear layer using tile dequantization
+pub mod peft; // Parameter-efficient fine-tuning adapters (LoRA, QLoRA)
 pub mod registry;
 #[cfg(feature = "cuda")]
 pub mod remote_discovery;
