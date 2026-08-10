@@ -71,9 +71,9 @@
     prs.on r1;
     ret;
     
-    // Get thread indices within block (0..63 for each dimension)
-    mov.u32 r_tid_x, %laneid;      // x coordinate (0-63)
-    shr.b32 r_tid_y, %laneid, 6;   // y coordinate (0-1 for 64 threads, simplified)
+    // Get thread indices within block (0..127 for x-y coordinates)
+    mov.u32 r_tid_x, %threadidx.x; // x: 0-63 (within warp, mapped to tile width)
+    shr.b32 r_tid_y, %threadidx.y, 5; // y: 0-3 (4 threads per lane for full row)
     
     // Simplified approach: Each block computes one 64x64 tile
     // Use cp.async to load Q and K tiles into shared memory

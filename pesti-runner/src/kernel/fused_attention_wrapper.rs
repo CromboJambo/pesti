@@ -24,10 +24,8 @@ impl Default for FusedAttentionWrapper {
     fn default() -> Self {
         #[cfg(feature = "cuda")]
         {
-            // Placeholder - real kernel created via builder
-            let dummy_kernel = unsafe {
-                std::mem::transmute::<u64, FusedAttentionKernel>(0)
-            };
+            // Placeholder - real kernel created via builder in InferenceEngine
+            let dummy_kernel = unsafe { std::mem::transmute::<u64, FusedAttentionKernel>(0) };
             Self { kernel: dummy_kernel }
         }
         #[cfg(not(feature = "cuda"))]
