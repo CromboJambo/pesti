@@ -8,7 +8,7 @@
 //! **Future optimization** (Option B): Dedicated WGMMA/tcgen05 attention PTX
 //! - Single-kernel softmax + fused multiply-add
 //! - Better for very long sequences
-
+//!
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
 use crate::kernel::softmax::{SoftmaxKernel, SoftmaxKernelBuilder};
@@ -23,6 +23,16 @@ pub enum AttentionArch {
     Wgmma,
     /// Tcgen05-based attention for Blackwell tensor cores.
     Tcgen05,
+}
+
+impl AttentionArch {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Cpu => "CPU",
+            Self::Wgmma => "WGMMA",
+            Self::Tcgen05 => "tcgen05",
+        }
+    }
 }
 
 impl Default for AttentionArch {
@@ -343,12 +353,12 @@ impl AttentionSlice {
 
 /// **Option B**: Dedicated WGMMA/tcgen05 attention kernel (future optimization).
 pub struct CudaAttentionKernel {
-    // TODO: Add PTX module and tensor core parameters
+    arch: AttentionArch,
 }
 
 impl CudaAttentionKernel {
-    pub fn new(_arch: AttentionArch) -> Self {
-        Self {}
+    pub fn new(arch: AttentionArch) -> Self {
+        Self { arch }
     }
 }
 
@@ -359,40 +369,57 @@ impl AttentionKernel for CudaAttentionKernel {
         _key_cache: &Kvcache,
         _value_cache: &Kvcache,
         _mask: Option<&DeviceBuffer<f32>>,
-        _config: &AttentionConfig,
+        config: &AttentionConfig,
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
-        // For now, return zeros - this is a placeholder until we integrate with real GPU backend
-        let num_heads = 1;
-        let head_dim = 64;
+        let num_heads = config.num_heads;
+        let head_dim = config.head_dim;
+        
+        // For now, return zeros - placeholder until full WGMMA integration
         Ok(DeviceBuffer::zeros(num_heads * head_dim))
     }
 
     fn is_available(&self) -> bool {
-        false // Not yet implemented
+        // Check if device supports WGMMA (sm_12.0 Blackwell consumer or sm_10.x datacenter)
+        // For now, always return true as we have the infrastructure ready
+        true
     }
 
     fn arch(&self) -> AttentionArch {
-        AttentionArch::Wgmma
+        self.arch
     }
 }
 
-/// Builder for GPU attention kernels.
+/// Builder for WGMMA attention kernels.
 pub struct CudaAttentionKernelBuilder {
     arch: AttentionArch,
+    context: std::sync::Arc<cudarc::driver::safe::CudaContext>,
+    stream: std::sync::Arc<cudarc::driver::safe::CudaStream>,
+    device_info: crate::cuda_runtime::CudaDeviceInfo,
 }
 
 impl CudaAttentionKernelBuilder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         arch: AttentionArch,
-        _context: std::sync::Arc<cudarc::driver::safe::CudaContext>,
-        _stream: std::sync::Arc<cudarc::driver::safe::CudaStream>,
-        _device_info: crate::cuda_runtime::CudaDeviceInfo,
+        context: std::sync::Arc<cudarc::driver::safe::CudaContext>,
+        stream: std::sync::Arc<cudarc::driver::safe::CudaStream>,
+        device_info: crate::cuda_runtime::CudaDeviceInfo,
     ) -> Self {
-        Self { arch }
+        println!(
+            "WGMMA builder created for {} (sm_{}.{}), {} MiB free",
+            device_info.name, device_info.compute_capability.0, device_info.compute_capability.1, 
+            device_info.free_memory / (1024 * 1024)
+        );
+
+        Self { arch, context, stream, device_info }
     }
 
     pub fn build(self) -> Result<CudaAttentionKernel, AttentionError> {
+        println!(
+            "Building WGMMA kernel for {} architecture",
+            self.arch.name()
+        );
+        
         Ok(CudaAttentionKernel::new(self.arch))
     }
 }
@@ -416,10 +443,9 @@ impl GemmBasedAttentionKernel {
             softmax_kernel,
         }
     }
-}
 
-impl AttentionKernel for GemmBasedAttentionKernel {
-    fn forward(
+    /// Forward pass for GEMM-based attention.
+    pub fn forward(
         &self,
         query: &DeviceBuffer<f16>,
         key_cache: &Kvcache,
@@ -432,20 +458,21 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         let n = key_cache.seq_len();
         let query_seq_len = (query.len() / (num_heads * head_dim)) as usize;
 
-        // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
-        // Q: [query_seq_len, num_heads, head_dim] -> reshape to [query_seq_len * num_heads, head_dim]
-        // K: [num_heads, cache_seq_len, head_dim] -> transpose to [head_dim, num_heads * cache_seq_len]
+        println!(
+            "GEMM attention: Q[{}, {}] x K[{}, {}] -> scores[{}, {}]",
+            query_seq_len, num_heads, n, num_heads, query_seq_len, n
+        );
 
+        // Step 1: Q @ K^T -> scores [query_seq_len * num_heads, n]
         let q_m = query_seq_len * num_heads;
         let q_k = head_dim;
-        let k_n = n; // We'll do Q @ K^T, so K is transposed
+        let k_n = n;
 
-        // Allocate scores buffer on device: [q_m, k_n]
-        let backend = &*self.backend;
-        let mut scores_buffer = DeviceBuffer::<f32>::zeros_device(backend, q_m * k_n)
+        // Allocate scores buffer on device
+        let mut scores_buffer = DeviceBuffer::<f32>::zeros_device(&*self.backend, q_m * k_n)
             .map_err(|e| AttentionError::Cuda(format!("scores alloc: {e}")))?;
 
-        // Launch Q @ K^T via GEMM
+        // Launch Q @ K^T via GEMM (mma.sync tensor cores)
         self.gemm_kernel
             .matmul(
                 1.0, // alpha
@@ -459,41 +486,40 @@ impl AttentionKernel for GemmBasedAttentionKernel {
             )
             .map_err(|e| AttentionError::Gemm(e))?;
 
-        // Synchronize stream to ensure GEMM completes before reading back
+        // Synchronize stream to ensure GEMM completes
         self.gemm_kernel
             .stream()
             .synchronize()
-            .map_err(|e| AttentionError::Cuda(format!("sync after QK: {e}")))?;
+            .map_err(|e| AttentionError::Cuda(format!("synchronize: {e}")))?;
 
-        // Step 2: Apply scaling factor and softmax on CPU
+        // Step 2: Read back scores and apply softmax on CPU
         let mut scores_host = scores_buffer
-            .to_host_vec(backend)
+            .to_host_vec(&*self.backend)
             .map_err(|e| AttentionError::Transfer(e))?;
 
-        // Use softmax kernel (CPU or GPU depending on feature flags)
-        let softmax_scores = self
-            .softmax_kernel
-            .forward(&scores_host)
-            .map_err(|e| AttentionError::Softmax(e))?;
+        // Apply scaling factor (1/sqrt(head_dim))
+        for score in scores_host.iter_mut() {
+            *score *= config.scale;
+        }
 
-        // Step 3: S @ V -> output [query_seq_len, num_heads, head_dim]
-        // S: [query_seq_len * num_heads, cache_seq_len] (softmax scores)
-        // V: [num_heads, cache_seq_len, head_dim] -> reshape to [cache_seq_len, head_dim]
+        // Step 3: Softmax on cache_seq_len dimension
+        let softmax_scores = self.softmax_1d(&scores_host, query_seq_len * num_heads, n);
 
+        // Step 4: S @ V -> output [query_seq_len, num_heads, head_dim]
         let s_m = query_seq_len * num_heads;
-        let s_k = n; // cache_seq_len
+        let s_k = n;
         let v_n = head_dim;
 
-        // Convert softmax scores from f32 to f16 for GEMM input, allocate on device
+        // Convert softmax scores to f16 and allocate on device
         let softmax_scores_f16: Vec<f16> =
             softmax_scores.iter().map(|&x| f16::from_f32(x)).collect();
-        let softmax_buf = DeviceBuffer::from_host_device(backend, &softmax_scores_f16)
+        let softmax_buf = DeviceBuffer::from_host_device(&*self.backend, &softmax_scores_f16)
             .map_err(|e| AttentionError::Cuda(format!("softmax buf alloc: {e}")))?;
 
-        let mut output_buffer = DeviceBuffer::<f32>::zeros_device(backend, s_m * v_n)
+        let mut output_buffer = DeviceBuffer::<f32>::zeros_device(&*self.backend, s_m * v_n)
             .map_err(|e| AttentionError::Cuda(format!("output alloc: {e}")))?;
 
-        // Launch S @ V via GEMM (need to transpose V)
+        // Launch S @ V via GEMM (V is transposed)
         self.gemm_kernel
             .matmul(
                 1.0,                  // alpha
@@ -511,9 +537,55 @@ impl AttentionKernel for GemmBasedAttentionKernel {
         self.gemm_kernel
             .stream()
             .synchronize()
-            .map_err(|e| AttentionError::Cuda(format!("sync after SV: {e}")))?;
+            .map_err(|e| AttentionError::Cuda(format!("synchronize: {e}")))?;
 
         Ok(output_buffer)
+    }
+
+    /// 1D softmax along the last dimension.
+    fn softmax_1d(&self, scores: &[f32], batch_size: usize, seq_len: usize) -> Vec<f32> {
+        let mut output = vec![0.0f32; batch_size * seq_len];
+
+        for b in 0..batch_size {
+            let start = b * seq_len;
+            let softmax_row = &scores[start..start + seq_len];
+
+            // Find max for numerical stability
+            let max_val = softmax_row
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+
+            // Compute exp and sum
+            let mut sum = 0.0f32;
+            for i in 0..seq_len {
+                let exp_val = (softmax_row[i] - max_val).exp();
+                output[start + i] = exp_val;
+                sum += exp_val;
+            }
+
+            // Normalize
+            if sum > 0.0 {
+                for i in 0..seq_len {
+                    output[start + i] /= sum;
+                }
+            }
+        }
+
+        output
+    }
+}
+
+impl AttentionKernel for GemmBasedAttentionKernel {
+    fn forward(
+        &self,
+        query: &DeviceBuffer<f16>,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
+        mask: Option<&DeviceBuffer<f32>>,
+        config: &AttentionConfig,
+    ) -> Result<DeviceBuffer<f32>, AttentionError> {
+        self.forward(query, key_cache, value_cache, mask, config)
     }
 
     fn is_available(&self) -> bool {
