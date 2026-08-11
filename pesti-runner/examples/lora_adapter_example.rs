@@ -36,7 +36,10 @@ fn main() {
     match adapter.forward(&x, batch_size) {
         Ok(output) => {
             println!("  - Output shape: [{} x {}]", batch_size, out_features);
-            println!("  - Output (first 5 values): {:?}", &output[..5.min(output.len())]);
+            println!(
+                "  - Output (first 5 values): {:?}",
+                &output[..5.min(output.len())]
+            );
         }
         Err(e) => {
             println!("  - Error: {}", e);

@@ -160,7 +160,10 @@ impl LossFunction for KLDivergenceLoss {
             let end = start + vocab_size;
 
             // Compute softmax of the predicted distribution Q
-            let max_logit = logits[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let max_logit = logits[start..end]
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
             let exp_sum: f32 = logits[start..end]
                 .iter()
                 .map(|&l| (l - max_logit).exp())
@@ -209,7 +212,10 @@ impl LossFunction for PairwiseRankingLoss {
             let end = start + vocab_size;
 
             // Compute log probabilities for chosen and rejected
-            let max_logit = logits[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let max_logit = logits[start..end]
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
             let exp_sum: f32 = logits[start..end]
                 .iter()
                 .map(|&l| (l - max_logit).exp())

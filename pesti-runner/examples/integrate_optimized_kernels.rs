@@ -41,21 +41,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Try loading tiled kernel first (uses vectorized loads internally)
-    let ptx_path = "/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax_tiled.ptx";
-    
+    let ptx_path =
+        "/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax_tiled.ptx";
+
     if std::path::Path::new(ptx_path).exists() {
         println!("✅ Tiled PTX found: {}", ptx_path);
 
         // Build kernel from module using builder
-        let kernel = pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
-            pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
-            cuda_rt.context().clone(),
-            stream.clone(),
-        )
-        .build_from_ptx_file(
-            ptx_path,
-            "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi", // mangled name for tiled version
-        )?;
+        let kernel =
+            pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
+                pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+                cuda_rt.context().clone(),
+                stream.clone(),
+            )
+            .build_from_ptx_file(
+                ptx_path,
+                "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi", // mangled name for tiled version
+            )?;
 
         // Launch kernel
         let scale = 1.0 / (head_dim as f32).sqrt();
@@ -66,7 +68,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 k_d.as_ptr() as u64,
                 0u64, // v_ptr not used in this version
                 s_d.as_ptr() as u64,
-                seq_q, seq_k, num_heads, head_dim, rope_base, seq_k
+                seq_q,
+                seq_k,
+                num_heads,
+                head_dim,
+                rope_base,
+                seq_k,
             )?;
         }
 
@@ -85,9 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     } else {
         println!("⚠️  PTX file not found at {}", ptx_path);
-        println!(
-            "  Compile first with: nvcc -arch=sm_89 -ptx attention_rope_softmax_tiled.cu"
-        );
+        println!("  Compile first with: nvcc -arch=sm_89 -ptx attention_rope_softmax_tiled.cu");
     }
 
     Ok(())

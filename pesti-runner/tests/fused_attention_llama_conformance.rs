@@ -194,7 +194,10 @@ fn test_fused_attention_vs_llama_cpp() {
     );
     println!(
         "llama.cpp max attention score: {:.6}",
-        llama_probs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+        llama_probs
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max)
     );
 
     // Allocate device memory using low-level API
@@ -219,11 +222,13 @@ fn test_fused_attention_vs_llama_cpp() {
 
     // Build kernel
     let stream = cuda_rt.new_stream().unwrap();
-    let kernel = pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
-        pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
-        cuda_rt.context().clone(),
-        stream.clone(),
-    ).unwrap();
+    let kernel =
+        pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
+            pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            stream.clone(),
+        )
+        .unwrap();
 
     let scale = 1.0 / (head_dim as f32).sqrt();
 
@@ -257,7 +262,8 @@ fn test_fused_attention_vs_llama_cpp() {
             gpu_probs.as_mut_ptr() as *mut u8,
             s_ptr as *const u8,
             s_size,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     println!(

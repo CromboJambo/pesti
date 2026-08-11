@@ -66,11 +66,11 @@ impl CudaDeviceInfo {
     /// Default info for consumer Blackwell RTX 50-series GPUs (sm_12.0).
     pub fn default_for_consumer() -> Self {
         Self {
-            ordinal: 0, // default device
+            ordinal: 0,                                     // default device
             name: "NVIDIA GeForce RTX 5060 Ti".to_string(), // example model
-            compute_capability: (12, 0), // sm_12.0 for Blackwell consumer GPUs
-            total_memory: 8 * 1024 * 1024 * 1024, // 8 GiB typical
-            free_memory: 7 * 1024 * 1024 * 1024, // ~7 GiB available
+            compute_capability: (12, 0),                    // sm_12.0 for Blackwell consumer GPUs
+            total_memory: 8 * 1024 * 1024 * 1024,           // 8 GiB typical
+            free_memory: 7 * 1024 * 1024 * 1024,            // ~7 GiB available
         }
     }
 

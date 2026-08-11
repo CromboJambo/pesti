@@ -102,13 +102,13 @@ impl<'a, D: Dataset> Iterator for DatasetIterator<'a, D> {
 /// Dataset loader trait for loading datasets from various sources.
 pub trait DatasetLoader: Send + Sync {
     /// Load dataset from source.
-    fn load(&self, path: &str) -> Result<Box<dyn Dataset>, Box<dyn std::error::Error + Send + Sync>>;
+    fn load(
+        &self,
+        path: &str,
+    ) -> Result<Box<dyn Dataset>, Box<dyn std::error::Error + Send + Sync>>;
 
     /// Create a dataset from in-memory data.
-    fn from_memory(
-        input_ids: Vec<Vec<f32>>,
-        labels: Option<Vec<Vec<u32>>>,
-    ) -> Box<dyn Dataset> {
+    fn from_memory(input_ids: Vec<Vec<f32>>, labels: Option<Vec<Vec<u32>>>) -> Box<dyn Dataset> {
         Box::new(InMemoryDataset { input_ids, labels })
     }
 }

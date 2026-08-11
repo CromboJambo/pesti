@@ -42,9 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cpu_model.output_weights.is_some()
     );
 
-    println!(
-        "\n⚠️  NOTE: CpuModel only loads embeddings + output head for now."
-    );
+    println!("\n⚠️  NOTE: CpuModel only loads embeddings + output head for now.");
     println!("   For full transformer inference, use transformer_cpu::CpuTransformerModel");
     println!("   which loads all layer weights from GGUF.\n");
 
@@ -90,12 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write("generation_output.txt", &output)?;
     println!("  - Output saved to: generation_output.txt");
 
-    println!(
-        "\n⚠️  NOTE: This is a minimal implementation."
-    );
-    println!(
-        "   The forward pass currently skips transformer layers (embed → output head only)."
-    );
+    println!("\n⚠️  NOTE: This is a minimal implementation.");
+    println!("   The forward pass currently skips transformer layers (embed → output head only).");
     println!(
         "   For full inference with attention and FFN, implement CpuTransformerModel loading."
     );

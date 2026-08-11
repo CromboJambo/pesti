@@ -1251,16 +1251,22 @@ impl LlamaModel {
         let beta = 0.0f32;
 
         // Convert weights to f16 for dispatch_gemm_cpu fallback (or GPU if available)
-        let output_f16: Vec<half::f16> = output.weight.iter().map(|&v| half::f16::from_f32(v)).collect();
+        let output_f16: Vec<half::f16> = output
+            .weight
+            .iter()
+            .map(|&v| half::f16::from_f32(v))
+            .collect();
 
         // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
         let logits_vec = ctx.dispatch_gemm_cpu(
-            &h.iter().map(|&v| half::f16::from_f32(v)).collect::<Vec<half::f16>>(),
+            &h.iter()
+                .map(|&v| half::f16::from_f32(v))
+                .collect::<Vec<half::f16>>(),
             &output_f16,
             None,
-            1, // m: output batch (1 token)
+            1,                        // m: output batch (1 token)
             self.vocab_size as usize, // n: vocab_size logits
-            self.config.embed_dim,   // k: hidden dimension
+            self.config.embed_dim,    // k: hidden dimension
             alpha,
             beta,
         )?;

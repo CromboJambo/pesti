@@ -28,7 +28,11 @@ pub trait Adapter: Send + Sync {
     ///
     /// # Returns
     /// Merged weights and bias
-    fn merge_into(&self, base_weights: &[f32], base_bias: Option<&[f32]>) -> Result<(Vec<f32>, Option<Vec<f32>>)>;
+    fn merge_into(
+        &self,
+        base_weights: &[f32],
+        base_bias: Option<&[f32]>,
+    ) -> Result<(Vec<f32>, Option<Vec<f32>>)>;
 
     /// Unmerge adapter from weights (reverse of merge_into).
     ///

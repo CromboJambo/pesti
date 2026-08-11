@@ -153,9 +153,8 @@ impl InferenceEngine {
                     );
 
                     // GemmBasedAttentionKernel::new() returns the struct directly (no Result)
-                    let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> = Box::new(
-                        crate::kernel::CpuSoftmaxKernel::new(),
-                    );
+                    let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
+                        Box::new(crate::kernel::CpuSoftmaxKernel::new());
                     let attention_kernel =
                         GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
                     tracing::info!("Using GEMM-based attention kernel (Option A)");

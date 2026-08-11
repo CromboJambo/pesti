@@ -2,8 +2,8 @@
 //!
 //! Measures token generation throughput and H2D transfer reduction.
 
-use std::sync::Arc;
 use pesti_runner::cuda_runtime::CudaRuntime;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize CUDA runtime if available
@@ -19,12 +19,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("GPU: {:?}", cuda_rt.device_info());
     println!();
 
-    // Create stream for kernel launches  
+    // Create stream for kernel launches
     let stream = cuda_rt.new_stream().expect("Failed to create CUDA stream");
 
     // Test 1: Build fused attention kernel directly (conformant version)
     let start = std::time::Instant::now();
-    
+
     match pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
         pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
         cuda_rt.context().clone(),
@@ -32,18 +32,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         Ok(kernel) => {
             let elapsed = start.elapsed();
-            
+
             println!("✅ FUSED KERNEL SUCCESS");
             println!("  - Architecture: {:?}", kernel.arch());
             println!("  - Build time: {:?}", elapsed);
-            
+
             // Verify stream accessor works
             let _stream_ref = kernel.stream();
             println!("  - Stream() accessor verified ✅");
-        },
+        }
         Err(e) => {
             let elapsed = start.elapsed();
-            
+
             println!("⚠️ FUSED KERNEL BUILD FAILED (expected if PTX missing)");
             println!("  - Error: {}", e);
             println!("  - Build time: {:?}", elapsed);
@@ -56,14 +56,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 2: Create inference engine with device (actual API)
     let start = std::time::Instant::now();
-    
+
     let device = candle_core::Device::cuda_if_available(0)?;
     let dtype = candle_core::DType::F16;
-    
+
     let engine = pesti_runner::InferenceEngine::new(device, dtype);
-    
+
     let elapsed = start.elapsed();
-    
+
     println!("✅ Inference Engine Integration");
     println!("  - Device: {:?}", engine.device);
     println!("  - Dtype: {:?}", engine.dtype);
@@ -77,34 +77,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("=== Benchmark Complete ===");
-    
+
     Ok(())
 }
 
 fn run_synthetic_throughput(cuda_rt: &Arc<CudaRuntime>) {
     println!("Synthetic throughput benchmark (CUDA overhead only)");
-    
+
     let num_iterations = 100;
-    
+
     println!("Benchmarking {} iterations", num_iterations);
-    
+
     let start = std::time::Instant::now();
-    
+
     for i in 0..num_iterations {
         if i % 10 == 0 {
             cuda_rt.synchronize().expect("Failed to synchronize");
         }
     }
-    
+
     // Final sync to ensure all work is complete
     cuda_rt.synchronize().expect("Final sync failed");
-    
+
     let elapsed = start.elapsed();
-    
+
     println!();
     println!("Results:");
     println!("  - Total time: {:?}", elapsed);
-    println!("  - Avg per iteration: {:?}", elapsed / num_iterations as u32);
+    println!(
+        "  - Avg per iteration: {:?}",
+        elapsed / num_iterations as u32
+    );
     println!(
         "  - Iterations/sec: {}",
         num_iterations as f64 / elapsed.as_secs_f64()

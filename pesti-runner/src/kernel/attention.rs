@@ -373,7 +373,7 @@ impl AttentionKernel for CudaAttentionKernel {
     ) -> Result<DeviceBuffer<f32>, AttentionError> {
         let num_heads = config.num_heads;
         let head_dim = config.head_dim;
-        
+
         // For now, return zeros - placeholder until full WGMMA integration
         Ok(DeviceBuffer::zeros(num_heads * head_dim))
     }
@@ -407,11 +407,18 @@ impl CudaAttentionKernelBuilder {
     ) -> Self {
         println!(
             "WGMMA builder created for {} (sm_{}.{}), {} MiB free",
-            device_info.name, device_info.compute_capability.0, device_info.compute_capability.1, 
+            device_info.name,
+            device_info.compute_capability.0,
+            device_info.compute_capability.1,
             device_info.free_memory / (1024 * 1024)
         );
 
-        Self { arch, context, stream, device_info }
+        Self {
+            arch,
+            context,
+            stream,
+            device_info,
+        }
     }
 
     pub fn build(self) -> Result<CudaAttentionKernel, AttentionError> {
@@ -419,7 +426,7 @@ impl CudaAttentionKernelBuilder {
             "Building WGMMA kernel for {} architecture",
             self.arch.name()
         );
-        
+
         Ok(CudaAttentionKernel::new(self.arch))
     }
 }

@@ -470,26 +470,32 @@ impl DispatchContext {
         };
 
         // CPU-only path to eliminate H2D overhead and precision loss from repeated transfers
-        debug!(m = query_seq_len * num_heads, n = max_seq, "Attention dispatch: CPU path (no H2D)");
-        
+        debug!(
+            m = query_seq_len * num_heads,
+            n = max_seq,
+            "Attention dispatch: CPU path (no H2D)"
+        );
+
         // Allocate device buffer for query only (one-way transfer), then pull result back once
         let query_bytes = query.len() * std::mem::size_of::<f16>();
         let query_handle = self
             .memory
             .alloc(query_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc query: {e}")))?;
-        
+
         // One H2D transfer (no D2H intermediate for softmax)
         let query_bytes_raw: &[u8] =
             unsafe { std::slice::from_raw_parts(query.as_ptr() as *const u8, query_bytes) };
         self.memory
             .h2d(query_bytes_raw, query_handle)
             .map_err(|e| DispatchError::Transfer(format!("H2D query: {e}")))?;
-        
+
         let query_buf = DeviceBuffer::<f16>::from_backend(query_handle, query.len());
-        
+
         // Run CPU attention (still expects device buffer, but extracts to host internally)
-        let result_buf = self.cpu_attention.forward(&query_buf, key_cache, value_cache, None, &config)
+        let result_buf = self
+            .cpu_attention
+            .forward(&query_buf, key_cache, value_cache, None, &config)
             .map_err(|e| DispatchError::Kernel(format!("CPU attention: {e}")))?;
 
         // One final D2H transfer to get Vec<f32> output (no intermediate softmax H2D)

@@ -28,13 +28,9 @@ pub mod kernel;
 pub mod model;
 pub mod model_loader;
 pub mod model_manager;
+pub mod peft; // Parameter-efficient fine-tuning adapters (LoRA, QLoRA)
 pub mod plug_in;
 pub mod quantized_linear; // Quantized linear layer using tile dequantization
-pub mod peft; // Parameter-efficient fine-tuning adapters (LoRA, QLoRA)
-pub mod trl; // TRL-like training orchestrator
-pub mod unsloth; // Unsloth-style efficient training optimizations
-pub mod unsloth_client; // Unsloth Studio SDK bridge (sync version)
-pub mod unsloth_client_async; // Unsloth Studio SDK bridge (async version with tokio)
 pub mod registry;
 #[cfg(feature = "cuda")]
 pub mod remote_discovery;
@@ -49,7 +45,11 @@ pub mod tokenizer;
 pub mod transformer;
 pub mod transformer_cpu;
 #[cfg(not(feature = "cuda"))]
-pub mod transformer_stub; // CPU-only full forward pass implementation
+pub mod transformer_stub;
+pub mod trl; // TRL-like training orchestrator
+pub mod unsloth; // Unsloth-style efficient training optimizations
+pub mod unsloth_client; // Unsloth Studio SDK bridge (sync version)
+pub mod unsloth_client_async; // Unsloth Studio SDK bridge (async version with tokio) // CPU-only full forward pass implementation
 
 // Re-export CPU transformer primitives for external use
 #[cfg(not(feature = "cuda"))]
@@ -75,9 +75,9 @@ pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
 pub use kernel::{DeviceBuffer, HostTmaDescriptor, Kvcache};
 #[cfg(not(feature = "cuda"))]
 pub use kernel::{DeviceBuffer, kvcache_stub::Kvcache};
-pub use model::{Model, ModelConfig};
 #[cfg(not(feature = "cuda"))]
 pub use model::CpuModel;
+pub use model::{Model, ModelConfig};
 pub use model_loader::ModelLoader;
 pub use model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
 pub use plug_in::PlugInProtocol;

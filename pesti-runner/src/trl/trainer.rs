@@ -8,11 +8,11 @@ use crate::transformer::LlamaModel;
 #[cfg(not(feature = "cuda"))]
 use crate::transformer_stub::LlamaModel;
 
+use super::callbacks::{Callback, Callbacks};
 use super::config::{OptimizerConfig, TrainingConfig};
 use super::dataset::{Batch, Dataset};
 use super::loss::{CrossEntropyLoss, LossFunction};
 use super::state::{Metrics, State};
-use super::callbacks::{Callback, Callbacks};
 
 /// Main trainer for fine-tuning with adapters.
 pub struct Trainer<A: Adapter> {
@@ -73,7 +73,11 @@ impl<A: Adapter> Trainer<A> {
     }
 
     /// Train for one epoch.
-    pub fn train_epoch<D: Dataset>(&mut self, dataset: &D, batch_size: usize) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn train_epoch<D: Dataset>(
+        &mut self,
+        dataset: &D,
+        batch_size: usize,
+    ) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
         self.callbacks.on_train_start(&self.state);
 
         let mut total_loss = 0.0f32;
@@ -127,7 +131,10 @@ impl<A: Adapter> Trainer<A> {
     }
 
     /// Evaluate on a dataset.
-    pub fn evaluate<D: Dataset>(&mut self, dataset: &D) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn evaluate<D: Dataset>(
+        &mut self,
+        dataset: &D,
+    ) -> Result<f32, Box<dyn std::error::Error + Send + Sync>> {
         self.callbacks.on_eval_start(&self.state);
 
         let mut total_loss = 0.0f32;
@@ -161,7 +168,11 @@ impl<A: Adapter> Trainer<A> {
     }
 
     /// Get a batch from dataset.
-    fn get_batch<D: Dataset>(&self, dataset: &D, start_idx: usize) -> Result<Batch, Box<dyn std::error::Error + Send + Sync>> {
+    fn get_batch<D: Dataset>(
+        &self,
+        dataset: &D,
+        start_idx: usize,
+    ) -> Result<Batch, Box<dyn std::error::Error + Send + Sync>> {
         if start_idx >= dataset.len() {
             return Err("Start index out of bounds".into());
         }
@@ -189,7 +200,10 @@ impl<A: Adapter> Trainer<A> {
     }
 
     /// Save checkpoint.
-    pub fn save_checkpoint(&self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn save_checkpoint(
+        &self,
+        path: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // TODO: Implement actual checkpoint saving
         println!("Would save checkpoint to: {}", path);
         Ok(())
@@ -206,7 +220,11 @@ impl<A: Adapter> Trainer<A> {
     }
 
     /// Run full training loop.
-    pub fn train<D: Dataset>(&mut self, train_dataset: &D, eval_dataset: Option<&D>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn train<D: Dataset>(
+        &mut self,
+        train_dataset: &D,
+        eval_dataset: Option<&D>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for _epoch in 0..self.config.num_epochs {
             let avg_loss = self.train_epoch(train_dataset, self.config.batch_size)?;
             println!("Epoch {} - Avg loss: {:.4}", self.state.epoch, avg_loss);
@@ -269,7 +287,12 @@ impl<A: Adapter> TrainerBuilder<A> {
         let model = self.model.ok_or("Model not set")?;
         let adapter = self.adapter.ok_or("Adapter not set")?;
 
-        Ok(Trainer::new(model, adapter, self.config, self.optimizer_config))
+        Ok(Trainer::new(
+            model,
+            adapter,
+            self.config,
+            self.optimizer_config,
+        ))
     }
 }
 

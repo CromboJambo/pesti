@@ -177,10 +177,7 @@ impl LoggingCallback {
 impl Callback for LoggingCallback {
     fn on_epoch_end(&mut self, state: &State) {
         if let Some(avg_loss) = state.avg_loss() {
-            println!(
-                "Epoch {} - Avg loss: {:.4}",
-                state.epoch, avg_loss
-            );
+            println!("Epoch {} - Avg loss: {:.4}", state.epoch, avg_loss);
             // TODO: Write to log file
         }
     }

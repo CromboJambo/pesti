@@ -1,7 +1,9 @@
 //! Example: Using TRL-like training orchestrator with PESTI
 
-use pesti_runner::trl::{Callbacks, CheckpointCallback, LoggingCallback, Metrics, State, Trainer, TrainingConfig};
 use pesti_runner::peft::{Adapter, AdapterConfig, LoRAAdapter};
+use pesti_runner::trl::{
+    Callbacks, CheckpointCallback, LoggingCallback, Metrics, State, Trainer, TrainingConfig,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== TRL-like Training Example ===\n");
@@ -29,8 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Create trainer with builder pattern (placeholder model)
     let mut trainer = Trainer::new(
-        /* model placeholder */ pesti_runner::transformer_stub::LlamaModel::default(), 
-        adapter, 
+        /* model placeholder */ pesti_runner::transformer_stub::LlamaModel::default(),
+        adapter,
         config.clone(),
         pesti_runner::trl::OptimizerConfig::default(),
     );
@@ -45,10 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for epoch in 0..config.num_epochs {
         trainer.state_mut().epoch = epoch;
-        
+
         // Simulate loss values
         let losses: Vec<f32> = (1..=10).map(|i| 2.0 / (i as f32)).collect();
-        
+
         for (step, loss) in losses.iter().enumerate() {
             trainer.state_mut().global_step = epoch * 10 + step;
             trainer.state_mut().record_loss(*loss);
@@ -59,21 +61,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let eval_loss = losses.last().unwrap() / 2.0;
         let metrics = Metrics::new(eval_loss).with_perplexity((-eval_loss).exp());
         trainer.state_mut().record_eval(metrics.clone());
-        
+
         println!(
-            "Epoch {} complete - Eval loss: {:.4}, Perplexity: {:.2}\n", 
-            epoch, eval_loss, metrics.perplexity.unwrap()
+            "Epoch {} complete - Eval loss: {:.4}, Perplexity: {:.2}\n",
+            epoch,
+            eval_loss,
+            metrics.perplexity.unwrap()
         );
     }
 
     // 6. Final state
     println!("Training complete!");
     println!("Final avg loss: {:.4}", trainer.state().avg_loss().unwrap());
-    
+
     if let Some(best) = trainer.state().best_eval() {
         println!("Best eval loss: {:.4}", best.loss);
         println!(
-            "Best perplexity: {:.2}", 
+            "Best perplexity: {:.2}",
             best.perplexity.unwrap_or(f32::INFINITY)
         );
     }

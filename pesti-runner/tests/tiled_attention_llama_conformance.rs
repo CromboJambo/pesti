@@ -176,40 +176,166 @@ fn test_tiled_attention_vs_llama_cpp() {
         "/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax_tiled.ptx",
     );
 
-    // Note: We need to manually launch both kernels since build_from_ptx_file only loads one
-    // For now, let's just run the attention kernel and check if softmax is applied
-    let tiled_kernel = pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
-        pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
-        cuda_rt.context().clone(),
-        stream.clone(),
-    )
-    .build_from_ptx_file(ptx_path, "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi")
-    .unwrap();
+    // Launch both kernels: attention + softmax
+    let tiled_kernel =
+        pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
+            pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            stream.clone(),
+        )
+        .build_from_ptx_file(
+            &ptx_path,
+            "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi",
+        )
+        .unwrap();
 
     let scale = 1.0 / (head_dim as f32).sqrt();
 
-    // Launch kernel - note: tiled variant has same signature as conformant
+    // Launch tiled attention kernel directly (not via conformant launch method)
+    // Tiled kernel expects: grid (ceil(seq_q * num_heads / 128), 1, 1), block (128, 1, 1)
+    let total_qh = seq_q * num_heads;
+    let grid_x = (total_qh + 127) / 128;
+
+    let mut scale_v: f32 = scale;
+    let mut q_v: u64 = q_ptr as u64;
+    let mut k_v: u64 = k_ptr as u64;
+    let mut v_v: u64 = v_ptr as u64;
+    let mut s_v: u64 = s_ptr as u64;
+    let mut seq_q_v: i32 = seq_q as i32;
+    let mut seq_k_v: i32 = seq_k as i32;
+    let mut num_heads_v: i32 = num_heads as i32;
+    let mut head_dim_v: i32 = head_dim as i32;
+    let mut rope_base_v: f32 = rope_base;
+    let mut max_pos_v: i32 = seq_k as i32; // causal mask
+
+    let mut params: [*mut std::ffi::c_void; 11] = [
+        &mut scale_v as *mut f32 as *mut std::ffi::c_void,
+        &mut q_v as *mut u64 as *mut std::ffi::c_void,
+        &mut k_v as *mut u64 as *mut std::ffi::c_void,
+        &mut v_v as *mut u64 as *mut std::ffi::c_void,
+        &mut s_v as *mut u64 as *mut std::ffi::c_void,
+        &mut seq_q_v as *mut i32 as *mut std::ffi::c_void,
+        &mut seq_k_v as *mut i32 as *mut std::ffi::c_void,
+        &mut num_heads_v as *mut i32 as *mut std::ffi::c_void,
+        &mut head_dim_v as *mut i32 as *mut std::ffi::c_void,
+        &mut rope_base_v as *mut f32 as *mut std::ffi::c_void,
+        &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
+    ];
+
+    let grid = (grid_x as u32, 1u32, 1u32);
+    let block = (128u32, 1u32, 1u32);
+    let smem_size = 0u32;
+
     unsafe {
-        tiled_kernel
-            .launch(
-                scale,
-                q_ptr as u64,
-                k_ptr as u64,
-                v_ptr as u64,
-                s_ptr as u64,
-                seq_q,
-                seq_k,
-                num_heads,
-                head_dim,
-                rope_base,
-                seq_k, // max_pos = seq_k for causal mask
-            )
-            .unwrap();
+        use pesti_runner::cuda_shim::launch_kernel;
+        match launch_kernel(
+            tiled_kernel.cu_function(), // Use accessor method to get CUfunction
+            grid,
+            block,
+            smem_size,
+            pesti_runner::cuda_shim::cu_stream(&stream),
+            &mut params,
+        ) {
+            Ok(_) => {} // Success - no action needed
+            Err(e) => panic!("Tiled attention kernel launch: {:?}", e),
+        }
     }
 
     cuda_rt.synchronize().unwrap();
 
-    println!("✅ GPU kernel launched successfully");
+    // Debug: Check for NaN in raw scores after attention kernel
+    let mut debug_scores = vec![0.0f32; seq_q * num_heads * seq_k];
+    unsafe {
+        pesti_runner::cuda_runtime::copy_device_to_host(
+            debug_scores.as_mut_ptr() as *mut u8,
+            s_ptr as *const u8,
+            s_size,
+        )
+        .unwrap();
+    }
+
+    println!();
+    println!("Debug: Raw scores after attention kernel (before softmax):");
+    for q_pos in 0..seq_q {
+        for head in 0..num_heads {
+            let start = q_pos * num_heads * seq_k + head * seq_k;
+            let has_nan = debug_scores[start..start + seq_k]
+                .iter()
+                .any(|&x| x.is_nan());
+            if has_nan {
+                println!("  Query {}, Head {}: HAS NaN", q_pos, head);
+                for k_pos in 0..std::cmp::min(3, seq_k) {
+                    println!("    k_pos {}: {:.6}", k_pos, debug_scores[start + k_pos]);
+                }
+            } else {
+                // Print first 3 values for non-NaN heads too
+                if q_pos == 0 && (head == 2 || head == 3) {
+                    println!(
+                        "  Query {}, Head {}: OK (first 3: {:.6}, {:.6}, {:.6})",
+                        q_pos,
+                        head,
+                        debug_scores[start],
+                        debug_scores[start + 1],
+                        debug_scores[start + 2]
+                    );
+                }
+            }
+        }
+    }
+
+    println!("✅ GPU kernel 1 (attention) launched successfully");
+
+    // Now launch softmax kernel separately
+    let softmax_kernel =
+        pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
+            pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            stream.clone(),
+        )
+        .build_from_ptx_file(ptx_path, "_Z20apply_softmax_kernelPfiii")
+        .unwrap();
+
+    // Launch softmax kernel 2: apply_softmax_kernel(float* s_ptr, int seq_q, int seq_k, int num_heads)
+    let mut s_v2: u64 = s_ptr as u64;
+    let mut seq_q_v2: i32 = seq_q as i32;
+    let mut seq_k_v2: i32 = seq_k as i32;
+    let mut num_heads_v2: i32 = num_heads as i32;
+
+    let mut params2: [*mut std::ffi::c_void; 4] = [
+        &mut s_v2 as *mut u64 as *mut std::ffi::c_void,
+        &mut seq_q_v2 as *mut i32 as *mut std::ffi::c_void,
+        &mut seq_k_v2 as *mut i32 as *mut std::ffi::c_void,
+        &mut num_heads_v2 as *mut i32 as *mut std::ffi::c_void,
+    ];
+
+    let softmax_mangled = "_Z20apply_softmax_kernelPfiii";
+    let softmax_func = match softmax_kernel.module().load_function(softmax_mangled) {
+        Ok(f) => f,
+        Err(e) => panic!("Softmax function lookup {:?}: {:?}", softmax_mangled, e),
+    };
+
+    // Launch config: grid (seq_q, num_heads), block (seq_k)
+    let grid2 = (seq_q as u32, num_heads as u32, 1u32);
+    let block2 = (seq_k as u32, 1u32, 1u32);
+    let smem_size2 = seq_k * 4; // 4 bytes per float
+
+    unsafe {
+        use pesti_runner::cuda_shim::launch_kernel;
+        match launch_kernel(
+            softmax_func.cu_function(),
+            grid2,
+            block2,
+            smem_size2 as u32,
+            pesti_runner::cuda_shim::cu_stream(&stream),
+            &mut params2,
+        ) {
+            Ok(_) => {}
+            Err(e) => panic!("Softmax kernel launch: {:?}", e),
+        }
+    }
+
+    cuda_rt.synchronize().unwrap();
+    println!("✅ GPU kernel 2 (softmax) launched successfully");
 
     // Debug: print raw attention scores (before softmax) for first query, first head
     let mut gpu_raw_scores = vec![0.0f32; seq_q * num_heads * seq_k];
@@ -218,14 +344,18 @@ fn test_tiled_attention_vs_llama_cpp() {
             gpu_raw_scores.as_mut_ptr() as *mut u8,
             s_ptr as *const u8,
             s_size,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     println!();
     println!("Raw attention scores (q_pos=0, head=0):");
     for k_pos in 0..std::cmp::min(5, seq_k) {
         let gpu_idx = 0 * num_heads * seq_k + k_pos;
-        println!("  k_pos {}: GPU score = {:.6}", k_pos, gpu_raw_scores[gpu_idx]);
+        println!(
+            "  k_pos {}: GPU score = {:.6}",
+            k_pos, gpu_raw_scores[gpu_idx]
+        );
     }
 
     // Copy results back to host (after softmax)
@@ -235,7 +365,8 @@ fn test_tiled_attention_vs_llama_cpp() {
             gpu_probs.as_mut_ptr() as *mut u8,
             s_ptr as *const u8,
             s_size,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // Debug: check if softmax is being applied

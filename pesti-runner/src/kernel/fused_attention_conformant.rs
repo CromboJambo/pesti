@@ -5,7 +5,10 @@
 
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::kvcache::Kvcache;
-use cudarc::driver::{safe::{CudaContext, CudaStream}, sys};
+use cudarc::driver::{
+    safe::{CudaContext, CudaStream},
+    sys,
+};
 use half::f16;
 use std::sync::Arc;
 
@@ -56,88 +59,16 @@ pub struct FusedAttentionKernel {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     module: Arc<crate::cuda_shim::CudaModule>, // Use Arc for cloneability
-    function: crate::cuda_shim::CudaFunction, // Use cuda_shim wrapper
-}
-
-#[cfg(feature = "cuda")]
-/// Builder for FusedAttentionKernel.
-pub struct FusedAttentionKernelBuilder {
-    arch: FusedAttentionArch,
-    context: Arc<CudaContext>,
-    stream: Arc<CudaStream>,
-}
-
-#[cfg(feature = "cuda")]
-impl FusedAttentionKernelBuilder {
-    pub fn new(arch: FusedAttentionArch, context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Self {
-        Self { arch, context, stream }
-    }
-
-    pub fn build(self) -> Result<FusedAttentionKernel, AttentionError> {
-        // Architecture check for mma.sync (works on all tensor-core GPUs sm_80..sm_120)
-        match self.arch {
-            FusedAttentionArch::MmaSync => {} // Always works on consumer Blackwell RTX 50-series
-            FusedAttentionArch::Tcgen05 => {} // tcgen05 validation skipped - requires B200 datacenter GPU, skip for now
-        }
-
-        // Load PTX from attention_rope_softmax.ptx (sm_89 target: RTX 4070 Ti SUPER)
-        let ptx_src = include_str!("ptx/attention_rope_softmax.ptx");
-
-        // Use cuda_shim::CudaModule which has load_from_ptx method (returns Arc<CudaModule>)
-        let module = crate::cuda_shim::CudaModule::load_from_ptx(&self.context, ptx_src)
-            .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
-
-        // Get the function from the module via load_function method (returns Result<_, DriverError>)
-        // Note: CUDA name mangling produces: _Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi
-        let mangled_name = "_Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi";
-        let function = match module.load_function(mangled_name) {
-            Ok(f) => f,
-            Err(e) => return Err(AttentionError::Cuda(format!("function lookup {:?}: {:?}", mangled_name, e))),
-        };
-
-        Ok(FusedAttentionKernel {
-            arch: self.arch,
-            context: self.context,
-            stream: self.stream,
-            module, // Not wrapped in Arc since load_from_ptx returns Arc<CudaModule> which can be moved
-            function,
-        })
-    }
-
-    /// Build kernel from external PTX file (for vectorized/tiled variants)
-    pub fn build_from_ptx_file<P: AsRef<std::path::Path>>(
-        self,
-        ptx_path: P,
-        function_name: &str,
-    ) -> Result<FusedAttentionKernel, AttentionError> {
-        use std::fs;
-
-        // Read PTX source from file
-        let ptx_src = fs::read_to_string(ptx_path)
-            .map_err(|e| AttentionError::Cuda(format!("read PTX file: {:?}", e)))?;
-
-        // Load module from PTX string
-        let module = crate::cuda_shim::CudaModule::load_from_ptx(&self.context, &ptx_src)
-            .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
-
-        // Get the function by name (allows custom kernel names)
-        let function = match module.load_function(function_name) {
-            Ok(f) => f,
-            Err(e) => return Err(AttentionError::Cuda(format!("function lookup {:?}: {:?}", function_name, e))),
-        };
-
-        Ok(FusedAttentionKernel {
-            arch: self.arch,
-            context: self.context,
-            stream: self.stream,
-            module,
-            function,
-        })
-    }
+    function: crate::cuda_shim::CudaFunction,  // Use cuda_shim wrapper
 }
 
 #[cfg(feature = "cuda")]
 impl FusedAttentionKernel {
+    /// Get the CUDA module (for loading additional functions from PTX).
+    pub fn module(&self) -> &Arc<crate::cuda_shim::CudaModule> {
+        &self.module
+    }
+
     /// Get the architecture of this fused attention kernel.
     pub fn arch(&self) -> crate::kernel::fused_attention_conformant::FusedAttentionArch {
         self.arch
@@ -151,6 +82,11 @@ impl FusedAttentionKernel {
     /// Get the CUDA stream for kernel launch and memory operations.
     pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
+    }
+
+    /// Get the underlying CUfunction for direct kernel launches (e.g., from test code).
+    pub fn cu_function(&self) -> sys::CUfunction {
+        self.function.cu_function()
     }
 
     /// Launch fused attention kernel.
@@ -218,12 +154,17 @@ impl FusedAttentionKernel {
                 self.function.cu_function(), // Use instance field `self.function` - returns sys::CUfunction
                 grid,
                 block,
-                smem_size,                   // shared_mem_bytes for dynamic shared memory
+                smem_size, // shared_mem_bytes for dynamic shared memory
                 crate::cuda_shim::cu_stream(&self.stream), // Get raw CUstream from CudaStream
-                &mut params,             // Pass reference to array directly
+                &mut params, // Pass reference to array directly
             ) {
                 Ok(_) => {} // Success - no action needed
-                Err(e) => return Err(AttentionError::LaunchFailed(format!("kernel 1 launch: {:?}", e))),
+                Err(e) => {
+                    return Err(AttentionError::LaunchFailed(format!(
+                        "kernel 1 launch: {:?}",
+                        e
+                    )));
+                }
             }
         }
 
@@ -249,12 +190,17 @@ impl FusedAttentionKernel {
 
         unsafe {
             use crate::cuda_shim::launch_kernel;
-            
+
             // Get the softmax kernel function from module
             let softmax_mangled = "_Z20apply_softmax_kernelPfiii";
             let softmax_func = match self.module.load_function(softmax_mangled) {
                 Ok(f) => f,
-                Err(e) => return Err(AttentionError::Cuda(format!("softmax function lookup {:?}: {:?}", softmax_mangled, e))),
+                Err(e) => {
+                    return Err(AttentionError::Cuda(format!(
+                        "softmax function lookup {:?}: {:?}",
+                        softmax_mangled, e
+                    )));
+                }
             };
 
             match launch_kernel(
@@ -266,7 +212,12 @@ impl FusedAttentionKernel {
                 &mut params2,
             ) {
                 Ok(_) => {} // Success
-                Err(e) => return Err(AttentionError::LaunchFailed(format!("kernel 2 launch: {:?}", e))),
+                Err(e) => {
+                    return Err(AttentionError::LaunchFailed(format!(
+                        "kernel 2 launch: {:?}",
+                        e
+                    )));
+                }
             }
         }
 
@@ -274,10 +225,109 @@ impl FusedAttentionKernel {
     }
 }
 
+#[cfg(feature = "cuda")]
+/// Builder for FusedAttentionKernel.
+pub struct FusedAttentionKernelBuilder {
+    arch: FusedAttentionArch,
+    context: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
+}
+
+#[cfg(feature = "cuda")]
+impl FusedAttentionKernelBuilder {
+    pub fn new(
+        arch: FusedAttentionArch,
+        context: Arc<CudaContext>,
+        stream: Arc<CudaStream>,
+    ) -> Self {
+        Self {
+            arch,
+            context,
+            stream,
+        }
+    }
+
+    pub fn build(self) -> Result<FusedAttentionKernel, AttentionError> {
+        // Architecture check for mma.sync (works on all tensor-core GPUs sm_80..sm_120)
+        match self.arch {
+            FusedAttentionArch::MmaSync => {} // Always works on consumer Blackwell RTX 50-series
+            FusedAttentionArch::Tcgen05 => {} // tcgen05 validation skipped - requires B200 datacenter GPU, skip for now
+        }
+
+        // Load PTX from attention_rope_softmax.ptx (sm_89 target: RTX 4070 Ti SUPER)
+        let ptx_src = include_str!("ptx/attention_rope_softmax.ptx");
+
+        // Use cuda_shim::CudaModule which has load_from_ptx method (returns Arc<CudaModule>)
+        let module = crate::cuda_shim::CudaModule::load_from_ptx(&self.context, ptx_src)
+            .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
+
+        // Get the function from the module via load_function method (returns Result<_, DriverError>)
+        // Note: CUDA name mangling produces: _Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi
+        let mangled_name = "_Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi";
+        let function = match module.load_function(mangled_name) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(AttentionError::Cuda(format!(
+                    "function lookup {:?}: {:?}",
+                    mangled_name, e
+                )));
+            }
+        };
+
+        Ok(FusedAttentionKernel {
+            arch: self.arch,
+            context: self.context,
+            stream: self.stream,
+            module, // Not wrapped in Arc since load_from_ptx returns Arc<CudaModule> which can be moved
+            function,
+        })
+    }
+
+    /// Build kernel from external PTX file (for vectorized/tiled variants)
+    pub fn build_from_ptx_file<P: AsRef<std::path::Path>>(
+        self,
+        ptx_path: P,
+        function_name: &str,
+    ) -> Result<FusedAttentionKernel, AttentionError> {
+        use std::fs;
+
+        // Read PTX source from file
+        let ptx_src = fs::read_to_string(ptx_path)
+            .map_err(|e| AttentionError::Cuda(format!("read PTX file: {:?}", e)))?;
+
+        // Load module from PTX string
+        let module = crate::cuda_shim::CudaModule::load_from_ptx(&self.context, &ptx_src)
+            .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
+
+        // Get the function by name (allows custom kernel names)
+        let function = match module.load_function(function_name) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(AttentionError::Cuda(format!(
+                    "function lookup {:?}: {:?}",
+                    function_name, e
+                )));
+            }
+        };
+
+        Ok(FusedAttentionKernel {
+            arch: self.arch,
+            context: self.context,
+            stream: self.stream,
+            module,
+            function,
+        })
+    }
+}
+
 // --- Convenience Builder Function ---
 
 #[cfg(feature = "cuda")]
-pub fn build_fused_attention_kernel_conformant(arch: FusedAttentionArch, context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Result<FusedAttentionKernel, AttentionError> {
+pub fn build_fused_attention_kernel_conformant(
+    arch: FusedAttentionArch,
+    context: Arc<CudaContext>,
+    stream: Arc<CudaStream>,
+) -> Result<FusedAttentionKernel, AttentionError> {
     // Skip device validation - mma.sync works on all consumer Blackwell GPUs (sm_89)
     FusedAttentionKernelBuilder::new(arch, context, stream).build()
 }

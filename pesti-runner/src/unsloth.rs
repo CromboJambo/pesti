@@ -63,7 +63,7 @@ impl UnslothConfig {
 }
 
 /// Gradient checkpointing wrapper for transformer layers.
-/// 
+///
 /// Stores only specified layers' activations during forward pass,
 /// recomputes the rest during backward pass to save memory.
 #[derive(Debug)]
@@ -116,7 +116,7 @@ impl CheckpointedLayer {
 }
 
 /// Flash Attention 2 kernel interface.
-/// 
+///
 /// Implements the memory-efficient attention from:
 /// "FlashAttention-2: Faster Attention with Better Parallelism"
 pub trait FlashAttentionKernel: Send + Sync {
@@ -199,7 +199,7 @@ impl std::fmt::Display for FlashAttentionError {
 impl std::error::Error for FlashAttentionError {}
 
 /// Unsloth memory-efficient LoRA adapter.
-/// 
+///
 /// Combines LoRA with quantized base weights for minimal VRAM usage.
 #[derive(Debug)]
 pub struct MemoryEfficientLoRA {
@@ -223,7 +223,7 @@ impl MemoryEfficientLoRA {
         scaling: f32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let base_size = out_features * in_features;
-        
+
         Ok(Self {
             base_weights: vec![0.0; base_size], // Would be quantized in production
             lora_a: vec![0.0; rank * in_features],
@@ -237,18 +237,18 @@ impl MemoryEfficientLoRA {
     pub fn forward(&self, x: &[f32]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let batch_size = x.len() / self.base_weights.len().max(1);
         let out_features = self.base_weights.len() / self.base_weights.len().max(1);
-        
+
         // Compute base output (would use quantized weights in production)
         let mut output = vec![0.0; batch_size * out_features];
-        
+
         // Compute LoRA output: x @ A @ B
         let lora_output = self.forward_lora(x)?;
-        
+
         // Fuse base + LoRA with scaling
         for (i, &lora_val) in lora_output.iter().enumerate() {
             output[i] += lora_val * self.scaling;
         }
-        
+
         Ok(output)
     }
 
@@ -260,7 +260,7 @@ impl MemoryEfficientLoRA {
 
         // x @ A: [batch, in_features] → [batch, rank]
         let mut x_a = vec![0.0; batch_size * self.rank];
-        
+
         for b in 0..batch_size {
             for r in 0..self.rank {
                 let mut sum = 0.0f32;
@@ -275,7 +275,7 @@ impl MemoryEfficientLoRA {
 
         // (x @ A) @ B: [batch, rank] → [batch, out_features]
         let mut output = vec![0.0; batch_size * out_features];
-        
+
         for b in 0..batch_size {
             for o in 0..out_features {
                 let mut sum = 0.0f32;
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_memory_efficient_lora() {
         let lora = MemoryEfficientLoRA::new(64, 128, 8, 2.0).unwrap();
-        
+
         assert_eq!(lora.rank, 8);
         assert_eq!(lora.scaling, 2.0);
         assert_eq!(lora.lora_a.len(), 8 * 64);
@@ -316,10 +316,10 @@ mod tests {
     #[test]
     fn test_checkpointed_layer() {
         let mut layer = CheckpointedLayer::new(0, true);
-        
+
         let input = vec![1.0; 64];
         let output = layer.forward(&input, |x| x.to_vec());
-        
+
         assert_eq!(output.len(), 64);
         assert!(layer.cached_output.is_some());
     }

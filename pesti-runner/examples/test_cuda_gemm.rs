@@ -5,9 +5,9 @@
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
 use pesti_runner::cuda_runtime::CudaDeviceInfo;
+use pesti_runner::kernel::MemoryBackend;
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::gemm::{CudaGemmKernelBuilder, GemmArch, GemmKernel};
-use pesti_runner::kernel::MemoryBackend;
 use std::sync::Arc;
 
 /// Estimate compute capability from GPU name.
@@ -35,7 +35,9 @@ fn estimate_cc_from_name(name: &str) -> (i32, i32) {
 }
 
 /// Initialize CUDA runtime and return device info + context + stream.
-fn init_cuda(device_idx: usize) -> Result<(Arc<CudaContext>, Arc<CudaStream>, CudaDeviceInfo), Box<dyn std::error::Error>> {
+fn init_cuda(
+    device_idx: usize,
+) -> Result<(Arc<CudaContext>, Arc<CudaStream>, CudaDeviceInfo), Box<dyn std::error::Error>> {
     // First try NVML for reliable device detection
     if let Ok(nvml) = nvml_wrapper::Nvml::init() {
         if let Ok(device_count) = nvml.device_count() {
@@ -85,7 +87,11 @@ fn init_cuda(device_idx: usize) -> Result<(Arc<CudaContext>, Arc<CudaStream>, Cu
 
                 println!(
                     "Found device {}: {} (sm_{}.{}), {} MiB free",
-                    ordinal, name, cc.0, cc.1, free / (1024 * 1024)
+                    ordinal,
+                    name,
+                    cc.0,
+                    cc.1,
+                    free / (1024 * 1024)
                 );
 
                 let context = ctx;
@@ -125,7 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTesting GEMM kernel: {}", arch.name());
 
     // Create builder and build kernel
-    let builder = CudaGemmKernelBuilder::new(arch, context.clone(), stream.clone(), device_info.clone());
+    let builder =
+        CudaGemmKernelBuilder::new(arch, context.clone(), stream.clone(), device_info.clone());
     let kernel = builder.build()?;
 
     println!("✓ Kernel built successfully");
@@ -155,8 +162,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Allocate device buffers manually using the backend
-    let a_bytes: &[u8] = unsafe { std::slice::from_raw_parts(a_data.as_ptr() as *const u8, a_data.len() * 2) };
-    let b_bytes: &[u8] = unsafe { std::slice::from_raw_parts(b_data.as_ptr() as *const u8, b_data.len() * 2) };
+    let a_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(a_data.as_ptr() as *const u8, a_data.len() * 2) };
+    let b_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(b_data.as_ptr() as *const u8, b_data.len() * 2) };
 
     let a_handle = backend.alloc(a_data.len() * 2)?;
     let b_handle = backend.alloc(b_data.len() * 2)?;
@@ -188,7 +197,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read back result
     let mut c_host = vec![0f32; m * n];
-    let c_bytes: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_host.len() * 4) };
+    let c_bytes: &mut [u8] =
+        unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_host.len() * 4) };
     backend.d2h(c_handle, c_bytes)?;
 
     // Verify first few values (manual calculation for small test)

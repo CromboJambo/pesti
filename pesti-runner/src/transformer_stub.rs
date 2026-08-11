@@ -61,8 +61,18 @@ pub struct Linear {
 }
 
 impl Linear {
-    pub fn new(weight: Vec<f32>, bias: Option<Vec<f32>>, in_features: usize, out_features: usize) -> Self {
-        Self { weight, bias, in_features, out_features }
+    pub fn new(
+        weight: Vec<f32>,
+        bias: Option<Vec<f32>>,
+        in_features: usize,
+        out_features: usize,
+    ) -> Self {
+        Self {
+            weight,
+            bias,
+            in_features,
+            out_features,
+        }
     }
 
     pub fn forward(&self, x: &[f32], _batch_size: usize) -> Vec<f32> {
@@ -101,19 +111,26 @@ impl LlamaModel {
             .get_kv_u32("tokenizer.ggml.vocab_size")
             .or_else(|| {
                 // Fallback: check if tokenizer.ggml.tokens exists (array of token strings)
-                header.kv_pairs.iter().find(|kv| kv.key == "tokenizer.ggml.tokens").and_then(|kv| kv.value.as_u32())
+                header
+                    .kv_pairs
+                    .iter()
+                    .find(|kv| kv.key == "tokenizer.ggml.tokens")
+                    .and_then(|kv| kv.value.as_u32())
             })
             .unwrap_or(32000);
 
         let num_heads = header.get_kv_u32("llama.attention.head_count").unwrap_or(8) as usize;
-        let num_kv_heads = header.get_kv_u32("llama.attention.head_count_kv")
+        let num_kv_heads = header
+            .get_kv_u32("llama.attention.head_count_kv")
             .or_else(|| header.get_kv_u32("attention.head_count_kv"))
             .unwrap_or(num_heads as u32) as usize;
 
         let head_dim = header.get_kv_u32("llama.attention.head_size").unwrap_or(64) as usize;
 
         // Get rope_base from KV pairs (GgufHeader doesn't have get_kv_f32 directly)
-        let rope_base = header.kv_pairs.iter()
+        let rope_base = header
+            .kv_pairs
+            .iter()
             .find(|kv| kv.key == "llama.rope_freq_base")
             .and_then(|kv| kv.value.as_f32())
             .unwrap_or(10000.0);
@@ -218,7 +235,9 @@ impl GgufTokenizerConfig {
     /// Build tokenizer config from GGUF header (stub - uses defaults)
     pub fn from_gguf_header(header: &GgufHeader) -> Self {
         // Extract vocab size from metadata if available, otherwise use default
-        let vocab_size = header.get_kv_u32("tokenizer.ggml.vocab_size").unwrap_or(32000) as usize;
+        let vocab_size = header
+            .get_kv_u32("tokenizer.ggml.vocab_size")
+            .unwrap_or(32000) as usize;
 
         // Extract BOS/EOS token IDs from metadata
         let bos_id = header.get_kv_u32("tokenizer.ggml.bos_token_id");

@@ -64,7 +64,7 @@ pub struct AdapterConfig {
 impl Default for AdapterConfig {
     fn default() -> Self {
         Self {
-            rank: 8, // Common default rank for LoRA
+            rank: 8,       // Common default rank for LoRA
             scaling: 16.0, // Typical scaling = rank * alpha (alpha=2)
             adapter_type: AdapterType::LoRA,
         }

@@ -111,9 +111,8 @@ __global__ void apply_softmax_kernel(
     int num_heads
 ) {
     // Each block processes one (q_pos, head) pair
-    // Grid: (seq_q, num_heads), compute 1D qh in ROW-MAJOR order to match attention kernel output
     int total_qh = seq_q * num_heads;
-    int qh = blockIdx.y + blockIdx.x * num_heads;  // FIXED: row-major indexing (q_pos + head * num_heads)
+    int qh = blockIdx.x * num_heads + blockIdx.y;  // FIXED: q_pos first, then head (matches launch config)
     
     if (qh >= total_qh) return;
     
@@ -138,29 +137,28 @@ __global__ void apply_softmax_kernel(
     }
     
     // Parallel reduction to find global max for this (q_pos, head) pair
+    // Each thread writes its partial max to shared memory, then reduce in-place
+    __shared__ float max_vals[128];  // One per thread
+    
+    // Store initial max_val from each thread
+    max_vals[threadIdx.x] = max_val;
+    __syncthreads();
+    
+    // Parallel reduction on shared memory
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (threadIdx.x < stride) {
-            float other = -INFINITY;
-            int other_idx = threadIdx.x + stride;
-            if (other_idx < local_seq_k) {
-                // Match indexing from above
-                int idx = qh / num_heads * num_heads * seq_k + (qh % num_heads) * seq_k + other_idx;
-                other = s_ptr[idx];
-            }
-            if (other > max_val) {
-                max_val = other;
+            float other = max_vals[threadIdx.x + stride];
+            if (other > max_vals[threadIdx.x]) {
+                max_vals[threadIdx.x] = other;
             }
         }
         __syncthreads();
     }
     
-    // Re-read max_val after reduction (thread 0 has the final value)
-    __syncthreads();
+    // Thread 0 has the global max
     if (threadIdx.x == 0) {
-        exp_vals[0] = max_val;
+        max_val = max_vals[0];
     }
-    __syncthreads();
-    max_val = exp_vals[0];
     
     // Phase 2: Compute softmax for each position
     for (int k_pos = threadIdx.x; k_pos < local_seq_k; k_pos += blockDim.x) {
@@ -169,7 +167,12 @@ __global__ void apply_softmax_kernel(
         float val = s_ptr[idx];
         
         float exp_val;
-        if (val == -INFINITY) {
+        if (max_val == -INFINITY) {
+            // All positions in this row are masked (-INF), softmax = 0 everywhere
+            // But we need at least one position to have probability 1.0 for numerical stability
+            // Assign 1.0 to the first unmasked position, or first position if all masked
+            exp_val = (threadIdx.x == 0) ? 1.0f : 0.0f;
+        } else if (val == -INFINITY) {
             exp_val = 0.0f;
         } else {
             exp_val = expf(val - max_val);

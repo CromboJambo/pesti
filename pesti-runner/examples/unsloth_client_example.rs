@@ -1,8 +1,8 @@
 //! Unsloth Studio Rust SDK Example
-//! 
+//!
 //! Demonstrates how to use the type-safe UnslothClient to interact with
 //! the Unsloth Studio API at http://localhost:8888
-//! 
+//!
 //! This example shows:
 //! - Creating a client with session cookie management
 //! - Running model completions with configuration
@@ -46,7 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Duration: {:.2}ms", result.duration_ms);
         }
         Err(e) => {
-            println!("Note: API not available at {}. Error: {}", client.base_url(), e);
+            println!(
+                "Note: API not available at {}. Error: {}",
+                client.base_url(),
+                e
+            );
             println!("  (This is expected if Unsloth Studio isn't running)");
         }
     }
@@ -78,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 3: Recipe workflow execution (data processing)
     println!("--- Example 3: Data Recipe ---");
     use std::collections::HashMap;
-    
+
     let mut config_map = HashMap::new();
     config_map.insert(
         "source_file".to_string(),

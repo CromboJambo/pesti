@@ -83,9 +83,9 @@ impl State {
             None
         } else {
             // Best = lowest loss (lower is better for loss metrics)
-            self.eval_metrics.iter().min_by(|a, b| {
-                a.loss.total_cmp(&b.loss)
-            })
+            self.eval_metrics
+                .iter()
+                .min_by(|a, b| a.loss.total_cmp(&b.loss))
         }
     }
 }

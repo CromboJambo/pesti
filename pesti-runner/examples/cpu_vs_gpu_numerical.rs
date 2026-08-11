@@ -7,8 +7,8 @@ use pesti_runner::CpuModel;
 use std::path::Path;
 
 // Tolerances for numerical comparison
-const ABSOLUTE_TOLERANCE: f32 = 1e-5;   // Absolute difference threshold
-const RELATIVE_TOLERANCE: f32 = 1e-4;   // Relative difference threshold
+const ABSOLUTE_TOLERANCE: f32 = 1e-5; // Absolute difference threshold
+const RELATIVE_TOLERANCE: f32 = 1e-4; // Relative difference threshold
 
 fn main() {
     let model_path = Path::new(
@@ -28,9 +28,7 @@ fn main() {
 
     println!(
         "✓ Loaded Qwen2.5-0.5B:\n  - Hidden size: {}\n  - Vocab size: {}\n  - Layers: {}",
-        cpu_model.hidden_size,
-        cpu_model.vocab_size,
-        cpu_model.config.num_layers
+        cpu_model.hidden_size, cpu_model.vocab_size, cpu_model.config.num_layers
     );
 
     // Create test input (sample from middle of vocab to avoid edge cases)
@@ -51,12 +49,16 @@ fn main() {
     println!(
         "✓ CPU output shape: {} logits\n  First 5 values: {:.6}, {:.6}, {:.6}, {:.6}, {:.6}",
         cpu_logits.len(),
-        cpu_logits[0], cpu_logits[1], cpu_logits[2], cpu_logits[3], cpu_logits[4]
+        cpu_logits[0],
+        cpu_logits[1],
+        cpu_logits[2],
+        cpu_logits[3],
+        cpu_logits[4]
     );
 
     // Simulate GPU path (stub - will be replaced with real GPU forward later)
     println!("\n🎮 Running forward pass on GPU path...");
-    
+
     // For now, simulate what the GPU would produce: identical to CPU but with tiny numerical noise
     // This tests the comparison logic itself
     let gpu_logits: Vec<f32> = cpu_logits
@@ -67,7 +69,11 @@ fn main() {
     println!(
         "✓ GPU output shape: {} logits\n  First 5 values: {:.6}, {:.6}, {:.6}, {:.6}, {:.6}",
         gpu_logits.len(),
-        gpu_logits[0], gpu_logits[1], gpu_logits[2], gpu_logits[3], gpu_logits[4]
+        gpu_logits[0],
+        gpu_logits[1],
+        gpu_logits[2],
+        gpu_logits[3],
+        gpu_logits[4]
     );
 
     // Compare outputs
@@ -79,14 +85,20 @@ fn main() {
             println!("✅ PASS: Outputs are numerically equivalent!");
             println!("  Max difference: {:.8}", max_diff);
             println!("  Mean difference: {:.8}", mean_diff);
-            println!("  Tolerances: abs={}, rel={}", ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE);
+            println!(
+                "  Tolerances: abs={}, rel={}",
+                ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE
+            );
         }
         ComparisonResult::Fail(max_diff, mean_diff, num_mismatches) => {
             println!("⚠️  WARNING: Outputs differ beyond tolerance!");
             println!("  Max difference: {:.8}", max_diff);
             println!("  Mean difference: {:.8}", mean_diff);
             println!("  Mismatches found: {}", num_mismatches);
-            println!("  Tolerances: abs={}, rel={}", ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE);
+            println!(
+                "  Tolerances: abs={}, rel={}",
+                ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE
+            );
             println!("\n  First 3 mismatches:");
             print_first_mismatches(&cpu_logits, &gpu_logits, 3);
         }
@@ -100,9 +112,9 @@ fn simulate_gpu_forward(input: &[f32], model: &CpuModel) -> Vec<f32> {
     // TODO: Replace with actual GPU forward pass using transformer::LlamaModel
     // For now, return identical values to test comparison logic
     // This simulates what would happen if both paths were implemented identically
-    
+
     println!("  (Stub: GPU path currently returns identical values for testing)");
-    
+
     // Simulate tiny numerical differences that might occur in real GPU computation
     input
         .iter()
@@ -117,7 +129,7 @@ fn simulate_gpu_forward(input: &[f32], model: &CpuModel) -> Vec<f32> {
 
 /// Comparison result types
 enum ComparisonResult {
-    Pass(f32, f32),      // max_diff, mean_diff
+    Pass(f32, f32),        // max_diff, mean_diff
     Fail(f32, f32, usize), // max_diff, mean_diff, num_mismatches
 }
 
@@ -182,7 +194,10 @@ fn print_first_mismatches(cpu: &[f32], gpu: &[f32], n: usize) {
 
         let is_within_tolerance = abs_diff <= ABSOLUTE_TOLERANCE || rel_diff <= RELATIVE_TOLERANCE;
         if !is_within_tolerance && i < n * 2 {
-            println!("    [{}] CPU={:.8}, GPU={:.8}, diff={:.8}", i, cpu_val, gpu_val, abs_diff);
+            println!(
+                "    [{}] CPU={:.8}, GPU={:.8}, diff={:.8}",
+                i, cpu_val, gpu_val, abs_diff
+            );
         }
 
         if i >= n - 1 {

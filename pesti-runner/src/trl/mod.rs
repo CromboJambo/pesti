@@ -36,7 +36,9 @@ pub mod state;
 pub mod trainer;
 
 // Re-exports
-pub use callbacks::{Callback, Callbacks, CheckpointCallback, LoggingCallback, ProgressBarCallback};
+pub use callbacks::{
+    Callback, Callbacks, CheckpointCallback, LoggingCallback, ProgressBarCallback,
+};
 pub use config::{OptimizerConfig, TrainingConfig};
 pub use dataset::{Batch, Dataset, DatasetLoader, InMemoryDataset};
 pub use loss::{CrossEntropyLoss, KLDivergenceLoss, LossFunction, LossType, PairwiseRankingLoss};

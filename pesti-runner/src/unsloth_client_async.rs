@@ -1,16 +1,16 @@
 //! Unsloth Studio Rust SDK - Async Version
-//! 
+//!
 //! High-performance async interface to Unsloth Studio API using tokio + reqwest
-//! 
+//!
 //! This complements the sync version with:
 //! - Non-blocking HTTP calls for concurrent model inference
 //! - Stream-based responses for long-running generations
 //! - Better throughput for batch processing
-//! 
+//!
 //! Usage:
 //! ```rust,no_run
 //! use pesti_runner::unsloth_client_async::{AsyncUnslothClient, ModelConfig};
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = AsyncUnslothClient::new("http://localhost:8888").await?;
@@ -32,12 +32,12 @@ use serde::{Deserialize, Serialize};
 
 // Re-export types from sync module for consistency
 pub use crate::unsloth_client::{
-    ChatMessage, ChatThread, ClientError, ModelConfig, ModelInfo, ModelsListResponse, 
-    Quantization, RecipeJob, RecipeJobResult,
+    ChatMessage, ChatThread, ClientError, ModelConfig, ModelInfo, ModelsListResponse, Quantization,
+    RecipeJob, RecipeJobResult,
 };
 
 /// Async Unsloth Studio client using tokio + reqwest async runtime
-/// 
+///
 /// Designed for high-throughput scenarios where you need to:
 /// - Run multiple model calls concurrently
 /// - Stream long-running generations
@@ -80,17 +80,23 @@ impl AsyncUnslothClient {
     /// List all available models (GUI: "Run Model" dropdown)
     pub async fn list_models(&self) -> Result<Vec<ModelInfo>, ClientError> {
         let url = format!("{}/api/models/list", self.base_url);
-        
-        let response = self.send_async_request(url, reqwest::Method::GET, None).await?;
+
+        let response = self
+            .send_async_request(url, reqwest::Method::GET, None)
+            .await?;
         let result = response.json::<ModelsListResponse>().await?;
-        
+
         Ok(result.models)
     }
 
     /// Run a model with given prompt (GUI: "Run Model")
-    pub async fn run_model(&self, prompt: &str, config: &ModelConfig) -> Result<ChatResult, ClientError> {
+    pub async fn run_model(
+        &self,
+        prompt: &str,
+        config: &ModelConfig,
+    ) -> Result<ChatResult, ClientError> {
         let url = format!("{}/api/inference/completions", self.base_url);
-        
+
         let payload = serde_json::json!({
             "prompt": prompt,
             "model_name": config.model_name,
@@ -100,18 +106,20 @@ impl AsyncUnslothClient {
             "quantization": format!("{:?}", config.quantization).to_lowercase()
         });
 
-        let response = self.send_async_request(url, reqwest::Method::POST, Some(payload)).await?;
+        let response = self
+            .send_async_request(url, reqwest::Method::POST, Some(payload))
+            .await?;
         Ok(response.json().await?)
     }
 
     /// Chat interface with multi-turn conversation (GUI: "Unsloth Chat")
     pub async fn chat(
-        &self, 
-        messages: &[ChatMessage], 
-        config: &ModelConfig
+        &self,
+        messages: &[ChatMessage],
+        config: &ModelConfig,
     ) -> Result<ChatResult, ClientError> {
         let url = format!("{}/api/inference/chat/completions", self.base_url);
-        
+
         let payload = serde_json::json!({
             "messages": messages,
             "model_name": config.model_name,
@@ -121,51 +129,59 @@ impl AsyncUnslothClient {
             "quantization": format!("{:?}", config.quantization).to_lowercase()
         });
 
-        let response = self.send_async_request(url, reqwest::Method::POST, Some(payload)).await?;
+        let response = self
+            .send_async_request(url, reqwest::Method::POST, Some(payload))
+            .await?;
         Ok(response.json().await?)
     }
 
     /// Create a new chat thread (GUI: start new conversation)
     pub async fn create_chat_thread(&self, model_name: &str) -> Result<ChatThread, ClientError> {
         let url = format!("{}/api/chat/threads", self.base_url);
-        
+
         let payload = serde_json::json!({
             "model_name": model_name
         });
 
-        let response = self.send_async_request(url, reqwest::Method::POST, Some(payload)).await?;
+        let response = self
+            .send_async_request(url, reqwest::Method::POST, Some(payload))
+            .await?;
         Ok(response.json().await?)
     }
 
     /// Execute a data recipe job (GUI: "Run Data Recipe")
     pub async fn execute_recipe(&self, recipe: &RecipeJob) -> Result<RecipeJobResult, ClientError> {
         let url = format!("{}/api/data-recipe/jobs", self.base_url);
-        
-        let response = self.send_async_request(
-            url, 
-            reqwest::Method::POST, 
-            Some(serde_json::to_value(recipe)?)
-        ).await?;
-        
+
+        let response = self
+            .send_async_request(
+                url,
+                reqwest::Method::POST,
+                Some(serde_json::to_value(recipe)?),
+            )
+            .await?;
+
         Ok(response.json().await?)
     }
 
     /// Export recipe definition as JSON (for visualization tools)
     pub async fn export_recipe(&self, recipe_id: &str) -> Result<serde_json::Value, ClientError> {
         let url = format!("{}/api/data-recipe/{}/export", self.base_url, recipe_id);
-        
-        let response = self.send_async_request(url, reqwest::Method::GET, None).await?;
+
+        let response = self
+            .send_async_request(url, reqwest::Method::GET, None)
+            .await?;
         Ok(response.json().await?)
     }
 
     /// Stream a model completion (returns streaming response)
     pub async fn stream_model(
-        &self, 
-        prompt: &str, 
-        config: &ModelConfig
+        &self,
+        prompt: &str,
+        config: &ModelConfig,
     ) -> Result<reqwest::Response, ClientError> {
         let url = format!("{}/api/inference/completions/stream", self.base_url);
-        
+
         let payload = serde_json::json!({
             "prompt": prompt,
             "model_name": config.model_name,
@@ -176,17 +192,21 @@ impl AsyncUnslothClient {
             "stream": true
         });
 
-        let response = self.send_async_request(url, reqwest::Method::POST, Some(payload)).await?;
-        
+        let response = self
+            .send_async_request(url, reqwest::Method::POST, Some(payload))
+            .await?;
+
         // Verify it's actually a stream by checking headers
         let headers = response.headers();
         if let Some(content_type) = headers.get(reqwest::header::CONTENT_TYPE) {
             let content_type_str = content_type.to_str().unwrap_or("");
-            if content_type_str.contains("text/event-stream") || content_type_str.contains("application/x-ndjson") {
+            if content_type_str.contains("text/event-stream")
+                || content_type_str.contains("application/x-ndjson")
+            {
                 return Ok(response);
             }
         }
-        
+
         // If not a stream, still return response (caller can handle it)
         Ok(response)
     }

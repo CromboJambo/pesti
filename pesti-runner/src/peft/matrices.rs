@@ -30,7 +30,11 @@ impl MatA {
 
     /// Compute Ax where A is [rows x cols] and x is [batch_size, cols].
     /// Returns [batch_size, rows].
-    pub fn matmul_transpose(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>, super::AdapterError> {
+    pub fn matmul_transpose(
+        &self,
+        x: &[f32],
+        batch_size: usize,
+    ) -> Result<Vec<f32>, super::AdapterError> {
         if self.rows == 0 || self.cols == 0 {
             return Err(super::AdapterError::NotInitialized);
         }

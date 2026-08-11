@@ -27,43 +27,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // CPU reference (with RoPE applied)
     let mut cpu_scores = vec![0.0f32; seq_q * num_heads * seq_k];
-    
+
     let half_dim = head_dim as f32 / 2.0;
-    
+
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             for k_pos in 0..seq_k {
                 let mut sum_dot = 0.0f32;
-                
+
                 for d in (0..head_dim).step_by(2) {
                     let q_idx = q_pos * num_heads * head_dim + head * head_dim + d;
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + d;
-                    
+
                     let q0 = q_h[q_idx].to_f32();
                     let q1 = q_h[q_idx + 1].to_f32();
                     let k0 = k_h[k_idx].to_f32();
                     let k1 = k_h[k_idx + 1].to_f32();
-                    
+
                     // Apply RoPE to Q pair
                     let inv_freq = 1.0f32 / (rope_base.powf((d as f32 / 2.0) / half_dim));
                     let freq_q = q_pos as f32 * inv_freq;
                     let c_q = freq_q.cos();
                     let s_q = freq_q.sin();
-                    
+
                     let new_q0 = q0 * c_q - q1 * s_q;
                     let new_q1 = q0 * s_q + q1 * c_q;
-                    
+
                     // Apply RoPE to K pair
                     let freq_k = k_pos as f32 * inv_freq;
                     let c_k = freq_k.cos();
                     let s_k = freq_k.sin();
-                    
+
                     let new_k0 = k0 * c_k - k1 * s_k;
                     let new_k1 = k0 * s_k + k1 * c_k;
-                    
+
                     sum_dot += new_q0 * new_k0 + new_q1 * new_k1;
                 }
-                
+
                 let cpu_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
                 cpu_scores[cpu_idx] = sum_dot;
             }
@@ -86,20 +86,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Load tiled kernel
-    let ptx_path = "/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax_tiled.ptx";
-    
+    let ptx_path =
+        "/home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/attention_rope_softmax_tiled.ptx";
+
     if std::path::Path::new(ptx_path).exists() {
         println!("✅ Loading tiled kernel from {}", ptx_path);
 
-        let kernel = pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
-            pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
-            cuda_rt.context().clone(),
-            stream.clone(),
-        )
-        .build_from_ptx_file(
-            ptx_path,
-            "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi",
-        )?;
+        let kernel =
+            pesti_runner::kernel::fused_attention_conformant::FusedAttentionKernelBuilder::new(
+                pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+                cuda_rt.context().clone(),
+                stream.clone(),
+            )
+            .build_from_ptx_file(
+                ptx_path,
+                "_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi",
+            )?;
 
         // Launch kernel (no softmax yet - raw dot products only)
         let scale = 1.0 / (head_dim as f32).sqrt();
@@ -130,37 +132,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Compare with CPU reference (raw dot products)
         let mut max_error = 0.0;
         let total_elements = seq_q * num_heads * seq_k;
-        
+
         for i in 0..total_elements {
             let diff = (gpu_scores[i] - cpu_scores[i]).abs();
             if diff > max_error {
                 max_error = diff;
             }
-            
+
             // Debug: print first few mismatches
             if diff > 1.0 && i < 20 {
-                println!("Mismatch at idx {}: GPU={}, CPU={}", i, gpu_scores[i], cpu_scores[i]);
+                println!(
+                    "Mismatch at idx {}: GPU={}, CPU={}",
+                    i, gpu_scores[i], cpu_scores[i]
+                );
             }
         }
-        
+
         // Also check last few elements (might be uninitialized)
         for i in (total_elements - 10..total_elements).filter(|&x| x > 9) {
             let diff = (gpu_scores[i] - cpu_scores[i]).abs();
             if diff > max_error {
                 max_error = diff;
             }
-            println!("Last idx {}: GPU={}, CPU={}, diff={}", i, gpu_scores[i], cpu_scores[i], diff);
+            println!(
+                "Last idx {}: GPU={}, CPU={}, diff={}",
+                i, gpu_scores[i], cpu_scores[i], diff
+            );
         }
 
         println!("✅ Tiled kernel executed successfully");
-        println!("First 10 CPU scores: {:?}", &cpu_scores[..10.min(cpu_scores.len())]);
-        println!("First 10 GPU scores: {:?}", &gpu_scores[..10.min(gpu_scores.len())]);
+        println!(
+            "First 10 CPU scores: {:?}",
+            &cpu_scores[..10.min(cpu_scores.len())]
+        );
+        println!(
+            "First 10 GPU scores: {:?}",
+            &gpu_scores[..10.min(gpu_scores.len())]
+        );
         println!("Max absolute error: {:.2e}", max_error);
 
         if max_error < 1e-4 {
             println!("✅ PASS: Numerical conformance achieved (error < 1e-4)");
         } else {
-            println!("⚠️  WARNING: Error exceeds threshold ({} > 1e-4)", max_error);
+            println!(
+                "⚠️  WARNING: Error exceeds threshold ({} > 1e-4)",
+                max_error
+            );
         }
     } else {
         println!("⚠️  PTX file not found at {}", ptx_path);

@@ -7,11 +7,12 @@
 //
 
 .version 9.3
-.target sm_89
+.target sm_75
 .address_size 64
 
 	// .globl	_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi
 // _ZZ20apply_softmax_kernelPfiiiE8exp_vals has been demoted
+// _ZZ20apply_softmax_kernelPfiiiE8max_vals has been demoted
 .global .align 4 .b8 __cudart_i2opi_f[24] = {65, 144, 67, 60, 153, 149, 98, 219, 192, 221, 52, 245, 209, 87, 39, 252, 41, 21, 68, 78, 110, 131, 249, 162};
 
 .visible .entry _Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi(
@@ -811,202 +812,201 @@ $L__BB0_63:
 	.param .u32 _Z20apply_softmax_kernelPfiii_param_3
 )
 {
-	.reg .pred 	%p<24>;
-	.reg .f32 	%f<51>;
-	.reg .b32 	%r<47>;
-	.reg .b64 	%rd<11>;
+	.reg .pred 	%p<25>;
+	.reg .f32 	%f<44>;
+	.reg .b32 	%r<49>;
+	.reg .b64 	%rd<9>;
 	// demoted variable
 	.shared .align 4 .b8 _ZZ20apply_softmax_kernelPfiiiE8exp_vals[512];
+	// demoted variable
+	.shared .align 4 .b8 _ZZ20apply_softmax_kernelPfiiiE8max_vals[512];
 
 	ld.param.u64 	%rd4, [_Z20apply_softmax_kernelPfiii_param_0];
-	ld.param.u32 	%r25, [_Z20apply_softmax_kernelPfiii_param_1];
-	ld.param.u32 	%r24, [_Z20apply_softmax_kernelPfiii_param_2];
-	ld.param.u32 	%r26, [_Z20apply_softmax_kernelPfiii_param_3];
+	ld.param.u32 	%r24, [_Z20apply_softmax_kernelPfiii_param_1];
+	ld.param.u32 	%r23, [_Z20apply_softmax_kernelPfiii_param_2];
+	ld.param.u32 	%r25, [_Z20apply_softmax_kernelPfiii_param_3];
 	cvta.to.global.u64 	%rd1, %rd4;
-	mov.u32 	%r27, %ctaid.x;
-	mov.u32 	%r28, %ctaid.y;
-	mad.lo.s32 	%r1, %r27, %r26, %r28;
-	mul.lo.s32 	%r29, %r26, %r25;
-	setp.ge.s32 	%p1, %r1, %r29;
-	@%p1 bra 	$L__BB1_32;
+	mov.u32 	%r26, %ctaid.x;
+	mov.u32 	%r27, %ctaid.y;
+	mad.lo.s32 	%r1, %r26, %r25, %r27;
+	mul.lo.s32 	%r28, %r25, %r24;
+	setp.ge.s32 	%p1, %r1, %r28;
+	@%p1 bra 	$L__BB1_30;
 
-	mov.u32 	%r46, %tid.x;
-	setp.lt.s32 	%p2, %r46, %r24;
+	mov.u32 	%r48, %tid.x;
+	setp.lt.s32 	%p2, %r48, %r23;
 	@%p2 bra 	$L__BB1_3;
 	bra.uni 	$L__BB1_2;
 
 $L__BB1_3:
-	mul.lo.s32 	%r3, %r1, %r24;
-	mov.f32 	%f47, 0fFF800000;
+	mul.lo.s32 	%r3, %r1, %r23;
+	mov.f32 	%f41, 0fFF800000;
 	mov.u32 	%r4, %ntid.x;
-	mov.u32 	%r41, %r46;
+	mov.u32 	%r43, %r48;
 
 $L__BB1_4:
-	add.s32 	%r30, %r41, %r3;
-	mul.wide.s32 	%rd5, %r30, 4;
+	add.s32 	%r29, %r43, %r3;
+	mul.wide.s32 	%rd5, %r29, 4;
 	add.s64 	%rd6, %rd1, %rd5;
-	ld.global.f32 	%f20, [%rd6];
-	setp.gt.f32 	%p3, %f20, %f47;
-	selp.f32 	%f47, %f20, %f47, %p3;
-	add.s32 	%r41, %r41, %r4;
-	setp.lt.s32 	%p4, %r41, %r24;
+	ld.global.f32 	%f16, [%rd6];
+	setp.gt.f32 	%p3, %f16, %f41;
+	selp.f32 	%f41, %f16, %f41, %p3;
+	add.s32 	%r43, %r43, %r4;
+	setp.lt.s32 	%p4, %r43, %r23;
 	@%p4 bra 	$L__BB1_4;
 	bra.uni 	$L__BB1_5;
 
 $L__BB1_2:
-	mov.f32 	%f47, 0fFF800000;
+	mov.f32 	%f41, 0fFF800000;
 
 $L__BB1_5:
-	mov.u32 	%r7, %ntid.x;
-	shr.u32 	%r45, %r7, 1;
-	setp.eq.s32 	%p5, %r45, 0;
-	@%p5 bra 	$L__BB1_12;
+	shl.b32 	%r30, %r48, 2;
+	mov.u32 	%r31, _ZZ20apply_softmax_kernelPfiiiE8max_vals;
+	add.s32 	%r7, %r31, %r30;
+	st.shared.f32 	[%r7], %f41;
+	bar.sync 	0;
+	mov.u32 	%r8, %ntid.x;
+	shr.u32 	%r47, %r8, 1;
+	setp.eq.s32 	%p5, %r47, 0;
+	@%p5 bra 	$L__BB1_11;
 
-	mul.lo.s32 	%r9, %r1, %r24;
-	mov.u32 	%r42, %r45;
+	mov.u32 	%r44, %r47;
 
 $L__BB1_7:
-	setp.ge.u32 	%p6, %r46, %r42;
-	@%p6 bra 	$L__BB1_11;
+	setp.ge.u32 	%p6, %r48, %r44;
+	@%p6 bra 	$L__BB1_10;
 
-	add.s32 	%r11, %r42, %r46;
-	setp.ge.s32 	%p7, %r11, %r24;
-	mov.f32 	%f46, 0fFF800000;
+	shl.b32 	%r32, %r44, 2;
+	add.s32 	%r33, %r7, %r32;
+	ld.shared.f32 	%f17, [%r7];
+	ld.shared.f32 	%f4, [%r33];
+	setp.leu.f32 	%p7, %f4, %f17;
 	@%p7 bra 	$L__BB1_10;
 
-	add.s32 	%r31, %r11, %r9;
-	mul.wide.s32 	%rd7, %r31, 4;
-	add.s64 	%rd8, %rd1, %rd7;
-	ld.global.f32 	%f46, [%rd8];
+	st.shared.f32 	[%r7], %f4;
 
 $L__BB1_10:
-	setp.gt.f32 	%p8, %f46, %f47;
-	selp.f32 	%f47, %f46, %f47, %p8;
+	bar.sync 	0;
+	shr.u32 	%r44, %r44, 1;
+	setp.ne.s32 	%p8, %r44, 0;
+	@%p8 bra 	$L__BB1_7;
 
 $L__BB1_11:
-	bar.sync 	0;
-	shr.u32 	%r42, %r42, 1;
-	setp.ne.s32 	%p9, %r42, 0;
-	@%p9 bra 	$L__BB1_7;
+	setp.ge.s32 	%p9, %r48, %r23;
+	ld.shared.f32 	%f18, [_ZZ20apply_softmax_kernelPfiiiE8max_vals];
+	setp.eq.s32 	%p10, %r48, 0;
+	selp.f32 	%f5, %f18, %f41, %p10;
+	mov.u32 	%r35, _ZZ20apply_softmax_kernelPfiiiE8exp_vals;
+	add.s32 	%r12, %r35, %r30;
+	@%p9 bra 	$L__BB1_18;
 
-$L__BB1_12:
-	bar.sync 	0;
-	setp.ne.s32 	%p10, %r46, 0;
-	@%p10 bra 	$L__BB1_14;
+	mul.lo.s32 	%r13, %r1, %r23;
+	selp.f32 	%f6, 0f3F800000, 0f00000000, %p10;
+	mov.u32 	%r45, %r48;
 
-	st.shared.f32 	[_ZZ20apply_softmax_kernelPfiiiE8exp_vals], %f47;
+$L__BB1_13:
+	add.s32 	%r36, %r45, %r13;
+	mul.wide.s32 	%rd7, %r36, 4;
+	add.s64 	%rd2, %rd1, %rd7;
+	ld.global.f32 	%f7, [%rd2];
+	setp.eq.f32 	%p12, %f5, 0fFF800000;
+	mov.f32 	%f42, %f6;
+	@%p12 bra 	$L__BB1_16;
 
-$L__BB1_14:
-	setp.ge.s32 	%p11, %r46, %r24;
-	bar.sync 	0;
-	shl.b32 	%r32, %r46, 2;
-	mov.u32 	%r33, _ZZ20apply_softmax_kernelPfiiiE8exp_vals;
-	add.s32 	%r13, %r33, %r32;
-	@%p11 bra 	$L__BB1_20;
-
-	ld.shared.f32 	%f10, [_ZZ20apply_softmax_kernelPfiiiE8exp_vals];
-	mul.lo.s32 	%r14, %r1, %r24;
-	mov.u32 	%r43, %r46;
-
-$L__BB1_16:
-	add.s32 	%r34, %r43, %r14;
-	mul.wide.s32 	%rd9, %r34, 4;
-	add.s64 	%rd2, %rd1, %rd9;
-	ld.global.f32 	%f11, [%rd2];
-	setp.eq.f32 	%p12, %f11, 0fFF800000;
-	mov.f32 	%f49, 0f00000000;
-	@%p12 bra 	$L__BB1_18;
-
-	sub.f32 	%f23, %f11, %f10;
-	mov.f32 	%f24, 0f3F000000;
-	mov.f32 	%f25, 0f3BBB989D;
-	fma.rn.f32 	%f26, %f23, %f25, %f24;
-	cvt.sat.f32.f32 	%f27, %f26;
-	mov.f32 	%f28, 0f4B400001;
-	mov.f32 	%f29, 0f437C0000;
-	fma.rm.f32 	%f30, %f27, %f29, %f28;
-	add.f32 	%f31, %f30, 0fCB40007F;
-	neg.f32 	%f32, %f31;
-	mov.f32 	%f33, 0f3FB8AA3B;
-	fma.rn.f32 	%f34, %f23, %f33, %f32;
-	mov.f32 	%f35, 0f32A57060;
-	fma.rn.f32 	%f36, %f23, %f35, %f34;
-	mov.b32 	%r35, %f30;
-	shl.b32 	%r36, %r35, 23;
-	mov.b32 	%f37, %r36;
-	ex2.approx.ftz.f32 	%f38, %f36;
-	mul.f32 	%f49, %f38, %f37;
-
-$L__BB1_18:
-	st.global.f32 	[%rd2], %f49;
-	add.s32 	%r43, %r43, %r7;
-	setp.lt.s32 	%p13, %r43, %r24;
+	setp.eq.f32 	%p13, %f7, 0fFF800000;
+	mov.f32 	%f42, 0f00000000;
 	@%p13 bra 	$L__BB1_16;
 
-	st.shared.f32 	[%r13], %f49;
+	sub.f32 	%f20, %f7, %f5;
+	mov.f32 	%f21, 0f3F000000;
+	mov.f32 	%f22, 0f3BBB989D;
+	fma.rn.f32 	%f23, %f20, %f22, %f21;
+	cvt.sat.f32.f32 	%f24, %f23;
+	mov.f32 	%f25, 0f4B400001;
+	mov.f32 	%f26, 0f437C0000;
+	fma.rm.f32 	%f27, %f24, %f26, %f25;
+	add.f32 	%f28, %f27, 0fCB40007F;
+	neg.f32 	%f29, %f28;
+	mov.f32 	%f30, 0f3FB8AA3B;
+	fma.rn.f32 	%f31, %f20, %f30, %f29;
+	mov.f32 	%f32, 0f32A57060;
+	fma.rn.f32 	%f33, %f20, %f32, %f31;
+	mov.b32 	%r37, %f27;
+	shl.b32 	%r38, %r37, 23;
+	mov.b32 	%f34, %r38;
+	ex2.approx.ftz.f32 	%f35, %f33;
+	mul.f32 	%f42, %f35, %f34;
+
+$L__BB1_16:
+	st.global.f32 	[%rd2], %f42;
+	add.s32 	%r45, %r45, %r8;
+	setp.lt.s32 	%p14, %r45, %r23;
+	@%p14 bra 	$L__BB1_13;
+
+	st.shared.f32 	[%r12], %f42;
+
+$L__BB1_18:
+	bar.sync 	0;
+	setp.ge.u32 	%p15, %r48, %r8;
+	@%p15 bra 	$L__BB1_21;
+
+	mov.u32 	%r46, %r48;
 
 $L__BB1_20:
-	bar.sync 	0;
-	setp.ge.u32 	%p14, %r46, %r7;
-	@%p14 bra 	$L__BB1_23;
+	add.s32 	%r17, %r46, %r8;
+	setp.lt.u32 	%p16, %r17, %r46;
+	mov.u32 	%r46, %r17;
+	@%p16 bra 	$L__BB1_20;
 
-	mov.u32 	%r44, %r46;
+$L__BB1_21:
+	@%p5 bra 	$L__BB1_25;
 
 $L__BB1_22:
-	add.s32 	%r18, %r44, %r7;
-	setp.lt.u32 	%p15, %r18, %r44;
-	mov.u32 	%r44, %r18;
-	@%p15 bra 	$L__BB1_22;
-
-$L__BB1_23:
-	@%p5 bra 	$L__BB1_27;
-
-$L__BB1_24:
-	add.s32 	%r37, %r45, %r46;
-	setp.ge.u32 	%p17, %r37, %r24;
-	setp.ge.u32 	%p18, %r46, %r45;
-	or.pred  	%p19, %p18, %p17;
-	@%p19 bra 	$L__BB1_26;
-
-	shl.b32 	%r38, %r45, 2;
-	add.s32 	%r39, %r13, %r38;
-	ld.shared.f32 	%f39, [%r13];
-	ld.shared.f32 	%f40, [%r39];
-	add.f32 	%f41, %f40, %f39;
-	st.shared.f32 	[%r13], %f41;
-
-$L__BB1_26:
-	bar.sync 	0;
-	shr.u32 	%r45, %r45, 1;
-	setp.ne.s32 	%p20, %r45, 0;
+	add.s32 	%r39, %r47, %r48;
+	setp.ge.u32 	%p18, %r39, %r23;
+	setp.ge.u32 	%p19, %r48, %r47;
+	or.pred  	%p20, %p19, %p18;
 	@%p20 bra 	$L__BB1_24;
 
+	shl.b32 	%r40, %r47, 2;
+	add.s32 	%r41, %r12, %r40;
+	ld.shared.f32 	%f36, [%r12];
+	ld.shared.f32 	%f37, [%r41];
+	add.f32 	%f38, %f37, %f36;
+	st.shared.f32 	[%r12], %f38;
+
+$L__BB1_24:
+	bar.sync 	0;
+	shr.u32 	%r47, %r47, 1;
+	setp.ne.s32 	%p21, %r47, 0;
+	@%p21 bra 	$L__BB1_22;
+
+$L__BB1_25:
+	bar.sync 	0;
+	bar.sync 	0;
+	@%p9 bra 	$L__BB1_30;
+
+	ld.shared.f32 	%f10, [_ZZ20apply_softmax_kernelPfiiiE8exp_vals];
+	mul.lo.s32 	%r20, %r1, %r23;
+
 $L__BB1_27:
-	bar.sync 	0;
-	bar.sync 	0;
-	@%p11 bra 	$L__BB1_32;
-
-	ld.shared.f32 	%f14, [_ZZ20apply_softmax_kernelPfiiiE8exp_vals];
-	mul.lo.s32 	%r21, %r1, %r24;
-
-$L__BB1_29:
-	add.s32 	%r40, %r46, %r21;
-	mul.wide.s32 	%rd10, %r40, 4;
-	add.s64 	%rd3, %rd1, %rd10;
-	ld.global.f32 	%f15, [%rd3];
-	setp.eq.f32 	%p22, %f15, 0f00000000;
-	mov.f32 	%f50, 0f00000000;
-	@%p22 bra 	$L__BB1_31;
-
-	div.rn.f32 	%f50, %f15, %f14;
-
-$L__BB1_31:
-	st.global.f32 	[%rd3], %f50;
-	add.s32 	%r46, %r46, %r7;
-	setp.lt.s32 	%p23, %r46, %r24;
+	add.s32 	%r42, %r48, %r20;
+	mul.wide.s32 	%rd8, %r42, 4;
+	add.s64 	%rd3, %rd1, %rd8;
+	ld.global.f32 	%f11, [%rd3];
+	setp.eq.f32 	%p23, %f11, 0f00000000;
+	mov.f32 	%f43, 0f00000000;
 	@%p23 bra 	$L__BB1_29;
 
-$L__BB1_32:
+	div.rn.f32 	%f43, %f11, %f10;
+
+$L__BB1_29:
+	st.global.f32 	[%rd3], %f43;
+	add.s32 	%r48, %r48, %r8;
+	setp.lt.s32 	%p24, %r48, %r23;
+	@%p24 bra 	$L__BB1_27;
+
+$L__BB1_30:
 	ret;
 
 }

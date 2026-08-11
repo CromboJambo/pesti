@@ -9,6 +9,7 @@
 use half::f16;
 use pesti_runner::CudaRuntime;
 use pesti_runner::kernel::Kvcache;
+use pesti_runner::kernel::SoftmaxKernel;
 use pesti_runner::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel, GemmBasedAttentionKernel,
 };
@@ -16,7 +17,6 @@ use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::gemm::{CudaGemmKernelBuilder, GemmArch};
 use pesti_runner::kernel::memory::{CudaMemoryBackend, MemoryBackend};
 use pesti_runner::kernel::softmax::CpuSoftmaxKernel;
-use pesti_runner::kernel::SoftmaxKernel;
 use std::sync::Arc;
 use std::time::Instant;
 

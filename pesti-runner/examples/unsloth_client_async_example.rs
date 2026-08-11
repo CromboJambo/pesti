@@ -1,12 +1,12 @@
 //! Unsloth Studio Async SDK Example
-//! 
+//!
 //! Demonstrates high-throughput concurrent model inference using tokio + reqwest
-//! 
+//!
 //! This example shows:
 //! - Concurrent model calls (3 models running in parallel)
 //! - Stream-based responses for long-running generations
 //! - Batch processing with async/await
-//! 
+//!
 //! Run with: cargo run --package pesti-runner --example unsloth_client_async_example
 
 use pesti_runner::unsloth_client_async::{AsyncUnslothClient, ModelConfig};
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create async client (non-blocking)
     let client = AsyncUnslothClient::new("http://localhost:8888").await?;
-    
+
     // Configure model parameters
     let config = ModelConfig::default();
     println!("Model Config:");
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompts = vec![
         "Explain Rust ownership in one sentence.",
         "What makes Rust memory-safe?",
-        "How does async/await work in Rust?"
+        "How does async/await work in Rust?",
     ];
 
     // Run all 3 models concurrently (tokio::join!)
@@ -43,15 +43,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Results from join! is a tuple, not an iterable
     let results_tuple = (results.0, results.1, results.2);
-    
+
     for (i, result) in [
         (&results_tuple.0, 1usize),
         (&results_tuple.1, 2usize),
         (&results_tuple.2, 3usize),
-    ].iter().enumerate() {
+    ]
+    .iter()
+    .enumerate()
+    {
         match result.0 {
             Ok(chat_result) => {
-                println!("Model {} response: {} tokens", result.1, chat_result.tokens_used);
+                println!(
+                    "Model {} response: {} tokens",
+                    result.1, chat_result.tokens_used
+                );
             }
             Err(e) => {
                 println!("Model {} error: {}", result.1, e);
@@ -62,12 +68,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: Stream-based response for long-running generation
     println!("--- Example 2: Streaming Response ---");
-    match client.stream_model("Generate a poem about Rust...", &config).await {
+    match client
+        .stream_model("Generate a poem about Rust...", &config)
+        .await
+    {
         Ok(response) => {
             // Get content type from headers (async reqwest API)
             if let Some(content_type) = response.headers().get(reqwest::header::CONTENT_TYPE) {
-                println!("✓ Got streaming response (content-type: {})", 
-                         content_type.to_str().unwrap_or("unknown"));
+                println!(
+                    "✓ Got streaming response (content-type: {})",
+                    content_type.to_str().unwrap_or("unknown")
+                );
             } else {
                 println!("✓ Got streaming response");
             }
@@ -86,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let batch_prompts = vec![
         "What is a closure in Rust?",
         "Explain lifetimes simply.",
-        "What is the borrow checker?"
+        "What is the borrow checker?",
     ];
 
     // Process batch concurrently (tokio::spawn for true parallelism)
@@ -94,10 +105,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for prompt in batch_prompts {
         let client_clone = client.clone(); // Clone async client
         let config_clone = config.clone();
-        
-        let handle = tokio::spawn(async move {
-            client_clone.run_model(prompt, &config_clone).await
-        });
+
+        let handle =
+            tokio::spawn(async move { client_clone.run_model(prompt, &config_clone).await });
         handles.push(handle);
     }
 
@@ -106,7 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for handle in handles {
         match handle.await {
             Ok(Ok(result)) => {
-                println!("✓ Processed batch item {} ({} tokens)", processed + 1, result.tokens_used);
+                println!(
+                    "✓ Processed batch item {} ({} tokens)",
+                    processed + 1,
+                    result.tokens_used
+                );
                 processed += 1;
             }
             Ok(Err(e)) => {

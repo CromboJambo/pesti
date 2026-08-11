@@ -23,8 +23,8 @@
 //! - For d=k=4096, r=8: 2% of base model size!
 
 use super::adapter::{Adapter, AdapterBuilder, AdapterType};
-use crate::peft::{AdapterConfig, AdapterError, Result};
 use super::matrices::{MatA, MatB};
+use crate::peft::{AdapterConfig, AdapterError, Result};
 use rand::{Rng, SeedableRng};
 
 /// LoRA adapter with low-rank decomposition matrices A and B.
@@ -68,7 +68,11 @@ impl LoRAAdapter {
     }
 
     /// Create a LoRA adapter with random initialization.
-    pub fn new_random(in_features: usize, out_features: usize, config: &AdapterConfig) -> Result<Self> {
+    pub fn new_random(
+        in_features: usize,
+        out_features: usize,
+        config: &AdapterConfig,
+    ) -> Result<Self> {
         let mut adapter = Self::empty_from_config(AdapterConfig {
             rank: config.rank,
             scaling: config.scaling,
@@ -82,7 +86,11 @@ impl LoRAAdapter {
     }
 
     /// Create a LoRA adapter with zero initialization (for training).
-    pub fn new_zeros(in_features: usize, out_features: usize, config: &AdapterConfig) -> Result<Self> {
+    pub fn new_zeros(
+        in_features: usize,
+        out_features: usize,
+        config: &AdapterConfig,
+    ) -> Result<Self> {
         let mut adapter = Self::empty_from_config(AdapterConfig {
             rank: config.rank,
             scaling: config.scaling,
@@ -204,11 +212,19 @@ impl Adapter for LoRAAdapter {
         Self::forward(self, x, batch_size)
     }
 
-    fn merge_into(&self, base_weights: &[f32], base_bias: Option<&[f32]>) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
+    fn merge_into(
+        &self,
+        base_weights: &[f32],
+        base_bias: Option<&[f32]>,
+    ) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
         Self::merge_into(self, base_weights, base_bias)
     }
 
-    fn unmerge_from(&mut self, _merged_weights: &[f32], _merged_bias: Option<&[f32]>) -> Result<()> {
+    fn unmerge_from(
+        &mut self,
+        _merged_weights: &[f32],
+        _merged_bias: Option<&[f32]>,
+    ) -> Result<()> {
         // TODO: Implement unmerge (solve for A and B from merged weights)
         // This is non-trivial and requires SVD or similar decomposition
         Ok(())

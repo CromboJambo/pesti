@@ -1,24 +1,24 @@
 //! Unsloth Studio Rust SDK
-//! 
+//!
 //! Type-safe programmatic interface to Unsloth Studio API at http://localhost:8888
-//! 
+//!
 //! This is a Rust rewrite of the Python SDK, providing:
 //! - Compile-time type safety for model configs and responses
 //! - Session cookie management with automatic retry on auth failure
 //! - Recipe workflow graph structures (data-recipe/jobs)
 //! - Blocking HTTP client (sync API)
-//! 
+//!
 //! Usage:
 //! ```rust,no_run
 //! let client = UnslothClient::new("http://localhost:8888");
-//! 
+//!
 //! let config = ModelConfig {
 //!     model_name: "unsloth/llama-3-8b-Instruct-bnb-4bit".to_string(),
 //!     max_tokens: 2048,
 //!     temperature: 0.7,
 //!     quantization: Quantization::Bits4,
 //! };
-//! 
+//!
 //! let result = client.run_model("Hello, world!", &config)?;
 //! println!("Response: {}", result.response);
 //! ```
@@ -128,7 +128,7 @@ pub struct RecipeJobResult {
 }
 
 /// Unsloth Studio client for programmatic API access
-/// 
+///
 /// This bridges the gap between GUI actions and HTTP endpoints:
 /// - "Run Model" → POST /api/inference/completions
 /// - "Unsloth Chat" → POST /api/inference/chat/completions  
@@ -172,17 +172,17 @@ impl UnslothClient {
     /// List all available models (GUI: "Run Model" dropdown)
     pub fn list_models(&self) -> Result<Vec<ModelInfo>, ClientError> {
         let url = format!("{}/api/models/list", self.base_url);
-        
+
         let response = self.send_request(url, reqwest::Method::GET, None)?;
         let result = response.json::<ModelsListResponse>()?;
-        
+
         Ok(result.models)
     }
 
     /// Run a model with given prompt (GUI: "Run Model")
     pub fn run_model(&self, prompt: &str, config: &ModelConfig) -> Result<ChatResult, ClientError> {
         let url = format!("{}/api/inference/completions", self.base_url);
-        
+
         let payload = serde_json::json!({
             "prompt": prompt,
             "model_name": config.model_name,
@@ -197,9 +197,13 @@ impl UnslothClient {
     }
 
     /// Chat interface with multi-turn conversation (GUI: "Unsloth Chat")
-    pub fn chat(&self, messages: &[ChatMessage], config: &ModelConfig) -> Result<ChatResult, ClientError> {
+    pub fn chat(
+        &self,
+        messages: &[ChatMessage],
+        config: &ModelConfig,
+    ) -> Result<ChatResult, ClientError> {
         let url = format!("{}/api/inference/chat/completions", self.base_url);
-        
+
         let payload = serde_json::json!({
             "messages": messages,
             "model_name": config.model_name,
@@ -216,7 +220,7 @@ impl UnslothClient {
     /// Create a new chat thread (GUI: start new conversation)
     pub fn create_chat_thread(&self, model_name: &str) -> Result<ChatThread, ClientError> {
         let url = format!("{}/api/chat/threads", self.base_url);
-        
+
         let payload = serde_json::json!({
             "model_name": model_name
         });
@@ -228,20 +232,20 @@ impl UnslothClient {
     /// Execute a data recipe job (GUI: "Run Data Recipe")
     pub fn execute_recipe(&self, recipe: &RecipeJob) -> Result<RecipeJobResult, ClientError> {
         let url = format!("{}/api/data-recipe/jobs", self.base_url);
-        
+
         let response = self.send_request(
-            url, 
-            reqwest::Method::POST, 
-            Some(serde_json::to_value(recipe)?)
+            url,
+            reqwest::Method::POST,
+            Some(serde_json::to_value(recipe)?),
         )?;
-        
+
         Ok(response.json()?)
     }
 
     /// Export recipe definition as JSON (for visualization tools)
     pub fn export_recipe(&self, recipe_id: &str) -> Result<serde_json::Value, ClientError> {
         let url = format!("{}/api/data-recipe/{}/export", self.base_url, recipe_id);
-        
+
         let response = self.send_request(url, reqwest::Method::GET, None)?;
         Ok(response.json()?)
     }
