@@ -88,10 +88,11 @@ impl FusedAttentionKernelBuilder {
             .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
 
         // Get the function from the module via load_function method (returns Result<_, DriverError>)
-        // Convert error to AttentionError
-        let function = match module.load_function("fused_attention_kernel") {
+        // Note: CUDA name mangling produces: _Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi
+        let mangled_name = "_Z22fused_attention_kernelfPK6__halfS1_S1_Pfiiiifi";
+        let function = match module.load_function(mangled_name) {
             Ok(f) => f,
-            Err(e) => return Err(AttentionError::Cuda(format!("function lookup: {:?}", e))),
+            Err(e) => return Err(AttentionError::Cuda(format!("function lookup {:?}: {:?}", mangled_name, e))),
         };
 
         Ok(FusedAttentionKernel {
