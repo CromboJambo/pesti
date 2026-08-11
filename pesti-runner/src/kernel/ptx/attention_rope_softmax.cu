@@ -1,15 +1,7 @@
+//! Minimal test with shared memory accumulation for correct dot product
+
 #include <cuda_fp16.h>
 #include <math.h>
-
-__device__ __forceinline__ void apply_rope_pair(
-    float& q0, float& q1,
-    float cos_val, float sin_val
-) {
-    float new_q0 = q0 * cos_val - q1 * sin_val;
-    float new_q1 = q0 * sin_val + q1 * cos_val;
-    q0 = new_q0;
-    q1 = new_q1;
-}
 
 // Kernel 1: Compute raw attention scores with RoPE and causal mask
 __global__ void fused_attention_kernel(
@@ -25,51 +17,64 @@ __global__ void fused_attention_kernel(
     float rope_base,
     int max_pos
 ) {
-    int q_pos = blockIdx.x * blockDim.x + threadIdx.x;
+    // Each block handles one (q_pos, k_pos, head) triplet
+    int q_pos = blockIdx.x;
     int k_pos = blockIdx.y;
     int head = blockIdx.z;
-
+    
+    // Thread within block processes one pair of dimensions
+    int tid = threadIdx.x;
+    int half_dim = head_dim / 2;
+    
     if (q_pos >= seq_q || k_pos >= seq_k) return;
-
-    float half_dim = head_dim / 2.0f;
+    
+    // Shared memory for partial dot products from each thread
+    extern __shared__ float shared_dot[];
+    
     float dot_product = 0.0f;
-
-    for (int chunk = 0; chunk < head_dim / 2; chunk++) {
+    
+    for (int chunk = tid; chunk < half_dim; chunk += blockDim.x) {
         int d = chunk * 2;
-
+        
+        // Q layout: [seq_q, num_heads, head_dim]
         int q_idx = q_pos * num_heads * head_dim + head * head_dim + d;
         float q0 = __half2float(q_ptr[q_idx]);
         float q1 = __half2float(q_ptr[q_idx + 1]);
-
-        float inv_freq = 1.0f / powf(rope_base, (float)chunk / half_dim);
-        float freq = q_pos * inv_freq;
-        float c = cosf(freq);
-        float s = sinf(freq);
-        apply_rope_pair(q0, q1, c, s);
-
+        
+        // K layout: [seq_k, num_heads, head_dim]
         int k_idx = k_pos * num_heads * head_dim + head * head_dim + d;
         float k0 = __half2float(k_ptr[k_idx]);
         float k1 = __half2float(k_ptr[k_idx + 1]);
-
-        float freq_k = k_pos * inv_freq;
-        float c_k = cosf(freq_k);
-        float s_k = sinf(freq_k);
-        apply_rope_pair(k0, k1, c_k, s_k);
-
+        
+        // Accumulate dot product (raw, no RoPE for debugging)
         dot_product += q0 * k0 + q1 * k1;
     }
-
-    // Apply scale (1/sqrt(head_dim))
-    dot_product *= scale;
-
-    // Causal mask: set to -inf if q_pos >= k_pos
-    if (q_pos >= k_pos) {
-        dot_product = -INFINITY;
+    
+    // Store partial result in shared memory
+    shared_dot[tid] = dot_product;
+    
+    // Synchronize so all threads have written their partial results
+    __syncthreads();
+    
+    // Thread 0 sums up all partial results
+    if (tid == 0) {
+        float total = 0.0f;
+        for (int t = 0; t < blockDim.x; t++) {
+            total += shared_dot[t];
+        }
+        
+        // Apply scale (1/sqrt(head_dim))
+        total *= scale;
+        
+        // Causal mask: set to -inf if k_pos > q_pos (future tokens)
+        if (k_pos > q_pos) {
+            total = -INFINITY;
+        }
+        
+        // Store raw score
+        int out_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
+        s_ptr[out_idx] = total;
     }
-
-    // Store raw score
-    int out_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
-    s_ptr[out_idx] = dot_product;
 }
 
 // Kernel 2: Apply softmax per (q_pos, head) pair - thread 0 does all work
