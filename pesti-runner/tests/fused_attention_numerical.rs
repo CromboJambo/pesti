@@ -92,7 +92,10 @@ fn reference_fused_attention(
         let end = start + seq_k;
         
         // Numerically stable softmax
-        let max_val = scores[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let max_val = scores[start..end]
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
         let mut exps: Vec<f32> = scores[start..end]
             .iter()
             .map(|&x| (x - max_val).exp())
@@ -150,40 +153,30 @@ fn test_fused_attention_numerical_conformance() {
     println!("CPU max attention score: {:.6}", 
              cpu_probs.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
     
-    // Allocate device memory
+    // Allocate device memory using low-level API
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
     let s_size = seq_q * seq_k * 4;
     
-    let q_ptr = unsafe {
-        pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap()
-    };
-    let k_ptr = unsafe {
-        pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap()
-    };
-    let v_ptr = unsafe {
-        pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap()
-    };
-    let s_ptr = unsafe {
-        pesti_runner::cuda_runtime::allocate_device_memory(s_size).unwrap()
-    };
+    let q_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap() };
+    let k_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap() };
+    let v_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap() };
+    let s_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(s_size).unwrap() };
     
-    // Copy Q, K to device (simplified: use host pointers directly for now)
+    // Copy Q, K to device using copy_host_to_device
     unsafe {
-        let mut q_ptr_mut = q_ptr as *mut u8;
-        std::ptr::copy_nonoverlapping(
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            q_ptr,
             q_h.as_ptr() as *const u8,
-            q_ptr_mut,
             q_size,
-        );
+        ).unwrap();
         
-        let mut k_ptr_mut = k_ptr as *mut u8;
-        std::ptr::copy_nonoverlapping(
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            k_ptr,
             k_h.as_ptr() as *const u8,
-            k_ptr_mut,
             k_size,
-        );
+        ).unwrap();
     }
     
     // Build kernel
@@ -217,14 +210,14 @@ fn test_fused_attention_numerical_conformance() {
     
     println!("✅ GPU kernel launched successfully");
     
-    // Copy results back to host
+    // Copy results back to host using copy_device_to_host
     let mut gpu_probs = vec![0.0f32; seq_q * seq_k];
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            s_ptr as *const u8,
+        pesti_runner::cuda_runtime::copy_device_to_host(
             gpu_probs.as_mut_ptr() as *mut u8,
+            s_ptr as *const u8,
             s_size,
-        );
+        ).unwrap();
     }
     
     println!("GPU softmax sum (first query): {:.6}", 
@@ -233,7 +226,6 @@ fn test_fused_attention_numerical_conformance() {
     // Compare outputs
     let mut max_abs_err = 0.0f32;
     let mut max_rel_err = 0.0f32;
-    let mut total_elements = 0usize;
     
     for i in 0..seq_q * seq_k {
         let cpu_val = cpu_probs[i];
@@ -248,7 +240,6 @@ fn test_fused_attention_numerical_conformance() {
         
         max_abs_err = max_abs_err.max(abs_err);
         max_rel_err = max_rel_err.max(rel_err);
-        total_elements += 1;
     }
     
     println!();
