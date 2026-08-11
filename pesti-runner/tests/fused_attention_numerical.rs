@@ -2,6 +2,7 @@
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::cpu_optimized::reference_raw_scores_optimized;
 
 fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     let half_dim = head_dim / 2;
@@ -120,7 +121,7 @@ fn test_fused_attention_numerical_conformance() {
     let v_h: Vec<f16> = (0..seq_k * num_heads * head_dim)
         .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0)).collect();
 
-    let cpu_output = reference_raw_scores(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let cpu_output = reference_raw_scores_optimized(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
 
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;

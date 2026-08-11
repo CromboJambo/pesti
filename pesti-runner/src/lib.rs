@@ -12,6 +12,7 @@ pub mod cuda_shim;
 #[cfg(not(feature = "cuda"))]
 pub mod cuda_stub;
 pub mod dequantize;
+pub mod cpu_optimized; // Optimized CPU attention with SIMD and parallelism
 #[cfg(feature = "cuda")]
 pub mod device;
 #[cfg(feature = "cuda")]
