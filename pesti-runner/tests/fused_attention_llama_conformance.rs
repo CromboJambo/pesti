@@ -29,7 +29,7 @@ fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     }
 }
 
-/// Compute llama.cpp-style attention scores (scaled dot-product)
+/// Compute llama.cpp-style attention scores (scaled dot-product) - PER HEAD
 fn reference_llama_attention(
     q: &[f32],
     k: &[f32],
@@ -70,61 +70,65 @@ fn reference_llama_attention(
         );
     }
 
-    // Compute attention scores (scaled by 1/sqrt(head_dim))
-    let mut scores = vec![0.0f32; seq_q * seq_k];
+    // Compute attention scores (scaled by 1/sqrt(head_dim)) - PER HEAD
+    let mut scores = vec![0.0f32; seq_q * num_heads * seq_k];
     for q_pos in 0..seq_q {
-        for k_pos in 0..seq_k {
-            let mut score = 0.0f32;
-            // Dot product across all dimensions and heads
-            for head in 0..num_heads {
+        for head in 0..num_heads {
+            for k_pos in 0..seq_k {
+                let mut score = 0.0f32;
+                // Dot product across dimensions for THIS HEAD only (matching GPU output)
                 let q_offset = q_pos * num_heads * head_dim + head * head_dim;
                 let k_offset = k_pos * num_heads * head_dim + head * head_dim;
 
                 for d in 0..head_dim {
                     score += q_rope[q_offset + d] * k_rope[k_offset + d];
                 }
+                // Scale by 1/sqrt(head_dim)
+                score /= (head_dim as f32).sqrt();
+                scores[q_pos * num_heads * seq_k + head * seq_k + k_pos] = score;
             }
-            // Scale by 1/sqrt(head_dim)
-            score /= (head_dim as f32).sqrt();
-            scores[q_pos * seq_k + k_pos] = score;
         }
     }
 
     scores
 }
 
-/// Apply softmax per query row (llama.cpp style)
-fn reference_softmax(scores: &[f32], seq_q: usize, seq_k: usize) -> Vec<f32> {
-    let mut probs = vec![0.0f32; seq_q * seq_k];
+/// Apply softmax per query row, per head (llama.cpp style)
+fn reference_softmax(scores: &[f32], seq_q: usize, seq_k: usize, num_heads: usize) -> Vec<f32> {
+    let mut probs = vec![0.0f32; seq_q * num_heads * seq_k];
     for q_pos in 0..seq_q {
-        let start = q_pos * seq_k;
-        let end = start + seq_k;
+        for head in 0..num_heads {
+            let start = q_pos * num_heads * seq_k + head * seq_k;
+            let end = start + seq_k;
 
-        // Numerically stable softmax (max-subtract trick)
-        let max_val = scores[start..end]
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
+            // Numerically stable softmax (max-subtract trick)
+            let max_val = scores[start..end]
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
 
-        let exps: Vec<f32> = scores[start..end]
-            .iter()
-            .map(|&x| (x - max_val).exp())
-            .collect();
+            let exps: Vec<f32> = scores[start..end]
+                .iter()
+                .map(|&x| (x - max_val).exp())
+                .collect();
 
-        let sum: f32 = exps.iter().sum();
-        for i in 0..seq_k {
-            probs[start + i] = exps[i] / sum;
+            let sum: f32 = exps.iter().sum();
+            for i in 0..seq_k {
+                probs[start + i] = exps[i] / sum;
+            }
         }
     }
     probs
 }
 
-/// Apply causal mask (llama.cpp style: q_pos >= k_pos = -inf)
-fn apply_causal_mask(scores: &mut [f32], seq_q: usize, seq_k: usize) {
+/// Apply causal mask (llama.cpp style: q_pos >= k_pos = -inf) - per head
+fn apply_causal_mask(scores: &mut [f32], seq_q: usize, seq_k: usize, num_heads: usize) {
     for q_pos in 0..seq_q {
-        for k_pos in 0..seq_k {
-            if q_pos >= k_pos {
-                scores[q_pos * seq_k + k_pos] = -1e9;
+        for head in 0..num_heads {
+            for k_pos in 0..seq_k {
+                if q_pos >= k_pos {
+                    scores[q_pos * num_heads * seq_k + head * seq_k + k_pos] = -1e9;
+                }
             }
         }
     }
@@ -175,10 +179,10 @@ fn test_fused_attention_vs_llama_cpp() {
         rope_base,
     );
 
-    // Apply causal mask BEFORE softmax (llama.cpp style)
-    apply_causal_mask(&mut llama_scores, seq_q, seq_k);
+    // Apply causal mask BEFORE softmax (llama.cpp style) - per head
+    apply_causal_mask(&mut llama_scores, seq_q, seq_k, num_heads);
 
-    let mut llama_probs = reference_softmax(&llama_scores, seq_q, seq_k);
+    let llama_probs = reference_softmax(&llama_scores, seq_q, seq_k, num_heads);
 
     println!(
         "llama.cpp softmax sum (first query): {:.6}",
@@ -257,25 +261,28 @@ fn test_fused_attention_vs_llama_cpp() {
         gpu_probs[0..seq_k].iter().sum::<f32>()
     );
 
-    // Compare outputs - compare first head only (llama.cpp style single-head test)
+    // Compare outputs - compare all heads (now that reference is per-head)
     let mut max_abs_err = 0.0f32;
     let mut max_rel_err = 0.0f32;
 
-    for i in 0..seq_q * seq_k {
-        let llama_val = llama_probs[i];
-        // GPU output is [seq_q, num_heads, seq_k], compare first head (head=0)
-        let gpu_idx = i; // First head: head * seq_k = 0
-        let gpu_val = gpu_probs[gpu_idx];
+    for q_pos in 0..seq_q {
+        for head in 0..num_heads {
+            for k_pos in 0..seq_k {
+                let llama_val = llama_probs[q_pos * num_heads * seq_k + head * seq_k + k_pos];
+                let gpu_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
+                let gpu_val = gpu_probs[gpu_idx];
 
-        let abs_err = (llama_val - gpu_val).abs();
-        let rel_err = if llama_val.abs() > 1e-8 {
-            abs_err / llama_val.abs()
-        } else {
-            abs_err
-        };
+                let abs_err = (llama_val - gpu_val).abs();
+                let rel_err = if llama_val.abs() > 1e-8 {
+                    abs_err / llama_val.abs()
+                } else {
+                    abs_err
+                };
 
-        max_abs_err = max_abs_err.max(abs_err);
-        max_rel_err = max_rel_err.max(rel_err);
+                max_abs_err = max_abs_err.max(abs_err);
+                max_rel_err = max_rel_err.max(rel_err);
+            }
+        }
     }
 
     println!();

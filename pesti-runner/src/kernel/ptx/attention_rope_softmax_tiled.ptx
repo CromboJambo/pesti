@@ -778,7 +778,7 @@ $L__BB0_61:
 	mul.f32 	%f229, %f188, %f251;
 	sub.f32 	%f230, %f229, %f228;
 	mul.f32 	%f231, %f188, %f254;
-	fma.rn.f32 	%f232, %f77, %f251, %f231;
+	fma.rn.f32 	%f232, %f189, %f251, %f231;
 	mul.f32 	%f233, %f42, %f232;
 	fma.rn.f32 	%f234, %f41, %f230, %f233;
 	add.f32 	%f255, %f255, %f234;
@@ -823,9 +823,9 @@ $L__BB0_63:
 	ld.param.u32 	%r24, [_Z20apply_softmax_kernelPfiii_param_2];
 	ld.param.u32 	%r26, [_Z20apply_softmax_kernelPfiii_param_3];
 	cvta.to.global.u64 	%rd1, %rd4;
-	mov.u32 	%r27, %ctaid.y;
-	mov.u32 	%r28, %ctaid.x;
-	mad.lo.s32 	%r1, %r27, %r25, %r28;
+	mov.u32 	%r27, %ctaid.x;
+	mov.u32 	%r28, %ctaid.y;
+	mad.lo.s32 	%r1, %r27, %r26, %r28;
 	mul.lo.s32 	%r29, %r26, %r25;
 	setp.ge.s32 	%p1, %r1, %r29;
 	@%p1 bra 	$L__BB1_32;

@@ -71,8 +71,7 @@ pub mod attention;
 pub mod attention_stub;
 #[cfg(feature = "cuda")]
 pub mod fused_attention_conformant;
-#[cfg(feature = "cuda")]
-pub mod fused_attention_wrapper_conformant;
+// Removed: fused_attention_wrapper_conformant (placeholder)
 #[cfg(feature = "cuda")]
 pub mod builder;
 #[cfg(not(feature = "cuda"))]

@@ -85,7 +85,7 @@ __global__ void fused_attention_kernel_tiled(
             
             // Apply RoPE to K pair
             float new_k0 = k0 * c_k - k1 * s_k;
-            float new_k1 = k0 * s_k + q1 * c_k;  // Fixed: was using new_q1 instead of new_k1
+            float new_k1 = k0 * s_k + k1 * c_k;  // Fixed: was using q1 instead of k1
             
             dot += new_q0 * new_k0 + new_q1 * new_k1;
         }
@@ -111,9 +111,9 @@ __global__ void apply_softmax_kernel(
     int num_heads
 ) {
     // Each block processes one (q_pos, head) pair
-    // Grid: (seq_q, num_heads), so compute 1D qh from 2D blockIdx
+    // Grid: (seq_q, num_heads), compute 1D qh in ROW-MAJOR order to match attention kernel output
     int total_qh = seq_q * num_heads;
-    int qh = blockIdx.x + blockIdx.y * seq_q;  // Convert 2D to 1D block index
+    int qh = blockIdx.y + blockIdx.x * num_heads;  // FIXED: row-major indexing (q_pos + head * num_heads)
     
     if (qh >= total_qh) return;
     
