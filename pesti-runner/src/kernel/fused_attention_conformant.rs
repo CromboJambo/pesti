@@ -110,15 +110,11 @@ impl FusedAttentionKernel {
     ) -> Result<(), AttentionError> {
         use cudarc::driver::sys;
 
-        // Kernel 1 signature from attention_rope_softmax.ptx (row-major layout):
-        //   fused_attention_kernel(
-        //     f32 scale, u64 q_ptr, u64 k_ptr, u64 v_ptr, u64 s_ptr,
-        //     s32 seq_q, s32 seq_k, s32 num_heads, s32 head_dim,
-        //     f32 rope_base, s32 max_pos)
+        // Launch kernel 1: fused_attention_kernel (RoPE + Q @ K^T + causal mask)
         let mut scale_v: f32 = scale;
         let mut q_v: u64 = q_ptr;
         let mut k_v: u64 = k_ptr;
-        let mut v_v: u64 = v_ptr;
+        let mut v_v: u64 = v_ptr;  // Now used in kernel!
         let mut s_v: u64 = s_ptr;
         let mut seq_q_v: i32 = seq_q as i32;
         let mut seq_k_v: i32 = seq_k as i32;
@@ -132,17 +128,17 @@ impl FusedAttentionKernel {
             &mut scale_v as *mut f32 as *mut std::ffi::c_void,
             &mut q_v as *mut u64 as *mut std::ffi::c_void,
             &mut k_v as *mut u64 as *mut std::ffi::c_void,
-            &mut v_v as *mut u64 as *mut std::ffi::c_void,
+            &mut v_v as *mut u64 as *mut std::ffi::c_void,  // V pointer passed to kernel
             &mut s_v as *mut u64 as *mut std::ffi::c_void,
             &mut seq_q_v as *mut i32 as *mut std::ffi::c_void,
             &mut seq_k_v as *mut i32 as *mut std::ffi::c_void,
             &mut num_heads_v as *mut i32 as *mut std::ffi::c_void,
-            &mut head_dim_v as *mut i32 as *mut std::ffi::c_void,
+            &mut head_dim_v as *mut i32 as *mut std::ffi::c_void,  // New param!
             &mut rope_base_v as *mut f32 as *mut std::ffi::c_void,
             &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
         ];
 
-        // Launch kernel 1: fused_attention_kernel
+        // Launch kernel 1: fused_attention_kernel (RoPE + Q @ K^T + causal mask)
         let grid_x = (seq_q + 127) / 128;
         let grid = (grid_x as u32, seq_k as u32, num_heads as u32);
         let block = (128u32, 1u32, 1u32);
@@ -151,48 +147,46 @@ impl FusedAttentionKernel {
         unsafe {
             use crate::cuda_shim::launch_kernel;
             match launch_kernel(
-                self.function.cu_function(), // Use instance field `self.function` - returns sys::CUfunction
+                self.function.cu_function(),
                 grid,
                 block,
-                smem_size, // shared_mem_bytes for dynamic shared memory
-                crate::cuda_shim::cu_stream(&self.stream), // Get raw CUstream from CudaStream
-                &mut params, // Pass reference to array directly
+                smem_size,
+                crate::cuda_shim::cu_stream(&self.stream),
+                &mut params,
             ) {
-                Ok(_) => {} // Success - no action needed
+                Ok(_) => {}
                 Err(e) => {
                     return Err(AttentionError::LaunchFailed(format!(
-                        "kernel 1 launch: {:?}",
-                        e
+                        "kernel 1 launch: {:?}", e
                     )));
                 }
             }
         }
 
-        // Kernel 2 signature: apply_softmax_kernel(float* s_ptr, int seq_q, int seq_k, int num_heads)
+        // Kernel 2: apply_softmax_and_output_kernel (softmax + @ V → final output)
         let mut s_v2: u64 = s_ptr;
         let mut seq_q_v2: i32 = seq_q as i32;
         let mut seq_k_v2: i32 = seq_k as i32;
         let mut num_heads_v2: i32 = num_heads as i32;
+        let mut head_dim_v2: i32 = head_dim as i32;  // New param!
 
-        let mut params2: [*mut std::ffi::c_void; 4] = [
+        let mut params2: [*mut std::ffi::c_void; 5] = [
             &mut s_v2 as *mut u64 as *mut std::ffi::c_void,
             &mut seq_q_v2 as *mut i32 as *mut std::ffi::c_void,
             &mut seq_k_v2 as *mut i32 as *mut std::ffi::c_void,
             &mut num_heads_v2 as *mut i32 as *mut std::ffi::c_void,
+            &mut head_dim_v2 as *mut i32 as *mut std::ffi::c_void,  // New param!
         ];
 
-        // Launch kernel 2: apply_softmax_kernel
-        // Grid: (seq_q, num_heads), Block: seq_k threads
+        // Launch kernel 2: apply_softmax_and_output_kernel
         let grid2 = (seq_q as u32, num_heads as u32, 1u32);
-        let block2 = (seq_k as u32, 1u32, 1u32);
-        // Shared memory: seq_k floats for reduction
-        let smem_size2 = seq_k * 4; // 4 bytes per float
+        let block2 = (1u32, 1u32, 1u32);  // Single thread per block does all work
+        let smem_size2 = 0u32;  // No shared memory needed
 
         unsafe {
             use crate::cuda_shim::launch_kernel;
 
-            // Get the softmax kernel function from module
-            let softmax_mangled = "_Z20apply_softmax_kernelPfiii";
+            let softmax_mangled = "_Z31apply_softmax_and_output_kernelPfPK6__halfiiii";
             let softmax_func = match self.module.load_function(softmax_mangled) {
                 Ok(f) => f,
                 Err(e) => {
@@ -204,18 +198,17 @@ impl FusedAttentionKernel {
             };
 
             match launch_kernel(
-                softmax_func.cu_function(), // Get raw CUfunction from wrapper
+                softmax_func.cu_function(),
                 grid2,
                 block2,
-                smem_size2 as u32,
+                smem_size2,
                 crate::cuda_shim::cu_stream(&self.stream),
                 &mut params2,
             ) {
-                Ok(_) => {} // Success
+                Ok(_) => {}
                 Err(e) => {
                     return Err(AttentionError::LaunchFailed(format!(
-                        "kernel 2 launch: {:?}",
-                        e
+                        "kernel 2 launch: {:?}", e
                     )));
                 }
             }
