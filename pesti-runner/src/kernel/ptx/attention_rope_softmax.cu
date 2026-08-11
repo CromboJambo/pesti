@@ -26,94 +26,82 @@ __global__ void fused_attention_kernel(
     float rope_base,
     int max_pos
 ) {
-    // Shared memory for block-level reduction (one row per block)
-    __shared__ float shared_scores[64];  // One score per thread in x-dimension
+    // Each thread handles one (q_pos, k_pos) pair
+    // Block is 1D with 128 threads
+    int tid = threadIdx.x;
+    int q_pos = blockIdx.x * blockDim.x + tid;
     
-    // Get tile coordinates (each block handles one 64x64 tile)
-    int tile_row = blockIdx.x;
-    int tile_col = blockIdx.y;
+    // Only threads within bounds participate
+    if (q_pos >= seq_q) return;
     
-    // Calculate sequence start positions for this tile
-    int q_start = tile_row * 64;
-    int k_start = tile_col * 64;
-    
-    // Get thread index within block
-    int tid_x = threadIdx.x;
-    int tid_y = threadIdx.y;
-    
-    // Calculate global positions for this thread
-    int q_pos = q_start + tid_x;
-    int k_pos = k_start + tid_y;
-    
-    // Bounds check
-    if (q_pos >= seq_q || k_pos >= seq_k) return;
-    
-    // Get RoPE position (use sequence position as position embedding)
-    int pos = q_pos;  // For causal attention, query position determines RoPE
-    
-    // Compute cos/sin for this position using standard RoPE formula
-    float half_dim = head_dim / 2.0f;
-    float inv_freq = 1.0f / powf(rope_base, (float)(tid_y % ((int)half_dim)) / half_dim);
-    float freq = pos * inv_freq;
-    float cos_val = cosf(freq);
-    float sin_val = sinf(freq);
-    
-    // Load Q element (f16 -> f32) - first head, two dimensions at a time
-    int q_idx = q_pos * num_heads * head_dim + tid_y * 2;
-    float q0 = __half2float(q_ptr[q_idx]);
-    float q1 = __half2float(q_ptr[q_idx + 1]);
-    
-    // Load K element (f16 -> f32) - first head, same dimensions
-    int k_idx = k_pos * num_heads * head_dim + tid_y * 2;
-    float k0 = __half2float(k_ptr[k_idx]);
-    float k1 = __half2float(k_ptr[k_idx + 1]);
-    
-    // Apply RoPE rotation to Q pair
-    apply_rope_pair(q0, q1, cos_val, sin_val);
-    
-    // Apply scaling factor (only to first dimension for simplicity)
-    q0 *= scale;
-    
-    // Compute dot product of rotated Q with K (simplified: single pair)
-    float score = q0 * k0 + q1 * k1;
-    
-    // Store in shared memory for reduction
-    shared_scores[tid_x] = score;
-    __syncthreads();
-    
-    // Apply causal mask: set to -inf where q_pos >= k_pos
-    if (q_pos >= k_pos) {
-        shared_scores[tid_x] = -1e9f;
-    }
-    __syncthreads();
-    
-    // Simple block-level max reduction for softmax numerically stable version
-    float max_val = shared_scores[tid_x];
-    for (int stride = 32; stride > 0; stride >>= 1) {
-        if (tid_x < stride) {
-            max_val = fmaxf(max_val, shared_scores[tid_x + stride]);
+    // Compute dot product across ALL dimensions for this (q_pos, k_pos) pair
+    // We iterate over k_pos sequentially (one thread per q_pos)
+    for (int k_pos = 0; k_pos < seq_k; k_pos++) {
+        // Causal mask: skip if q_pos >= k_pos
+        if (q_pos >= k_pos) {
+            s_ptr[q_pos * seq_k + k_pos] = -1e9f;
+            continue;
         }
-        __syncthreads();
+        
+        float dot_product = 0.0f;
+        
+        // Iterate over all head dimensions
+        for (int d = 0; d < head_dim; d += 2) {
+            // Compute RoPE position
+            int pos = q_pos;
+            float half_dim = head_dim / 2.0f;
+            int dim_pair = d / 2;
+            float inv_freq = 1.0f / powf(rope_base, (float)dim_pair / half_dim);
+            float freq = pos * inv_freq;
+            float cos_val = cosf(freq);
+            float sin_val = sinf(freq);
+            
+            // Load Q elements for this head and dimension pair
+            int q_idx = q_pos * num_heads * head_dim + d;
+            float q0 = __half2float(q_ptr[q_idx]);
+            float q1 = __half2float(q_ptr[q_idx + 1]);
+            
+            // Apply RoPE rotation to Q
+            apply_rope_pair(q0, q1, cos_val, sin_val);
+            
+            // Load K elements for same dimensions
+            int k_idx = k_pos * num_heads * head_dim + d;
+            float k0 = __half2float(k_ptr[k_idx]);
+            float k1 = __half2float(k_ptr[k_idx + 1]);
+            
+            // Apply RoPE rotation to K (same position as Q for this pair)
+            apply_rope_pair(k0, k1, cos_val, sin_val);
+            
+            // Accumulate dot product
+            dot_product += q0 * k0 + q1 * k1;
+        }
+        
+        // Scale by 1/sqrt(head_dim)
+        dot_product *= scale;
+        
+        // Store scaled attention score
+        s_ptr[q_pos * seq_k + k_pos] = dot_product;
     }
     
-    // Compute exp and sum for softmax
+    // Now apply softmax per query row
+    // Find max for numerical stability
+    float max_val = -1e30f;
+    for (int k = 0; k < seq_k; k++) {
+        float val = s_ptr[q_pos * seq_k + k];
+        if (val > max_val) max_val = val;
+    }
+    
+    // Compute exp and sum
     float exp_sum = 0.0f;
-    float local_exp = expf(shared_scores[tid_x] - max_val);
-    exp_sum += local_exp;
-    shared_scores[tid_x] = local_exp;
-    __syncthreads();
-    
-    // Parallel sum reduction
-    for (int stride = 32; stride > 0; stride >>= 1) {
-        if (tid_x < stride) {
-            exp_sum += shared_scores[tid_x + stride];
-        }
-        __syncthreads();
+    for (int k = 0; k < seq_k; k++) {
+        float val = s_ptr[q_pos * seq_k + k];
+        float exp_val = expf(val - max_val);
+        s_ptr[q_pos * seq_k + k] = exp_val;
+        exp_sum += exp_val;
     }
     
-    // Compute final softmax value
-    float softmax_val = local_exp / exp_sum;
-    
-    // Store attention score (f32 output)
-    s_ptr[q_pos * seq_k + k_pos] = softmax_val;
+    // Normalize
+    for (int k = 0; k < seq_k; k++) {
+        s_ptr[q_pos * seq_k + k] /= exp_sum;
+    }
 }

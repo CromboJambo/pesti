@@ -159,7 +159,7 @@ impl FusedAttentionKernel {
 
         let mut max_pos_v: i32 = max_pos as i32;
 
-        let mut params: [*mut std::ffi::c_void; 10] = [
+        let mut params: [*mut std::ffi::c_void; 11] = [
             &mut scale_v as *mut f32 as *mut std::ffi::c_void,
             &mut q_v as *mut u64 as *mut std::ffi::c_void,
             &mut k_v as *mut u64 as *mut std::ffi::c_void,
@@ -169,13 +169,12 @@ impl FusedAttentionKernel {
             &mut seq_k_v as *mut i32 as *mut std::ffi::c_void,
             &mut num_heads_v as *mut i32 as *mut std::ffi::c_void,
             &mut head_dim_v as *mut i32 as *mut std::ffi::c_void,
+            &mut rope_base_v as *mut f32 as *mut std::ffi::c_void,
             &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
         ];
 
-        // Compute grid dimensions: each block handles one 64x64 tile
-        let seq_q_tiles = (seq_q + 63) / 64;
-        let seq_k_tiles = (seq_k + 63) / 64;
-        let grid = (seq_q_tiles as u32, seq_k_tiles as u32, 1u32); // Multi-block launch for full sequences
+        // Compute grid dimensions: each block handles seq_q elements (1D grid)
+        let grid = (seq_q as u32, 1u32, 1u32);
         let block = (128u32, 1u32, 1u32);
 
         unsafe {
