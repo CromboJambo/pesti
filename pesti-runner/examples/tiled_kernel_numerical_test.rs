@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seq_k = 32;
     let num_heads = 4;
     let head_dim = 16;
-    let rope_base = 10_000.0;
+    let rope_base: f32 = 10_000.0;
 
     // Allocate host memory (f16)
     let q_h: Vec<half::f16> = (0..seq_q * num_heads * head_dim)
@@ -25,21 +25,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|i| half::f16::from_f32((i as f32 - 50.0) / 10.0))
         .collect();
 
-    // CPU reference (raw dot products, no softmax)
+    // CPU reference (with RoPE applied)
     let mut cpu_scores = vec![0.0f32; seq_q * num_heads * seq_k];
-
+    
+    let half_dim = head_dim as f32 / 2.0;
+    
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             for k_pos in 0..seq_k {
                 let mut sum_dot = 0.0f32;
-                for d in 0..head_dim {
+                
+                for d in (0..head_dim).step_by(2) {
                     let q_idx = q_pos * num_heads * head_dim + head * head_dim + d;
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + d;
                     
-                    let q_val = q_h[q_idx].to_f32();
-                    let k_val = k_h[k_idx].to_f32();
+                    let q0 = q_h[q_idx].to_f32();
+                    let q1 = q_h[q_idx + 1].to_f32();
+                    let k0 = k_h[k_idx].to_f32();
+                    let k1 = k_h[k_idx + 1].to_f32();
                     
-                    sum_dot += q_val * k_val;
+                    // Apply RoPE to Q pair
+                    let inv_freq = 1.0f32 / (rope_base.powf((d as f32 / 2.0) / half_dim));
+                    let freq_q = q_pos as f32 * inv_freq;
+                    let c_q = freq_q.cos();
+                    let s_q = freq_q.sin();
+                    
+                    let new_q0 = q0 * c_q - q1 * s_q;
+                    let new_q1 = q0 * s_q + q1 * c_q;
+                    
+                    // Apply RoPE to K pair
+                    let freq_k = k_pos as f32 * inv_freq;
+                    let c_k = freq_k.cos();
+                    let s_k = freq_k.sin();
+                    
+                    let new_k0 = k0 * c_k - k1 * s_k;
+                    let new_k1 = k0 * s_k + k1 * c_k;
+                    
+                    sum_dot += new_q0 * new_k0 + new_q1 * new_k1;
                 }
                 
                 let cpu_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
@@ -48,10 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Allocate device memory
+    // Allocate device memory (matching original kernel output size)
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;
-    let s_size = seq_q * num_heads * seq_k * 4;
+    let s_size = seq_q * num_heads * seq_k * 4; // Same as original
 
     let mut q_d: Vec<u8> = vec![0u8; q_size];
     let mut k_d: Vec<u8> = vec![0u8; k_size];
@@ -107,11 +129,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Compare with CPU reference (raw dot products)
         let mut max_error = 0.0;
-        for i in 0..seq_q * num_heads * seq_k {
+        let total_elements = seq_q * num_heads * seq_k;
+        
+        for i in 0..total_elements {
             let diff = (gpu_scores[i] - cpu_scores[i]).abs();
             if diff > max_error {
                 max_error = diff;
             }
+            
+            // Debug: print first few mismatches
+            if diff > 1.0 && i < 20 {
+                println!("Mismatch at idx {}: GPU={}, CPU={}", i, gpu_scores[i], cpu_scores[i]);
+            }
+        }
+        
+        // Also check last few elements (might be uninitialized)
+        for i in (total_elements - 10..total_elements).filter(|&x| x > 9) {
+            let diff = (gpu_scores[i] - cpu_scores[i]).abs();
+            if diff > max_error {
+                max_error = diff;
+            }
+            println!("Last idx {}: GPU={}, CPU={}, diff={}", i, gpu_scores[i], cpu_scores[i], diff);
         }
 
         println!("✅ Tiled kernel executed successfully");
