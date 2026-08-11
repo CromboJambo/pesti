@@ -165,23 +165,25 @@ impl FusedAttentionKernel {
 
         // Kernel 2: apply_softmax_and_output_kernel (softmax + @ V → final output)
         let mut s_v2: u64 = s_ptr;
+        let mut v_v2: u64 = v_ptr;  // V pointer needed for weighted sum!
         let mut seq_q_v2: i32 = seq_q as i32;
         let mut seq_k_v2: i32 = seq_k as i32;
         let mut num_heads_v2: i32 = num_heads as i32;
-        let mut head_dim_v2: i32 = head_dim as i32;  // New param!
+        let mut head_dim_v2: i32 = head_dim as i32;
 
-        let mut params2: [*mut std::ffi::c_void; 5] = [
+        let mut params2: [*mut std::ffi::c_void; 6] = [
             &mut s_v2 as *mut u64 as *mut std::ffi::c_void,
+            &mut v_v2 as *mut u64 as *mut std::ffi::c_void,
             &mut seq_q_v2 as *mut i32 as *mut std::ffi::c_void,
             &mut seq_k_v2 as *mut i32 as *mut std::ffi::c_void,
             &mut num_heads_v2 as *mut i32 as *mut std::ffi::c_void,
-            &mut head_dim_v2 as *mut i32 as *mut std::ffi::c_void,  // New param!
+            &mut head_dim_v2 as *mut i32 as *mut std::ffi::c_void,
         ];
 
-        // Launch kernel 2: apply_softmax_and_output_kernel
+        // Launch kernel 2: apply_softmax_and_output_kernel (softmax + @ V → final output)
         let grid2 = (seq_q as u32, num_heads as u32, 1u32);
-        let block2 = (1u32, 1u32, 1u32);  // Single thread per block does all work
-        let smem_size2 = 0u32;  // No shared memory needed
+        let block2 = (32u32, 1u32, 1u32); // Use 32 threads for shared memory reduction
+        let smem_size2 = 4u32; // 4 bytes for exp_sum in shared memory
 
         unsafe {
             use crate::cuda_shim::launch_kernel;

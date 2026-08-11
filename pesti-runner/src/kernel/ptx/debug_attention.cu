@@ -1,10 +1,10 @@
-//! Fused RoPE + Attention + Softmax + V-Multiplication kernel
-// Uses shared memory for exp_sum to avoid score buffer corruption
+//! Debug kernel with print statements
 
 #include <cuda_fp16.h>
 #include <math.h>
+#include <stdio.h>
 
-// Kernel 1: Compute raw attention scores with RoPE and causal mask
+// Kernel 1: Compute raw attention scores
 __global__ void fused_attention_kernel(
     float scale,
     const half* __restrict__ q_ptr,
@@ -62,69 +62,66 @@ __global__ void fused_attention_kernel(
     }
 }
 
-// Kernel 2: Apply softmax AND multiply by V to get final output
+// Kernel 2: Apply softmax AND multiply by V
 __global__ void apply_softmax_and_output_kernel(
-    float* __restrict__ s_ptr,      // IN/OUT: scores → output
-    const half* __restrict__ v_ptr, // values: [seq_k, num_heads, head_dim]
+    float* __restrict__ scores,
+    const half* __restrict__ v_ptr,
     int seq_q,
     int seq_k,
     int num_heads,
     int head_dim
 ) {
-    extern __shared__ float shared_exp_sum[];  // Shared memory for exp_sum
-    
     int q_pos = blockIdx.x;
     int head = blockIdx.y;
-    int tid = threadIdx.x;
     
     if (q_pos >= seq_q || head >= num_heads) return;
     
-    // Pass 1: Find max and compute exp values for this (q_pos, head) pair
+    int tid = threadIdx.x;
+    
+    // Thread 0: find max and compute softmax sum
     if (tid == 0) {
         float max_val = -INFINITY;
         for (int k = 0; k < seq_k; k++) {
             int idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            if (s_ptr[idx] > max_val) {
-                max_val = s_ptr[idx];
+            if (scores[idx] > max_val) {
+                max_val = scores[idx];
             }
         }
         
         float exp_sum = 0.0f;
         for (int k = 0; k < seq_k; k++) {
             int idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            float val = s_ptr[idx];
+            float val = scores[idx];
             float exp_val = (val == -INFINITY) ? 0.0f : expf(val - max_val);
-            s_ptr[idx] = exp_val;
+            scores[idx] = exp_val;
             exp_sum += exp_val;
         }
         
-        // Store exp_sum in shared memory instead of score buffer!
-        shared_exp_sum[0] = exp_sum;
+        int max_idx = q_pos * num_heads * seq_k + head * seq_k;
+        scores[max_idx] = exp_sum;
     }
     
     __syncthreads();
     
-    float exp_sum = shared_exp_sum[0];
+    float exp_sum = scores[q_pos * num_heads * seq_k + head * seq_k];
     
-    // Pass 2: Normalize softmax weights (all scores, no corruption!)
     if (tid == 0 && exp_sum > 0) {
         for (int k = 0; k < seq_k; k++) {
             int idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            s_ptr[idx] /= exp_sum;
+            scores[idx] /= exp_sum;
         }
     }
     
     __syncthreads();
     
-    // Pass 3: Compute weighted sum of V for each output dimension
-    int dim_idx = tid;
-    
-    while (dim_idx < head_dim) {
+    // Each thread computes one dimension of the output for this (q_pos, head) pair
+    int dim_idx = tid * 2;
+    if (dim_idx < head_dim) {
         float output_val = 0.0f;
         
         for (int k = 0; k < seq_k; k++) {
             int score_idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            float softmax_val = s_ptr[score_idx];  // Read normalized weight
+            float softmax_val = scores[score_idx];
             
             int v_idx = k * num_heads * head_dim + head * head_dim + dim_idx;
             float v0 = __half2float(v_ptr[v_idx]);
@@ -136,10 +133,25 @@ __global__ void apply_softmax_and_output_kernel(
             }
         }
         
-        // Write output to new layout [seq_q, num_heads, head_dim]
         int out_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
-        s_ptr[out_idx] = output_val;
+        scores[out_idx] = output_val;
+    }
+}
+
+__global__ void debug_kernel(
+    const half* __restrict__ v_ptr,
+    float* __restrict__ debug_out,
+    int seq_k,
+    int num_heads,
+    int head_dim
+) {
+    int tid = threadIdx.x;
+    
+    if (tid < 4) {
+        // Read V for k=0, head=0, dim=tid
+        int v_idx = 0 * num_heads * head_dim + 0 * head_dim + tid;
+        float v_val = __half2float(v_ptr[v_idx]);
         
-        dim_idx += blockDim.x;
+        debug_out[tid] = v_val;
     }
 }

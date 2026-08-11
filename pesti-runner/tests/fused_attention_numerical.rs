@@ -125,7 +125,11 @@ fn test_fused_attention_numerical_conformance() {
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
-    let s_size = seq_q * num_heads * head_dim * 4; // Output buffer size
+    // Allocate enough space for scores [seq_q, num_heads, seq_k] AND output [seq_q, num_heads, head_dim]
+    // Scores buffer needs: seq_q * num_heads * seq_k floats
+    // Output buffer needs: seq_q * num_heads * head_dim floats
+    // Use max of both to ensure no overflow during in-place transformation
+    let s_size = (seq_q * num_heads * seq_k + seq_q * num_heads * head_dim) * 4;
 
     let q_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap() };
     let k_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap() };
