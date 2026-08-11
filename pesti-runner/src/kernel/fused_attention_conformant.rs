@@ -154,14 +154,17 @@ impl FusedAttentionKernel {
     }
 
     /// Launch fused attention kernel.
-
+    ///
+    /// Two-kernel approach:
+    /// 1. fused_attention_kernel: Compute raw scores with RoPE + causal mask
+    /// 2. apply_softmax_kernel: Apply softmax per (q_pos, head) pair
     pub fn launch(
         &self,
         scale: f32, // 1/sqrt(head_dim)
         q_ptr: u64, // Query device pointer (row-major [seq_q, num_heads, head_dim] f16)
         k_ptr: u64, // Key device pointer (row-major [seq_k, num_heads, head_dim] f16)
         v_ptr: u64, // Value device pointer (row-major [seq_k, num_heads, head_dim] f16)
-        s_ptr: u64, // Output softmax scores device pointer ([seq_q, seq_k] f32)
+        s_ptr: u64, // Output softmax scores device pointer ([seq_q, num_heads, seq_k] f32)
         seq_q: usize,
         seq_k: usize,
         num_heads: usize,
@@ -171,12 +174,11 @@ impl FusedAttentionKernel {
     ) -> Result<(), AttentionError> {
         use cudarc::driver::sys;
 
-        // Kernel signature from attention_rope_softmax.ptx (row-major layout):
+        // Kernel 1 signature from attention_rope_softmax.ptx (row-major layout):
         //   fused_attention_kernel(
         //     f32 scale, u64 q_ptr, u64 k_ptr, u64 v_ptr, u64 s_ptr,
         //     s32 seq_q, s32 seq_k, s32 num_heads, s32 head_dim,
         //     f32 rope_base, s32 max_pos)
-
         let mut scale_v: f32 = scale;
         let mut q_v: u64 = q_ptr;
         let mut k_v: u64 = k_ptr;
@@ -204,7 +206,7 @@ impl FusedAttentionKernel {
             &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
         ];
 
-        // Simple kernel: (ceil(seq_q/128), seq_k, num_heads), 128 threads per block
+        // Launch kernel 1: fused_attention_kernel
         let grid_x = (seq_q + 127) / 128;
         let grid = (grid_x as u32, seq_k as u32, num_heads as u32);
         let block = (128u32, 1u32, 1u32);
@@ -221,7 +223,50 @@ impl FusedAttentionKernel {
                 &mut params,             // Pass reference to array directly
             ) {
                 Ok(_) => {} // Success - no action needed
-                Err(e) => return Err(AttentionError::LaunchFailed(format!("kernel launch: {:?}", e))),
+                Err(e) => return Err(AttentionError::LaunchFailed(format!("kernel 1 launch: {:?}", e))),
+            }
+        }
+
+        // Kernel 2 signature: apply_softmax_kernel(float* s_ptr, int seq_q, int seq_k, int num_heads)
+        let mut s_v2: u64 = s_ptr;
+        let mut seq_q_v2: i32 = seq_q as i32;
+        let mut seq_k_v2: i32 = seq_k as i32;
+        let mut num_heads_v2: i32 = num_heads as i32;
+
+        let mut params2: [*mut std::ffi::c_void; 4] = [
+            &mut s_v2 as *mut u64 as *mut std::ffi::c_void,
+            &mut seq_q_v2 as *mut i32 as *mut std::ffi::c_void,
+            &mut seq_k_v2 as *mut i32 as *mut std::ffi::c_void,
+            &mut num_heads_v2 as *mut i32 as *mut std::ffi::c_void,
+        ];
+
+        // Launch kernel 2: apply_softmax_kernel
+        // Grid: (seq_q, num_heads), Block: seq_k threads
+        let grid2 = (seq_q as u32, num_heads as u32, 1u32);
+        let block2 = (seq_k as u32, 1u32, 1u32);
+        // Shared memory: seq_k floats for reduction
+        let smem_size2 = seq_k * 4; // 4 bytes per float
+
+        unsafe {
+            use crate::cuda_shim::launch_kernel;
+            
+            // Get the softmax kernel function from module
+            let softmax_mangled = "_Z20apply_softmax_kernelPfiii";
+            let softmax_func = match self.module.load_function(softmax_mangled) {
+                Ok(f) => f,
+                Err(e) => return Err(AttentionError::Cuda(format!("softmax function lookup {:?}: {:?}", softmax_mangled, e))),
+            };
+
+            match launch_kernel(
+                softmax_func.cu_function(), // Get raw CUfunction from wrapper
+                grid2,
+                block2,
+                smem_size2 as u32,
+                crate::cuda_shim::cu_stream(&self.stream),
+                &mut params2,
+            ) {
+                Ok(_) => {} // Success
+                Err(e) => return Err(AttentionError::LaunchFailed(format!("kernel 2 launch: {:?}", e))),
             }
         }
 

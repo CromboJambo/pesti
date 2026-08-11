@@ -193,7 +193,8 @@ fn test_fused_attention_vs_llama_cpp() {
     let q_size = seq_q * num_heads * head_dim * 2; // f16 = 2 bytes
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
-    let s_size = seq_q * seq_k * 4; // f32 scores
+    // Output: [seq_q, num_heads, seq_k] for multi-head attention
+    let s_size = seq_q * num_heads * seq_k * 4; // f32 scores
 
     let q_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap() };
     let k_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap() };
@@ -242,7 +243,7 @@ fn test_fused_attention_vs_llama_cpp() {
     println!("✅ GPU kernel launched successfully");
 
     // Copy results back to host
-    let mut gpu_probs = vec![0.0f32; seq_q * seq_k];
+    let mut gpu_probs = vec![0.0f32; seq_q * num_heads * seq_k];
     unsafe {
         pesti_runner::cuda_runtime::copy_device_to_host(
             gpu_probs.as_mut_ptr() as *mut u8,
@@ -252,17 +253,19 @@ fn test_fused_attention_vs_llama_cpp() {
     }
 
     println!(
-        "GPU softmax sum (first query): {:.6}",
+        "GPU softmax sum (first query, first head): {:.6}",
         gpu_probs[0..seq_k].iter().sum::<f32>()
     );
 
-    // Compare outputs
+    // Compare outputs - compare first head only (llama.cpp style single-head test)
     let mut max_abs_err = 0.0f32;
     let mut max_rel_err = 0.0f32;
 
     for i in 0..seq_q * seq_k {
         let llama_val = llama_probs[i];
-        let gpu_val = gpu_probs[i];
+        // GPU output is [seq_q, num_heads, seq_k], compare first head (head=0)
+        let gpu_idx = i; // First head: head * seq_k = 0
+        let gpu_val = gpu_probs[gpu_idx];
 
         let abs_err = (llama_val - gpu_val).abs();
         let rel_err = if llama_val.abs() > 1e-8 {

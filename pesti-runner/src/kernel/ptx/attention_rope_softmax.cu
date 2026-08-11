@@ -11,8 +11,7 @@ __device__ __forceinline__ void apply_rope_pair(
     q1 = new_q1;
 }
 
-// Outputs per-head RAW scores (no causal mask, no scaling)
-// Grid: (ceil(seq_q/128), seq_k, num_heads)
+// Kernel 1: Compute raw attention scores with RoPE and causal mask
 __global__ void fused_attention_kernel(
     float scale,
     const half* __restrict__ q_ptr,
@@ -60,7 +59,56 @@ __global__ void fused_attention_kernel(
         dot_product += q0 * k0 + q1 * k1;
     }
 
-    // Output: per-head raw dot product (no mask, no scale)
+    // Apply scale (1/sqrt(head_dim))
+    dot_product *= scale;
+
+    // Causal mask: set to -inf if q_pos >= k_pos
+    if (q_pos >= k_pos) {
+        dot_product = -INFINITY;
+    }
+
+    // Store raw score
     int out_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
     s_ptr[out_idx] = dot_product;
+}
+
+// Kernel 2: Apply softmax per (q_pos, head) pair - thread 0 does all work
+__global__ void apply_softmax_kernel(
+    float* s_ptr,
+    int seq_q,
+    int seq_k,
+    int num_heads
+) {
+    int q_pos = blockIdx.x;
+    int head = blockIdx.y;
+
+    if (q_pos >= seq_q || head >= num_heads) return;
+
+    // Thread 0 does all softmax computation for this (q_pos, head) pair
+    if (threadIdx.x == 0) {
+        // Find max
+        float max_val = -INFINITY;
+        for (int k = 0; k < seq_k; k++) {
+            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
+            if (s_ptr[idx] > max_val) {
+                max_val = s_ptr[idx];
+            }
+        }
+
+        // Compute exp and sum
+        float exp_sum = 0.0f;
+        for (int k = 0; k < seq_k; k++) {
+            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
+            float val = s_ptr[idx];
+            float exp_val = (val == -INFINITY) ? 0.0f : expf(val - max_val);
+            s_ptr[idx] = exp_val;  // Store exp value
+            exp_sum += exp_val;
+        }
+
+        // Normalize
+        for (int k = 0; k < seq_k; k++) {
+            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
+            s_ptr[idx] /= exp_sum;
+        }
+    }
 }
