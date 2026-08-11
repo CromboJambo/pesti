@@ -184,6 +184,8 @@ impl FusedAttentionKernel {
         let grid2 = (seq_q as u32, num_heads as u32, 1u32);
         let block2 = (32u32, 1u32, 1u32); // Use 32 threads for shared memory reduction
         let smem_size2 = 4u32; // 4 bytes for exp_sum in shared memory
+        
+        println!("DEBUG: Launching kernel 2 with grid={:?}, block={:?}, smem={} bytes", grid2, block2, smem_size2);
 
         unsafe {
             use crate::cuda_shim::launch_kernel;

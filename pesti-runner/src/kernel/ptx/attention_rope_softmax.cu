@@ -39,7 +39,27 @@ __global__ void fused_attention_kernel(
         float k0 = __half2float(k_ptr[k_idx]);
         float k1 = __half2float(k_ptr[k_idx + 1]);
         
-        dot_product += q0 * k0 + q1 * k1;
+        // Apply RoPE to Q (rotated by q_pos) and K (rotated by k_pos) before dot product
+        float inv_freq_q = 1.0f / powf(rope_base, (float)d / ((float)head_dim / 2.0f));
+        float freq_q = (float)q_pos * inv_freq_q;
+        float cos_val_q = cosf(freq_q);
+        float sin_val_q = sinf(freq_q);
+        
+        // RoPE on Q
+        float q0_rope = q0 * cos_val_q - q1 * sin_val_q;
+        float q1_rope = q0 * sin_val_q + q1 * cos_val_q;
+        
+        // Apply RoPE to K (rotated by k_pos)
+        float inv_freq_k = 1.0f / powf(rope_base, (float)d / ((float)head_dim / 2.0f));
+        float freq_k = (float)k_pos * inv_freq_k;
+        float cos_val_k = cosf(freq_k);
+        float sin_val_k = sinf(freq_k);
+        
+        // RoPE on K
+        float k0_rope = k0 * cos_val_k - k1 * sin_val_k;
+        float k1_rope = k0 * sin_val_k + k1 * cos_val_k;
+        
+        dot_product += q0_rope * k0_rope + q1_rope * k1_rope;
     }
     
     shared_dot[threadIdx.x] = dot_product;
@@ -128,16 +148,12 @@ __global__ void apply_softmax_and_output_kernel(
             
             int v_idx = k * num_heads * head_dim + head * head_dim + dim_idx;
             float v0 = __half2float(v_ptr[v_idx]);
-            if (dim_idx + 1 < head_dim) {
-                float v1 = __half2float(v_ptr[v_idx + 1]);
-                output_val += softmax_val * (v0 + v1);
-            } else {
-                output_val += softmax_val * v0;
-            }
+            output_val += softmax_val * v0;
         }
         
-        // Write output to new layout [seq_q, num_heads, head_dim]
-        int out_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
+        // Write output to new layout [seq_q, num_heads, head_dim] at end of buffer
+        int score_buffer_size = seq_q * num_heads * seq_k;  // In elements (floats)
+        int out_idx = score_buffer_size + q_pos * num_heads * head_dim + head * head_dim + dim_idx;
         s_ptr[out_idx] = output_val;
         
         dim_idx += blockDim.x;

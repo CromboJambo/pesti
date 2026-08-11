@@ -1,7 +1,7 @@
-//! Numerical conformance test: GPU fused attention vs CPU reference
+//! Debug numerical conformance test with detailed output
 
 use half::f16;
-use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::cuda_runtime::{CudaRuntime, allocate_device_memory, copy_host_to_device, copy_device_to_host, free_device_memory};
 
 fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     let half_dim = head_dim / 2;
@@ -22,12 +22,12 @@ fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
 fn reference_raw_scores(
     q_h: &[f16],
     k_h: &[f16],
-    v_h: &[f16], // Added V input
-    seq_q: usize, 
-    seq_k: usize, 
-    num_heads: usize, 
+    v_h: &[f16],
+    seq_q: usize,
+    seq_k: usize,
+    num_heads: usize,
     head_dim: usize,
-    rope_base: f32, 
+    rope_base: f32,
     scale: f32,
 ) -> Vec<f32> {
     let mut q_rope = vec![0.0f32; seq_q * num_heads * head_dim];
@@ -54,10 +54,8 @@ fn reference_raw_scores(
     
     for q_pos in 0..seq_q {
         for h in 0..num_heads {
-            // Get Q for this head/position
             let q_head = &q_rope[q_pos * num_heads * head_dim + h * head_dim..][..head_dim];
             
-            // Compute scores: Q @ K^T
             let mut scores = vec![0.0f32; seq_k];
             for k_pos in 0..seq_k {
                 let k_head = &k_rope[k_pos * num_heads * head_dim + h * head_dim..][..head_dim];
@@ -100,10 +98,9 @@ fn reference_raw_scores(
     output
 }
 
-#[test]
-fn test_fused_attention_numerical_conformance() {
-    let cuda_rt = CudaRuntime::new(0).unwrap();
-    println!("=== Fused Attention Numerical Conformance Test ===");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cuda_rt = CudaRuntime::new(0)?;
+    println!("=== Debug Numerical Conformance Test ===");
     println!("GPU: {}", cuda_rt.device_info().name);
 
     let seq_q = 2;
@@ -114,69 +111,96 @@ fn test_fused_attention_numerical_conformance() {
     let scale = 1.0 / (head_dim as f32).sqrt();
 
     let q_h: Vec<f16> = (0..seq_q * num_heads * head_dim)
-        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0)).collect();
+        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
+        .collect();
     let k_h: Vec<f16> = (0..seq_k * num_heads * head_dim)
-        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0)).collect();
+        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
+        .collect();
     let v_h: Vec<f16> = (0..seq_k * num_heads * head_dim)
-        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0)).collect();
+        .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
+        .collect();
 
-    let cpu_output = reference_raw_scores(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let cpu_output = reference_raw_scores(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
 
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
-    // Allocate enough space for scores [seq_q, num_heads, seq_k] AND output [seq_q, num_heads, head_dim]
-    // Scores buffer needs: seq_q * num_heads * seq_k floats
-    // Output buffer needs: seq_q * num_heads * head_dim floats
-    // Use max of both to ensure no overflow during in-place transformation
     let s_size = (seq_q * num_heads * seq_k + seq_q * num_heads * head_dim) * 4;
 
-    let q_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap() };
-    let k_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap() };
-    let v_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap() };
-    let s_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(s_size).unwrap() };
+    let q_ptr = allocate_device_memory(q_size)?;
+    let k_ptr = allocate_device_memory(k_size)?;
+    let v_ptr = allocate_device_memory(v_size)?;
+    let s_ptr = allocate_device_memory(s_size)?;
 
-    // Zero-initialize output buffer on device
     let zero_init = vec![0.0f32; seq_q * num_heads * head_dim];
-    unsafe {
-        pesti_runner::cuda_runtime::copy_host_to_device(
-            s_ptr, zero_init.as_ptr() as *const u8, s_size).unwrap();
-    }
-    cuda_rt.synchronize().unwrap(); // Ensure zero-init completes before kernel
+    copy_host_to_device(s_ptr, zero_init.as_ptr() as *const u8, s_size)?;
+    cuda_rt.synchronize()?;
 
-    unsafe {
-        pesti_runner::cuda_runtime::copy_host_to_device(q_ptr, q_h.as_ptr() as *const u8, q_size).unwrap();
-        pesti_runner::cuda_runtime::copy_host_to_device(k_ptr, k_h.as_ptr() as *const u8, k_size).unwrap();
-    }
+    copy_host_to_device(q_ptr, q_h.as_ptr() as *const u8, q_size)?;
+    copy_host_to_device(k_ptr, k_h.as_ptr() as *const u8, k_size)?;
+    copy_host_to_device(v_ptr, v_h.as_ptr() as *const u8, v_size)?;
 
-    let stream = cuda_rt.new_stream().unwrap();
+    let stream = cuda_rt.new_stream()?;
     let kernel = pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
         pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
         cuda_rt.context().clone(), stream.clone(),
-    ).unwrap();
+    )?;
 
-    unsafe {
-        kernel.launch(scale, q_ptr as u64, k_ptr as u64, v_ptr as u64, s_ptr as u64,
-            seq_q, seq_k, num_heads, head_dim, rope_base, seq_k).unwrap();
-    }
-    cuda_rt.synchronize().unwrap();
-
-    // Read output directly from s_ptr (now contains final attention output)
+    kernel.launch(
+        scale,
+        q_ptr as u64,
+        k_ptr as u64,
+        v_ptr as u64,
+        s_ptr as u64,
+        seq_q,
+        seq_k,
+        num_heads,
+        head_dim,
+        rope_base,
+        seq_k,
+    )?;
+    cuda_rt.synchronize()?;
+    
+    let score_buffer_size = seq_q * num_heads * seq_k * 4; // 4 bytes per f32
+    let output_size = seq_q * num_heads * head_dim * 4;
+    println!("Debug: seq_q={}, seq_k={}, num_heads={}, head_dim={}", seq_q, seq_k, num_heads, head_dim);
+    println!("Debug: score_buffer_size={} bytes, output_size={} bytes", score_buffer_size, output_size);
+    
     let mut gpu_output = vec![0.0f32; seq_q * num_heads * head_dim];
     
-    // Score buffer is in elements, so convert to bytes for byte-offset copy
-    let score_buffer_bytes = seq_q * num_heads * seq_k * 4; // 4 bytes per f32
-    let output_size = seq_q * num_heads * head_dim * 4;
+    // Output is stored after the score buffer, so copy from correct offset
+    copy_device_to_host(
+        gpu_output.as_mut_ptr() as *mut u8,
+        (s_ptr as usize + score_buffer_size) as *const u8,
+        output_size, // Copy full output portion
+    )?;
     
-    unsafe {
-        pesti_runner::cuda_runtime::copy_device_to_host(
-            gpu_output.as_mut_ptr() as *mut u8,
-            (s_ptr as usize + score_buffer_bytes) as *const u8,
-            output_size, // Copy only the output portion
-        ).unwrap();
+    // Print ALL GPU output values (non-zero only)
+    println!("\nFull GPU output ({} values):", gpu_output.len());
+    for (i, &val) in gpu_output.iter().enumerate() {
+        if val != 0.0 {
+            let q = i / (num_heads * head_dim);
+            let h = (i % (num_heads * head_dim)) / head_dim;
+            let d = i % head_dim;
+            println!("  idx[{}]: q={}, h={}, d={}, val={:.6}", i, q, h, d, val);
+        }
     }
 
-    // Compare against CPU reference (which also outputs [seq_q, num_heads, head_dim])
+    // Print first few values for comparison
+    println!("\nFirst 16 values (Q0, H0):");
+    for i in 0..16 {
+        let cpu_val = cpu_output[i];
+        let gpu_val = gpu_output[i];
+        let abs_err = (cpu_val - gpu_val).abs();
+        println!(
+            "  idx[{}]: CPU={:8.5}, GPU={:8.5}, err={:.6e}",
+            i, cpu_val, gpu_val, abs_err
+        );
+    }
+
+    // Calculate max error
     let mut max_abs_err = 0.0f32;
     for q in 0..seq_q {
         for h in 0..num_heads {
@@ -191,20 +215,12 @@ fn test_fused_attention_numerical_conformance() {
         }
     }
 
-    println!("Max absolute error: {:.6e}", max_abs_err);
+    println!("\nMax absolute error: {:.6e}", max_abs_err);
 
-    if max_abs_err < 1e-4 {
-        println!("✅ PASSED - Output matches CPU reference");
-    } else if max_abs_err < 1e-2 {
-        println!("⚠️ Moderate discrepancy ({} vs target 1e-4)", max_abs_err);
-    } else {
-        println!("❌ Large discrepancy ({} vs target 1e-4)", max_abs_err);
-    }
-
-    unsafe {
-        pesti_runner::cuda_runtime::free_device_memory(q_ptr).unwrap();
-        pesti_runner::cuda_runtime::free_device_memory(k_ptr).unwrap();
-        pesti_runner::cuda_runtime::free_device_memory(v_ptr).unwrap();
-        pesti_runner::cuda_runtime::free_device_memory(s_ptr).unwrap();
-    }
+    free_device_memory(q_ptr)?;
+    free_device_memory(k_ptr)?;
+    free_device_memory(v_ptr)?;
+    free_device_memory(s_ptr)?;
+    
+    Ok(())
 }

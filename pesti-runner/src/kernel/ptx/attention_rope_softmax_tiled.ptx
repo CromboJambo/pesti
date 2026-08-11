@@ -7,7 +7,7 @@
 //
 
 .version 9.3
-.target sm_75
+.target sm_89
 .address_size 64
 
 	// .globl	_Z28fused_attention_kernel_tiledfPK6__halfS1_S1_Pfiiiifi
