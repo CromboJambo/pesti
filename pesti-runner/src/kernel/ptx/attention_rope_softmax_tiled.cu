@@ -85,13 +85,135 @@ __global__ void fused_attention_kernel_tiled(
             
             // Apply RoPE to K pair
             float new_k0 = k0 * c_k - k1 * s_k;
-            float new_k1 = k0 * s_k + k1 * c_k;
+            float new_k1 = k0 * s_k + q1 * c_k;  // Fixed: was using new_q1 instead of new_k1
             
             dot += new_q0 * new_k0 + new_q1 * new_k1;
+        }
+        
+        // Apply scale (1/sqrt(head_dim))
+        dot *= scale;
+        
+        // Causal mask: set to -inf if q_pos >= k_pos
+        if (q_pos >= k_pos) {
+            dot = -INFINITY;
         }
         
         // Store attention score with correct indexing (matching original - no scale)
         int out_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
         s_ptr[out_idx] = dot;
+    }
+}
+
+__global__ void apply_softmax_kernel(
+    float* __restrict__ s_ptr,
+    int seq_q,
+    int seq_k,
+    int num_heads
+) {
+    // Each block processes one (q_pos, head) pair
+    // Grid: (seq_q, num_heads), so compute 1D qh from 2D blockIdx
+    int total_qh = seq_q * num_heads;
+    int qh = blockIdx.x + blockIdx.y * seq_q;  // Convert 2D to 1D block index
+    
+    if (qh >= total_qh) return;
+    
+    int q_pos = qh / num_heads;
+    int head = qh % num_heads;
+    
+    // Shared memory for reduction: one value per thread in block
+    __shared__ float exp_vals[128];  // blockDim.x <= 128
+    
+    // Phase 1: Find max value across seq_k positions for this (q_pos, head) pair
+    float max_val = -INFINITY;
+    int local_seq_k = seq_k;
+    
+    for (int k_pos = threadIdx.x; k_pos < local_seq_k; k_pos += blockDim.x) {
+        // Match the indexing from fused_attention_kernel_tiled:
+        // out_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos
+        int idx = qh / num_heads * num_heads * seq_k + (qh % num_heads) * seq_k + k_pos;
+        float val = s_ptr[idx];
+        if (val > max_val) {
+            max_val = val;
+        }
+    }
+    
+    // Parallel reduction to find global max for this (q_pos, head) pair
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            float other = -INFINITY;
+            int other_idx = threadIdx.x + stride;
+            if (other_idx < local_seq_k) {
+                // Match indexing from above
+                int idx = qh / num_heads * num_heads * seq_k + (qh % num_heads) * seq_k + other_idx;
+                other = s_ptr[idx];
+            }
+            if (other > max_val) {
+                max_val = other;
+            }
+        }
+        __syncthreads();
+    }
+    
+    // Re-read max_val after reduction (thread 0 has the final value)
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        exp_vals[0] = max_val;
+    }
+    __syncthreads();
+    max_val = exp_vals[0];
+    
+    // Phase 2: Compute softmax for each position
+    for (int k_pos = threadIdx.x; k_pos < local_seq_k; k_pos += blockDim.x) {
+        // Match indexing from above
+        int idx = qh / num_heads * num_heads * seq_k + (qh % num_heads) * seq_k + k_pos;
+        float val = s_ptr[idx];
+        
+        float exp_val;
+        if (val == -INFINITY) {
+            exp_val = 0.0f;
+        } else {
+            exp_val = expf(val - max_val);
+        }
+        
+        exp_vals[threadIdx.x] = exp_val;
+        s_ptr[idx] = exp_val;
+    }
+    
+    __syncthreads();
+    
+    // Phase 3: Compute sum of exp values (using shared memory)
+    float exp_sum = 0.0f;
+    for (int t = threadIdx.x; t < blockDim.x; t += blockDim.x) {
+        if (t < local_seq_k) {
+            exp_sum += exp_vals[t];
+        }
+    }
+    
+    // Parallel reduction for sum
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride && threadIdx.x + stride < local_seq_k) {
+            exp_vals[threadIdx.x] += exp_vals[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        exp_sum = exp_vals[0];
+    }
+    __syncthreads();
+    exp_sum = exp_vals[0];
+    
+    // Phase 4: Normalize by sum
+    for (int k_pos = threadIdx.x; k_pos < local_seq_k; k_pos += blockDim.x) {
+        // Match indexing from above
+        int idx = qh / num_heads * num_heads * seq_k + (qh % num_heads) * seq_k + k_pos;
+        float val = s_ptr[idx];
+        
+        if (val == 0.0f) {
+            s_ptr[idx] = 0.0f;  // Causal mask position
+        } else {
+            s_ptr[idx] = val / exp_sum;
+        }
     }
 }
