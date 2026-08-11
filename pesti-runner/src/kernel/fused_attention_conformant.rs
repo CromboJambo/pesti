@@ -103,6 +103,37 @@ impl FusedAttentionKernelBuilder {
             function,
         })
     }
+
+    /// Build kernel from external PTX file (for vectorized/tiled variants)
+    pub fn build_from_ptx_file<P: AsRef<std::path::Path>>(
+        self,
+        ptx_path: P,
+        function_name: &str,
+    ) -> Result<FusedAttentionKernel, AttentionError> {
+        use std::fs;
+
+        // Read PTX source from file
+        let ptx_src = fs::read_to_string(ptx_path)
+            .map_err(|e| AttentionError::Cuda(format!("read PTX file: {:?}", e)))?;
+
+        // Load module from PTX string
+        let module = crate::cuda_shim::CudaModule::load_from_ptx(&self.context, &ptx_src)
+            .map_err(|e| AttentionError::Cuda(format!("module load: {:?}", e)))?;
+
+        // Get the function by name (allows custom kernel names)
+        let function = match module.load_function(function_name) {
+            Ok(f) => f,
+            Err(e) => return Err(AttentionError::Cuda(format!("function lookup {:?}: {:?}", function_name, e))),
+        };
+
+        Ok(FusedAttentionKernel {
+            arch: self.arch,
+            context: self.context,
+            stream: self.stream,
+            module,
+            function,
+        })
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -173,9 +204,11 @@ impl FusedAttentionKernel {
             &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
         ];
 
-        // Compute grid dimensions: each block handles seq_q elements (1D grid)
-        let grid = (seq_q as u32, 1u32, 1u32);
+        // Simple kernel: (ceil(seq_q/128), seq_k, num_heads), 128 threads per block
+        let grid_x = (seq_q + 127) / 128;
+        let grid = (grid_x as u32, seq_k as u32, num_heads as u32);
         let block = (128u32, 1u32, 1u32);
+        let smem_size = 0u32;
 
         unsafe {
             use crate::cuda_shim::launch_kernel;
@@ -183,7 +216,7 @@ impl FusedAttentionKernel {
                 self.function.cu_function(), // Use instance field `self.function` - returns sys::CUfunction
                 grid,
                 block,
-                0,                       // shared_mem_bytes (PTX declares in kernel)
+                smem_size,                   // shared_mem_bytes for dynamic shared memory
                 crate::cuda_shim::cu_stream(&self.stream), // Get raw CUstream from CudaStream
                 &mut params,             // Pass reference to array directly
             ) {
