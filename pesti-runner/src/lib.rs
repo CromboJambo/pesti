@@ -13,6 +13,7 @@ pub mod cuda_shim;
 pub mod cuda_stub;
 pub mod dequantize;
 pub mod cpu_optimized; // Optimized CPU attention with SIMD and parallelism
+pub mod cpu_optimized_ndarray; // ndarray-based implementation for comparison
 #[cfg(feature = "cuda")]
 pub mod device;
 #[cfg(feature = "cuda")]

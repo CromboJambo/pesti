@@ -37,6 +37,7 @@ pesti-gguf = { workspace = true }
 ggml-quants = "0.1"
 encoding_rs = "0.8"
 gemm.workspace = true
+ndarray = "0.15"
 half.workspace = true
 float8.workspace = true
 libc.workspace = true
