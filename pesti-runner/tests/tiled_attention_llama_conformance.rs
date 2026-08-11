@@ -70,25 +70,29 @@ fn test_tiled_attention_vs_llama_cpp() {
     let mut q_rope = q_h_f32.clone();
     let mut k_rope = k_h_f32.clone();
 
-    // Apply RoPE to each position (llama.cpp style)
+    // Apply RoPE to each position (llama.cpp style) - PER HEAD
     for pos in 0..seq_q {
-        let q_start = pos * num_heads * head_dim;
-        apply_rope_cpu(
-            &mut q_rope[q_start..q_start + num_heads * head_dim],
-            head_dim,
-            pos,
-            rope_base,
-        );
+        for head in 0..num_heads {
+            let q_start = pos * num_heads * head_dim + head * head_dim;
+            apply_rope_cpu(
+                &mut q_rope[q_start..q_start + head_dim],
+                head_dim,
+                pos,
+                rope_base,
+            );
+        }
     }
 
     for pos in 0..seq_k {
-        let k_start = pos * num_heads * head_dim;
-        apply_rope_cpu(
-            &mut k_rope[k_start..k_start + num_heads * head_dim],
-            head_dim,
-            pos,
-            rope_base,
-        );
+        for head in 0..num_heads {
+            let k_start = pos * num_heads * head_dim + head * head_dim;
+            apply_rope_cpu(
+                &mut k_rope[k_start..k_start + head_dim],
+                head_dim,
+                pos,
+                rope_base,
+            );
+        }
     }
 
     for q_pos in 0..seq_q {
