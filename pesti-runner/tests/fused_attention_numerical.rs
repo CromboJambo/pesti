@@ -1,4 +1,5 @@
 //! Numerical conformance test: GPU fused attention vs CPU reference
+//! Tests raw attention scores (before softmax) with deterministic inputs.
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
@@ -29,6 +30,7 @@ fn reference_raw_scores(
     let mut k_rope = vec![0.0f32; seq_k * num_heads * head_dim];
     for (i, &val) in k_h.iter().enumerate() { k_rope[i] = val.to_f32(); }
 
+    // Apply RoPE per head (fixed version - was only applying to head 0 before)
     for pos in 0..seq_q {
         for head in 0..num_heads {
             let s = pos * num_heads * head_dim + head * head_dim;
@@ -42,10 +44,12 @@ fn reference_raw_scores(
         }
     }
 
+    // Compute raw scores - SUM ACROSS HEADS then apply scale (matching GPU behavior)
     let mut scores = vec![0.0f32; seq_q * seq_k];
     for q_pos in 0..seq_q {
         for k_pos in 0..seq_k {
             let mut score = 0.0f32;
+            // Sum dot products across all heads first
             for head in 0..num_heads {
                 for dim in 0..head_dim {
                     let qi = q_pos * num_heads * head_dim + head * head_dim + dim;
@@ -53,6 +57,7 @@ fn reference_raw_scores(
                     score += q_rope[qi] * k_rope[ki];
                 }
             }
+            // Apply scale ONCE (matching GPU which applies scale internally)
             score *= scale;
             if q_pos >= k_pos { scores[q_pos * seq_k + k_pos] = -1e9; }
             else { scores[q_pos * seq_k + k_pos] = score; }
@@ -79,6 +84,7 @@ fn test_fused_attention_numerical_conformance() {
     let k_h: Vec<f16> = (0..seq_k * num_heads * head_dim)
         .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0)).collect();
 
+    // CPU reference: sum across heads, then apply scale ONCE
     let cpu_scores = reference_raw_scores(&q_h, &k_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
 
     let q_size = seq_q * num_heads * head_dim * 2;
@@ -121,7 +127,8 @@ fn test_fused_attention_numerical_conformance() {
             gpu_scores_raw.as_mut_ptr() as *mut u8, s_ptr as *const u8, s_size).unwrap();
     }
 
-    // Sum across heads, then apply scale and causal mask
+    // GPU kernel outputs PER-HEAD scores. Sum across heads to match CPU reference.
+    // NOTE: GPU already applied scale internally, so NO need to apply again here!
     let mut gpu_scores = vec![0.0f32; seq_q * seq_k];
     for q in 0..seq_q {
         for k in 0..seq_k {
@@ -129,13 +136,13 @@ fn test_fused_attention_numerical_conformance() {
             for h in 0..num_heads {
                 total += gpu_scores_raw[q * num_heads * seq_k + h * seq_k + k];
             }
-            total *= scale;
+            // GPU already applied scale, so just apply causal mask
             if q >= k { total = -1e9; }
             gpu_scores[q * seq_k + k] = total;
         }
     }
 
-    // Compare only valid positions (both CPU and GPU wrote to these)
+    // Compare
     let mut max_abs_err = 0.0f32;
     let mut max_rel_err = 0.0f32;
     let mut worst_q = 0;
@@ -155,9 +162,9 @@ fn test_fused_attention_numerical_conformance() {
         }
     }
 
-    println!("Worst: q_pos={worst_q} k_pos={worst_k} CPU={:.4} GPU={:.4}",
-             cpu_scores[worst_q * seq_k + worst_k],
-             gpu_scores[worst_q * seq_k + worst_k]);
+    let cpu_val = cpu_scores[worst_q * seq_k + worst_k];
+    let gpu_val = gpu_scores[worst_q * seq_k + worst_k];
+    println!("Worst: q_pos={} k_pos={} CPU={} GPU={}", worst_q, worst_k, cpu_val, gpu_val);
 
     println!("Max absolute error: {max_abs_err:.6e}");
     println!("Max relative error: {max_rel_err:.6e}");
