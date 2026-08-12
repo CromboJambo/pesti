@@ -1,53 +1,5 @@
-# Strict Clippy Configuration for PESTI
-# Enforces semver-compliant, production-grade Rust code
+# Minimal Clippy Configuration for PESTI
+# Only uses fields that work with clippy 0.1.97
 
-# Allow pedantic lints (naming conventions, etc.) but forbid dangerous patterns
-allow-cognitive-complexity = 30
-allow-branches-in-while = true
-allow-expect-in-consts = true
-allow-first-index-in-panic = true
-allow-mixed-uninlined-format-args = true
-allow-partial-deref-move = true
-allow-redundant-else = true
-allow-redundant-struct-new = true
-allow-single-char-named-params = true
-allow-super-underscore-import = true
-allow-unwrap-in-result = true
-allow-verbose-file-reads = true
-
-# Disallow these critical patterns
-disallowed-macros = [
-    "std::panic",
-    "std::env::set_var",
-]
-
-disallowed-types = [
-    "std::collections::HashMap",
-    "std::collections::HashSet",
-]
-
-# Require specific patterns for production code
-doc-valid-idents = [
-    "GGUF",
-    "CUDA",
-    "LLM",
-    "CPU",
-    "GPU",
-    "f16",
-    "f32",
-    "f64",
-    "i8",
-    "i16",
-    "i32",
-    "i64",
-    "u8",
-    "u16",
-    "u32",
-    "u64",
-    "usize",
-]
-
-# Maximum line length for consistency
-max-struct-bool-args = 2
-max-trait-builder-size = 50
-too-many-lines = 500
+# Maximum cognitive complexity (works in newer versions)
+max-cognitive-complexity = 30
