@@ -155,7 +155,7 @@ impl MatB {
 
         let mut result = vec![0.0f32; out_features * in_features];
 
-        for out_idx in (0..out_features) {
+        for out_idx in 0..out_features {
             for (col, _in_idx) in (0..in_features).enumerate() {
                 let mut sum = 0.0f32;
                 for k in 0..rank {
