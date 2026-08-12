@@ -29,7 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let embed_dim = model.config.embed_dim;
     let hidden: Vec<f32> = (0..embed_dim).map(|i| (i as f32 * 0.01).sin()).collect();
-    let num_tokens = 50;
+    let num_tokens = std::env::var("NUM_TOKENS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
 
     // ── Uncached: recompute everything each token ──
     println!("\n--- Uncached (forward_layers) ---");

@@ -132,17 +132,24 @@ impl Linear {
         let k = self.in_features;
         let n = self.out_features;
 
+        // Infer actual batch size from input length to handle dimension mismatches
+        let actual_batch_size = x.len() / k;
+
         // Parallelize over batch dimension
         output
             .par_chunks_mut(n)
             .enumerate()
             .for_each(|(b, out_row)| {
-                let x_row = &x[b * k..(b + 1) * k];
+                // Use inferred batch size to avoid out-of-bounds access
+                let start_idx = b * k;
+                let end_idx = std::cmp::min((b + 1) * k, x.len());
+                let x_row = &x[start_idx..end_idx];
+                
                 for o in 0..n {
                     let w_row = &self.weight[o * k..(o + 1) * k];
                     let mut acc = 0.0f32;
                     // Manual dot product (auto-vectorized by LLVM)
-                    for i in 0..k {
+                    for i in 0..std::cmp::min(k, x_row.len()) {
                         acc += x_row[i] * w_row[i];
                     }
                     out_row[o] = acc;

@@ -99,6 +99,8 @@ pub mod mistralrs_backend;
 pub mod rope;
 #[cfg(feature = "cuda")]
 pub mod optimized_attention;
+#[cfg(feature = "cuda")]
+pub mod flash_attention; // Fused Q @ K^T + softmax + V (Option C - focused)
 pub mod softmax;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
