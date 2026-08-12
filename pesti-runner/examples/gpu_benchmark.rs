@@ -2,7 +2,7 @@
 
 use half::f16;
 use pesti_runner::cpu_optimized_ndarray::reference_with_ndarray;
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,43 +61,105 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 2: GPU CUDA kernel
     #[cfg(feature = "cuda")]
     {
-        use cudarc::driver::{CudaDevice, CudaSlice};
+        use pesti_runner::kernel::fused_attention_conformant::{
+            FusedAttentionArch, FusedAttentionKernelBuilder,
+        };
+        use std::sync::Arc;
 
         println!("\nTest 2: GPU CUDA Kernel (fused attention_rope_softmax)");
 
-        // Initialize CUDA device
-        let device = CudaDevice::new(0)?;
+        // Initialize CUDA runtime
+        let cuda_rt = pesti_runner::CudaRuntime::new(0)?;
+        let stream = Arc::new(cuda_rt.new_stream()?);
+
+        // Build fused attention kernel
+        let kernel = FusedAttentionKernelBuilder::new(
+            FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            Arc::clone(&stream),
+        )
+        .build()?;
+
+        println!("  Kernel loaded: fused_attention_kernel + apply_softmax_and_output_kernel");
+
+        // Allocate device memory
+        let q_size = seq_q * num_heads * head_dim * std::mem::size_of::<f16>();
+        let k_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let v_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let score_size = seq_q * num_heads * seq_k * std::mem::size_of::<f32>();
+        let output_size = score_size + seq_q * num_heads * head_dim * std::mem::size_of::<f32>();
+
+        let q_ptr = pesti_runner::cuda_runtime::allocate_device_memory(q_size)?;
+        let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size)?;
+        let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size)?;
+        let s_ptr = pesti_runner::cuda_runtime::allocate_device_memory(output_size)?;
 
         // Copy data to GPU
-        let q_d: CudaSlice<f16> = device.htod(q_h.as_slice())?;
-        let k_d: CudaSlice<f16> = device.htod(k_h.as_slice())?;
-        let v_d: CudaSlice<f16> = device.htod(v_h.as_slice())?;
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            q_ptr,
+            q_h.as_ptr() as *const u8,
+            q_size,
+        )?;
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            k_ptr,
+            k_h.as_ptr() as *const u8,
+            k_size,
+        )?;
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            v_ptr,
+            v_h.as_ptr() as *const u8,
+            v_size,
+        )?;
 
-        // Allocate output buffer (scores + output)
-        let output_size = seq_q * num_heads * seq_k + seq_q * num_heads * head_dim;
-        let mut s_d: CudaSlice<f32> = device.alloc_zeros::<f32>(output_size)?;
+        // Zero-initialize output buffer
+        let zero_vec = vec![0u8; output_size];
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            s_ptr,
+            zero_vec.as_ptr(),
+            output_size,
+        )?;
 
         let start = Instant::now();
 
-        // Kernel launch would go here:
-        // kernel1<<<grid>>>... (fused_attention_kernel)
-        // kernel2<<<grid>>>... (apply_softmax_and_output_kernel)
+        // Launch fused attention kernel
+        kernel.launch(
+            scale,
+            q_ptr as u64,
+            k_ptr as u64,
+            v_ptr as u64,
+            s_ptr as u64,
+            seq_q,
+            seq_k,
+            num_heads,
+            head_dim,
+            rope_base,
+            seq_q, // max_pos
+        )?;
 
-        device.sync()?;
+        // Synchronize
+        stream.synchronize()?;
         let duration_gpu = start.elapsed();
 
         println!("  Time: {:.3}ms", duration_gpu.as_secs_f64() * 1000.0);
 
-        // Copy result back to CPU
-        let mut result_gpu_h: Vec<f32> = vec![0.0; output_size];
-        device.htod_into(s_d.as_slice(), &mut result_gpu_h)?;
+        // Copy result back to CPU (output portion only, skip scores)
+        let output_elements = seq_q * num_heads * head_dim;
+        let mut result_gpu_h: Vec<f32> = vec![0.0; output_elements];
+        let output_offset = seq_q * num_heads * seq_k * std::mem::size_of::<f32>();
+        unsafe {
+            pesti_runner::cuda_runtime::copy_device_to_host(
+                result_gpu_h.as_mut_ptr() as *mut u8,
+                s_ptr.add(output_offset) as *const u8,
+                output_elements * std::mem::size_of::<f32>(),
+            )?;
+        }
 
         println!(
             "  Output sample (first 5): [{:.4}, {:.4}, {:.4}, {:.4}, {:.4}]",
             result_gpu_h[0], result_gpu_h[1], result_gpu_h[2], result_gpu_h[3], result_gpu_h[4]
         );
 
-        // Compare results
+        // Compare results (CPU reference is seq_q * num_heads * head_dim elements)
         let max_error = result_cpu
             .iter()
             .zip(result_gpu_h.iter().take(result_cpu.len()))
@@ -114,6 +176,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let speedup = duration_cpu.as_secs_f64() / duration_gpu.as_secs_f64();
         println!("\n  GPU Speedup vs CPU: {:.2}x", speedup);
+
+        // Cleanup
+        unsafe {
+            pesti_runner::cuda_runtime::free_device_memory(q_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(k_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(v_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(s_ptr)?;
+        }
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -158,24 +228,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "cuda")]
     {
-        use cudarc::driver::{CudaDevice, CudaSlice};
+        use pesti_runner::kernel::fused_attention_conformant::{
+            FusedAttentionArch, FusedAttentionKernelBuilder,
+        };
+        use std::sync::Arc;
 
-        let device = CudaDevice::new(0)?;
-        let q_d: CudaSlice<f16> = device.htod(q_h.as_slice())?;
-        let k_d: CudaSlice<f16> = device.htod(k_h.as_slice())?;
-        let v_d: CudaSlice<f16> = device.htod(v_h.as_slice())?;
+        let cuda_rt = pesti_runner::CudaRuntime::new(0)?;
+        let stream = Arc::new(cuda_rt.new_stream()?);
 
-        let output_size = seq_q * num_heads * seq_k + seq_q * num_heads * head_dim;
-        let mut s_d: CudaSlice<f32> = device.alloc_zeros::<f32>(output_size)?;
+        let kernel = FusedAttentionKernelBuilder::new(
+            FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            Arc::clone(&stream),
+        )
+        .build()?;
+
+        // Allocate and copy data
+        let q_size = seq_q * num_heads * head_dim * std::mem::size_of::<f16>();
+        let k_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let v_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let output_size = seq_q * num_heads * seq_k * 4 + seq_q * num_heads * head_dim * 4;
+
+        let q_ptr = pesti_runner::cuda_runtime::allocate_device_memory(q_size)?;
+        let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size)?;
+        let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size)?;
+        let s_ptr = pesti_runner::cuda_runtime::allocate_device_memory(output_size)?;
+
+        pesti_runner::cuda_runtime::copy_host_to_device(q_ptr, q_h.as_ptr() as *const u8, q_size)?;
+        pesti_runner::cuda_runtime::copy_host_to_device(k_ptr, k_h.as_ptr() as *const u8, k_size)?;
+        pesti_runner::cuda_runtime::copy_host_to_device(v_ptr, v_h.as_ptr() as *const u8, v_size)?;
+
+        let zero_vec = vec![0u8; output_size];
+        pesti_runner::cuda_runtime::copy_host_to_device(s_ptr, zero_vec.as_ptr(), output_size)?;
 
         let start = Instant::now();
 
-        // Placeholder for actual kernel launch
-        device.sync()?;
+        kernel.launch(
+            scale,
+            q_ptr as u64,
+            k_ptr as u64,
+            v_ptr as u64,
+            s_ptr as u64,
+            seq_q,
+            seq_k,
+            num_heads,
+            head_dim,
+            rope_base,
+            seq_q,
+        )?;
+
+        stream.synchronize()?;
         let duration_gpu = start.elapsed();
 
         let bandwidth_gb_s_gpu = memory_access as f64 / 1e9 / duration_gpu.as_secs_f64();
         println!("GPU bandwidth: {:.2} GB/s", bandwidth_gb_s_gpu);
+
+        // Cleanup
+        unsafe {
+            pesti_runner::cuda_runtime::free_device_memory(q_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(k_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(v_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(s_ptr)?;
+        }
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -188,20 +302,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "cuda")]
     {
-        use cudarc::driver::{CudaDevice, CudaSlice};
+        use pesti_runner::kernel::fused_attention_conformant::{
+            FusedAttentionArch, FusedAttentionKernelBuilder,
+        };
+        use std::sync::Arc;
 
-        let device = CudaDevice::new(0)?;
-        let q_d: CudaSlice<f16> = device.htod(q_h.as_slice())?;
-        let k_d: CudaSlice<f16> = device.htod(k_h.as_slice())?;
-        let v_d: CudaSlice<f16> = device.htod(v_h.as_slice())?;
+        let cuda_rt = pesti_runner::CudaRuntime::new(0)?;
+        let stream = Arc::new(cuda_rt.new_stream()?);
 
-        let output_size = seq_q * num_heads * seq_k + seq_q * num_heads * head_dim;
-        let mut s_d: CudaSlice<f32> = device.alloc_zeros::<f32>(output_size)?;
+        let kernel = FusedAttentionKernelBuilder::new(
+            FusedAttentionArch::MmaSync,
+            cuda_rt.context().clone(),
+            Arc::clone(&stream),
+        )
+        .build()?;
+
+        // Allocate and copy data
+        let q_size = seq_q * num_heads * head_dim * std::mem::size_of::<f16>();
+        let k_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let v_size = seq_k * num_heads * head_dim * std::mem::size_of::<f16>();
+        let output_size = seq_q * num_heads * seq_k * 4 + seq_q * num_heads * head_dim * 4;
+
+        let q_ptr = pesti_runner::cuda_runtime::allocate_device_memory(q_size)?;
+        let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size)?;
+        let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size)?;
+        let s_ptr = pesti_runner::cuda_runtime::allocate_device_memory(output_size)?;
+
+        pesti_runner::cuda_runtime::copy_host_to_device(q_ptr, q_h.as_ptr() as *const u8, q_size)?;
+        pesti_runner::cuda_runtime::copy_host_to_device(k_ptr, k_h.as_ptr() as *const u8, k_size)?;
+        pesti_runner::cuda_runtime::copy_host_to_device(v_ptr, v_h.as_ptr() as *const u8, v_size)?;
+
+        let zero_vec = vec![0u8; output_size];
+        pesti_runner::cuda_runtime::copy_host_to_device(s_ptr, zero_vec.as_ptr(), output_size)?;
 
         let start = Instant::now();
 
-        // Placeholder for actual kernel launch
-        device.sync()?;
+        kernel.launch(
+            scale,
+            q_ptr as u64,
+            k_ptr as u64,
+            v_ptr as u64,
+            s_ptr as u64,
+            seq_q,
+            seq_k,
+            num_heads,
+            head_dim,
+            rope_base,
+            seq_q,
+        )?;
+
+        stream.synchronize()?;
         let duration_gpu = start.elapsed();
 
         let speedup = duration_cpu.as_secs_f64() / duration_gpu.as_secs_f64();
@@ -210,6 +360,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             duration_gpu.as_secs_f64() * 1000.0,
             speedup
         );
+
+        // Cleanup
+        unsafe {
+            pesti_runner::cuda_runtime::free_device_memory(q_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(k_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(v_ptr)?;
+            pesti_runner::cuda_runtime::free_device_memory(s_ptr)?;
+        }
     }
 
     #[cfg(not(feature = "cuda"))]
