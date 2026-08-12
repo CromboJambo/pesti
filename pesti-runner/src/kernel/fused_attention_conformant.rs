@@ -114,7 +114,7 @@ impl FusedAttentionKernel {
         let mut scale_v: f32 = scale;
         let mut q_v: u64 = q_ptr;
         let mut k_v: u64 = k_ptr;
-        let mut v_v: u64 = v_ptr;  // Now used in kernel!
+        let mut v_v: u64 = v_ptr; // Now used in kernel!
         let mut s_v: u64 = s_ptr;
         let mut seq_q_v: i32 = seq_q as i32;
         let mut seq_k_v: i32 = seq_k as i32;
@@ -128,12 +128,12 @@ impl FusedAttentionKernel {
             &mut scale_v as *mut f32 as *mut std::ffi::c_void,
             &mut q_v as *mut u64 as *mut std::ffi::c_void,
             &mut k_v as *mut u64 as *mut std::ffi::c_void,
-            &mut v_v as *mut u64 as *mut std::ffi::c_void,  // V pointer passed to kernel
+            &mut v_v as *mut u64 as *mut std::ffi::c_void, // V pointer passed to kernel
             &mut s_v as *mut u64 as *mut std::ffi::c_void,
             &mut seq_q_v as *mut i32 as *mut std::ffi::c_void,
             &mut seq_k_v as *mut i32 as *mut std::ffi::c_void,
             &mut num_heads_v as *mut i32 as *mut std::ffi::c_void,
-            &mut head_dim_v as *mut i32 as *mut std::ffi::c_void,  // New param!
+            &mut head_dim_v as *mut i32 as *mut std::ffi::c_void, // New param!
             &mut rope_base_v as *mut f32 as *mut std::ffi::c_void,
             &mut max_pos_v as *mut i32 as *mut std::ffi::c_void,
         ];
@@ -157,7 +157,8 @@ impl FusedAttentionKernel {
                 Ok(_) => {}
                 Err(e) => {
                     return Err(AttentionError::LaunchFailed(format!(
-                        "kernel 1 launch: {:?}", e
+                        "kernel 1 launch: {:?}",
+                        e
                     )));
                 }
             }
@@ -165,7 +166,7 @@ impl FusedAttentionKernel {
 
         // Kernel 2: apply_softmax_and_output_kernel (softmax + @ V → final output)
         let mut s_v2: u64 = s_ptr;
-        let mut v_v2: u64 = v_ptr;  // V pointer needed for weighted sum!
+        let mut v_v2: u64 = v_ptr; // V pointer needed for weighted sum!
         let mut seq_q_v2: i32 = seq_q as i32;
         let mut seq_k_v2: i32 = seq_k as i32;
         let mut num_heads_v2: i32 = num_heads as i32;
@@ -184,8 +185,11 @@ impl FusedAttentionKernel {
         let grid2 = (seq_q as u32, num_heads as u32, 1u32);
         let block2 = (32u32, 1u32, 1u32); // Use 32 threads for shared memory reduction
         let smem_size2 = 4u32; // 4 bytes for exp_sum in shared memory
-        
-        println!("DEBUG: Launching kernel 2 with grid={:?}, block={:?}, smem={} bytes", grid2, block2, smem_size2);
+
+        println!(
+            "DEBUG: Launching kernel 2 with grid={:?}, block={:?}, smem={} bytes",
+            grid2, block2, smem_size2
+        );
 
         unsafe {
             use crate::cuda_shim::launch_kernel;
@@ -212,7 +216,8 @@ impl FusedAttentionKernel {
                 Ok(_) => {}
                 Err(e) => {
                     return Err(AttentionError::LaunchFailed(format!(
-                        "kernel 2 launch: {:?}", e
+                        "kernel 2 launch: {:?}",
+                        e
                     )));
                 }
             }

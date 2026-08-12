@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Supported loss function types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LossType {
     /// Cross-entropy loss (standard language modeling)
     #[default]
@@ -16,7 +15,6 @@ pub enum LossType {
     /// Regression MSE loss
     MSELoss,
 }
-
 
 /// Loss function trait.
 pub trait LossFunction: Send + Sync {

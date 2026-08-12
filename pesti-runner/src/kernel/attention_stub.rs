@@ -5,15 +5,13 @@ use crate::kernel::kvcache_stub::Kvcache;
 use half::f16;
 
 /// Dummy attention architecture
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum AttentionArch {
     #[default]
     Cpu,
     Wgmma,
     Tcgen05,
 }
-
 
 /// Dummy attention config
 #[derive(Debug, Clone)]

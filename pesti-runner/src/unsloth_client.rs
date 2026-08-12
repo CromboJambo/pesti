@@ -64,7 +64,6 @@ pub enum Quantization {
     Int4,
 }
 
-
 /// Result from a chat/completion call (matches Python ChatResult)
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatResult {

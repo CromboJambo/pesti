@@ -118,7 +118,9 @@ fn test_llama_embedding_length_metadata() {
             .or_else(|| header.get_kv_u32("embedding_length"));
 
         // Qwen2 models don't store embedding_length in KV pairs, so infer from token_embd.weight tensor shape
-        let embedding_len_from_tensor = header.tensors.iter()
+        let embedding_len_from_tensor = header
+            .tensors
+            .iter()
             .find(|t| t.name == "token_embd.weight" || t.name == "tok_embeddings.weight")
             .map(|t| t.shape[0] as u32); // First dimension is hidden_size/embed_dim
 
@@ -129,7 +131,8 @@ fn test_llama_embedding_length_metadata() {
             "Missing embedding_length metadata or token_embd.weight tensor in Qwen2.5 model"
         );
 
-        println!("Embedding length: {} (from KV pairs: {:?}, from tensor: {:?})", 
+        println!(
+            "Embedding length: {} (from KV pairs: {:?}, from tensor: {:?})",
             embedding_len.unwrap(),
             embedding_len_from_kv,
             embedding_len_from_tensor

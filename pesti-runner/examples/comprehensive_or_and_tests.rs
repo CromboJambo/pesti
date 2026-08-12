@@ -15,7 +15,7 @@ fn main() {
 
     // Generate random input data
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    
+
     let q_h: Vec<half::f16> = (0..seq_q * num_heads * head_dim)
         .map(|_| {
             let val = rng.random::<f32>() * 2.0 - 1.0;
@@ -38,26 +38,36 @@ fn main() {
         .collect();
 
     println!("=== Comprehensive OR/AND Gate Tests ===");
-    println!("Dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}\n", 
-             seq_q, seq_k, num_heads, head_dim);
+    println!(
+        "Dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}\n",
+        seq_q, seq_k, num_heads, head_dim
+    );
 
     // Test 1: GEMM vs Ndarray
     println!("Test 1: GEMM vs Ndarray");
     let start = Instant::now();
-    let result_gemm = reference_raw_scores_optimized(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result_gemm = reference_raw_scores_optimized(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration_gemm = start.elapsed();
 
     let start = Instant::now();
-    let result_ndarray = reference_with_ndarray(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result_ndarray = reference_with_ndarray(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration_ndarray = start.elapsed();
 
-    let max_error_1 = result_gemm.iter()
+    let max_error_1 = result_gemm
+        .iter()
         .zip(result_ndarray.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, |a, b| a.max(b));
 
     println!("  GEMM time: {:.3}ms", duration_gemm.as_secs_f64() * 1000.0);
-    println!("  Ndarray time: {:.3}ms", duration_ndarray.as_secs_f64() * 1000.0);
+    println!(
+        "  Ndarray time: {:.3}ms",
+        duration_ndarray.as_secs_f64() * 1000.0
+    );
     println!("  Max error: {:.6}", max_error_1);
     if max_error_1 < 2.0 {
         println!("  ✓ PASS\n");
@@ -68,15 +78,21 @@ fn main() {
     // Test 2: GEMM vs Ndarray Manual
     println!("Test 2: GEMM vs Ndarray Manual (manual dot products)");
     let start = Instant::now();
-    let result_manual = reference_with_ndarray_manual(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result_manual = reference_with_ndarray_manual(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration_manual = start.elapsed();
 
-    let max_error_2 = result_gemm.iter()
+    let max_error_2 = result_gemm
+        .iter()
         .zip(result_manual.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, |a, b| a.max(b));
 
-    println!("  Manual time: {:.3}ms", duration_manual.as_secs_f64() * 1000.0);
+    println!(
+        "  Manual time: {:.3}ms",
+        duration_manual.as_secs_f64() * 1000.0
+    );
     println!("  Max error: {:.6}", max_error_2);
     if max_error_2 < 2.0 {
         println!("  ✓ PASS\n");
@@ -86,7 +102,8 @@ fn main() {
 
     // Test 3: Ndarray vs Ndarray Manual
     println!("Test 3: Ndarray vs Ndarray Manual");
-    let max_error_3 = result_ndarray.iter()
+    let max_error_3 = result_ndarray
+        .iter()
         .zip(result_manual.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, |a, b| a.max(b));
@@ -108,15 +125,17 @@ fn main() {
 
     // Test 5: Edge cases
     println!("\n=== Edge Case Tests ===");
-    
+
     // Small dimensions
     let small_seq_q = 4;
     let small_seq_k = 4;
     let small_num_heads = 1;
     let small_head_dim = 8;
 
-    println!("Small dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}", 
-             small_seq_q, small_seq_k, small_num_heads, small_head_dim);
+    println!(
+        "Small dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}",
+        small_seq_q, small_seq_k, small_num_heads, small_head_dim
+    );
 
     let mut rng_small = rand::rngs::StdRng::seed_from_u64(123);
     let q_h_small: Vec<half::f16> = (0..small_seq_q * small_num_heads * small_head_dim)
@@ -140,12 +159,31 @@ fn main() {
         })
         .collect();
 
-    let result_gemm_small = reference_raw_scores_optimized(&q_h_small, &k_h_small, &v_h_small, 
-                                                          small_seq_q, small_seq_k, small_num_heads, small_head_dim, rope_base, scale);
-    let result_ndarray_small = reference_with_ndarray(&q_h_small, &k_h_small, &v_h_small, 
-                                                      small_seq_q, small_seq_k, small_num_heads, small_head_dim, rope_base, scale);
+    let result_gemm_small = reference_raw_scores_optimized(
+        &q_h_small,
+        &k_h_small,
+        &v_h_small,
+        small_seq_q,
+        small_seq_k,
+        small_num_heads,
+        small_head_dim,
+        rope_base,
+        scale,
+    );
+    let result_ndarray_small = reference_with_ndarray(
+        &q_h_small,
+        &k_h_small,
+        &v_h_small,
+        small_seq_q,
+        small_seq_k,
+        small_num_heads,
+        small_head_dim,
+        rope_base,
+        scale,
+    );
 
-    let max_error_small = result_gemm_small.iter()
+    let max_error_small = result_gemm_small
+        .iter()
         .zip(result_ndarray_small.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, |a, b| a.max(b));
@@ -163,8 +201,10 @@ fn main() {
     let large_num_heads = 8;
     let large_head_dim = 128;
 
-    println!("Large dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}", 
-             large_seq_q, large_seq_k, large_num_heads, large_head_dim);
+    println!(
+        "Large dimensions: seq_q={}, seq_k={}, num_heads={}, head_dim={}",
+        large_seq_q, large_seq_k, large_num_heads, large_head_dim
+    );
 
     let mut rng_large = rand::rngs::StdRng::seed_from_u64(456);
     let q_h_large: Vec<half::f16> = (0..large_seq_q * large_num_heads * large_head_dim)
@@ -188,12 +228,31 @@ fn main() {
         })
         .collect();
 
-    let result_gemm_large = reference_raw_scores_optimized(&q_h_large, &k_h_large, &v_h_large, 
-                                                          large_seq_q, large_seq_k, large_num_heads, large_head_dim, rope_base, scale);
-    let result_ndarray_large = reference_with_ndarray(&q_h_large, &k_h_large, &v_h_large, 
-                                                      large_seq_q, large_seq_k, large_num_heads, large_head_dim, rope_base, scale);
+    let result_gemm_large = reference_raw_scores_optimized(
+        &q_h_large,
+        &k_h_large,
+        &v_h_large,
+        large_seq_q,
+        large_seq_k,
+        large_num_heads,
+        large_head_dim,
+        rope_base,
+        scale,
+    );
+    let result_ndarray_large = reference_with_ndarray(
+        &q_h_large,
+        &k_h_large,
+        &v_h_large,
+        large_seq_q,
+        large_seq_k,
+        large_num_heads,
+        large_head_dim,
+        rope_base,
+        scale,
+    );
 
-    let max_error_large = result_gemm_large.iter()
+    let max_error_large = result_gemm_large
+        .iter()
         .zip(result_ndarray_large.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, |a, b| a.max(b));

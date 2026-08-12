@@ -76,8 +76,7 @@ impl<T> Drop for DeviceBuffer<T> {
     fn drop(&mut self) {
         // If this buffer was allocated via a backend, free it.
         // For host-backed convenience buffers, nothing to free.
-        if !self.backed {
-        }
+        if !self.backed {}
         // Note: in the current design, the caller is responsible for
         // calling backend.free() explicitly. We don't free on drop here
         // because the backend may be shared and we don't want to accidentally

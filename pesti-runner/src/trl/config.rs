@@ -109,12 +109,10 @@ impl Default for OptimizerConfig {
 }
 
 /// Supported optimizer types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OptimizerType {
     #[default]
     AdamW,
     Adam,
     SGD,
 }
-

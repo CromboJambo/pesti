@@ -191,10 +191,7 @@ fn main() {
 
     println!("\n=== Performance Metrics ===");
     println!("Execution time: {:.3}ms", duration.as_secs_f64() * 1000.0);
-    println!(
-        "Total operations: {}",
-        seq_q * seq_k * num_heads * head_dim
-    );
+    println!("Total operations: {}", seq_q * seq_k * num_heads * head_dim);
     println!(
         "Ops/sec: {:.2e}",
         (seq_q * seq_k * num_heads * head_dim) as f64 / duration.as_secs_f64()
@@ -232,7 +229,5 @@ fn main() {
     println!(
         "  perf stat -e l1-dcache-loads,l1-dcache-load-misses,l2-cache-loads,l2-cache-load-misses,llc-loads,llc-load-misses \\"
     );
-    println!(
-        "    cargo run --package pesti-runner --example ndarray_benchmark"
-    );
+    println!("    cargo run --package pesti-runner --example ndarray_benchmark");
 }

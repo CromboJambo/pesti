@@ -3,7 +3,6 @@
 //! Provides numerically stable softmax with CUDA acceleration via cudarc.
 //! Feature-gated: `#[cfg(feature = "cuda")]` enables GPU version, otherwise uses CPU fallback.
 
-
 /// Numerically stable softmax on CPU.
 /// Subtracts max to prevent overflow in exp(), then normalizes.
 pub fn softmax_cpu(logits: &[f32]) -> Vec<f32> {

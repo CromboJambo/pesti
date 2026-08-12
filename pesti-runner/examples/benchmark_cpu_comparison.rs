@@ -15,7 +15,7 @@ fn main() {
 
     // Generate random input data using rand_distr
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    
+
     // Use simple approach: just generate values directly
     let q_h: Vec<half::f16> = (0..seq_q * num_heads * head_dim)
         .map(|_| {
@@ -38,31 +38,41 @@ fn main() {
         })
         .collect();
 
-    println!("Benchmark: seq_q={}, seq_k={}, num_heads={}, head_dim={}", 
-             seq_q, seq_k, num_heads, head_dim);
+    println!(
+        "Benchmark: seq_q={}, seq_k={}, num_heads={}, head_dim={}",
+        seq_q, seq_k, num_heads, head_dim
+    );
     println!();
 
     // Warm-up run
-    let _ = reference_raw_scores_optimized(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
-    
+    let _ = reference_raw_scores_optimized(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
+
     // Benchmark 1: Optimized CPU (gemm + rayon)
     println!("1. Optimized CPU (gemm + rayon):");
     let start = Instant::now();
-    let result1 = reference_raw_scores_optimized(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result1 = reference_raw_scores_optimized(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration1 = start.elapsed();
     println!("   Time: {:.3}ms", duration1.as_secs_f64() * 1000.0);
 
     // Benchmark 2: Ndarray (structured arrays)
     println!("\n2. Ndarray-based implementation:");
     let start = Instant::now();
-    let result2 = reference_with_ndarray(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result2 = reference_with_ndarray(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration2 = start.elapsed();
     println!("   Time: {:.3}ms", duration2.as_secs_f64() * 1000.0);
 
     // Benchmark 3: Ndarray + manual dot products
     println!("\n3. Ndarray + manual dot products:");
     let start = Instant::now();
-    let result3 = reference_with_ndarray_manual(&q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale);
+    let result3 = reference_with_ndarray_manual(
+        &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
+    );
     let duration3 = start.elapsed();
     println!("   Time: {:.3}ms", duration3.as_secs_f64() * 1000.0);
 
@@ -74,13 +84,21 @@ fn main() {
     println!(
         "Ndarray vs Gemm: {:.2}x {}",
         speedup_ndarray_vs_gemm,
-        if speedup_ndarray_vs_gemm > 1.0 { "slower" } else { "faster" }
+        if speedup_ndarray_vs_gemm > 1.0 {
+            "slower"
+        } else {
+            "faster"
+        }
     );
 
     println!(
         "Manual dot vs Gemm: {:.2}x {}",
         speedup_manual_vs_gemm,
-        if speedup_manual_vs_gemm > 1.0 { "slower" } else { "faster" }
+        if speedup_manual_vs_gemm > 1.0 {
+            "slower"
+        } else {
+            "faster"
+        }
     );
 
     // Verify numerical consistency

@@ -142,9 +142,10 @@ impl Dataset for InMemoryDataset {
         let batch = Batch::new(input_ids.clone(), attention_mask);
 
         if let Some(labels) = &self.labels
-            && index < labels.len() {
-                return Some(batch.with_labels(labels[index].clone()));
-            }
+            && index < labels.len()
+        {
+            return Some(batch.with_labels(labels[index].clone()));
+        }
 
         Some(batch)
     }

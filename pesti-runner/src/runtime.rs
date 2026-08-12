@@ -153,10 +153,11 @@ impl Runtime {
         {
             let current = self.current_model.read().await;
             if let Some(state) = current.as_ref()
-                && state.name == name {
-                    debug!(model = name, "Model already loaded");
-                    return Ok(());
-                }
+                && state.name == name
+            {
+                debug!(model = name, "Model already loaded");
+                return Ok(());
+            }
         }
 
         // Unload current model
@@ -225,12 +226,12 @@ impl Runtime {
 
             // Extract config from safetensors metadata
             crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
-                    .map_err(|e| {
-                        crate::error::RunnerError::ModelLoad(format!(
-                            "Failed to extract safetensors config: {e}"
-                        ))
-                    })
-                    .map(|_| ())?;
+                .map_err(|e| {
+                    crate::error::RunnerError::ModelLoad(format!(
+                        "Failed to extract safetensors config: {e}"
+                    ))
+                })
+                .map(|_| ())?;
 
             // Load model from safetensors
             // Stub - actual implementation only exists with CUDA

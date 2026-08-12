@@ -73,8 +73,7 @@ pub trait Adapter: Send + Sync {
 }
 
 /// Type of adapter being used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AdapterType {
     /// Low-Rank Adaptation: W' = W + BA where A is (in_features x r) and B is (r x out_features)
     #[default]
@@ -88,7 +87,6 @@ pub enum AdapterType {
     /// Prompt Tuning: Learnable prompt embeddings
     PromptTuning,
 }
-
 
 /// Builder for creating adapters with common configurations.
 pub struct AdapterBuilder<T> {

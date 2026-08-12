@@ -105,7 +105,7 @@ impl SwiGLUFFN {
         }
 
         // Project up: (batch, embed_dim)
-        
+
         self.w3.forward(&hidden, 0)
     }
 }
