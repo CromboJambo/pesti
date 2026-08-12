@@ -9,6 +9,7 @@ pub mod cpu_optimized; // Optimized CPU attention with SIMD and parallelism
 pub mod cpu_optimized_ndarray; // ndarray-based implementation for comparison
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
+pub mod memory_pool; // Pre-allocated device memory pool for efficiency
 #[cfg(feature = "cuda")]
 pub mod cuda_shim;
 #[cfg(not(feature = "cuda"))]
