@@ -9,7 +9,6 @@ use candle_core::backend::BackendDevice;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
-use std::sync::Arc;
 use tracing::warn;
 
 // Import InertiaManager for computational inertia support
@@ -58,7 +57,7 @@ impl InferenceEngine {
         #[cfg(not(feature = "cuda"))]
         {
             use crate::kernel::attention_stub::AttentionArch;
-            return Self {
+            Self {
                 device,
                 dtype,
                 gemm: Box::new(crate::kernel::CpuGemmKernel::new()),
@@ -69,7 +68,7 @@ impl InferenceEngine {
                 cpu_gemm: crate::kernel::CpuGemmKernel::new(),
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                 inertia_manager: InertiaManager::new(1024), // default queue size
-            };
+            }
         }
 
         #[cfg(feature = "cuda")]

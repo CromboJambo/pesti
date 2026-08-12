@@ -165,7 +165,7 @@ impl LayerProfiler {
     pub fn record_forward(&self) -> usize {
         let count = self.call_count.fetch_add(1, Ordering::Relaxed) + 1;
 
-        if count % 50 == 0 {
+        if count.is_multiple_of(50) {
             // Log every 50 invocations
             debug!(layer = %self.layer_id, count = count, "Layer profiler: invocation recorded");
         }

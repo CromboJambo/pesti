@@ -127,13 +127,9 @@ impl<'a> KvcacheSlice<'a> {
 
 /// Stub TMA descriptor (4x u32 = 16 bytes for Blackwell)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub struct TmaDescriptor(pub [u32; 4]);
 
-impl Default for TmaDescriptor {
-    fn default() -> Self {
-        Self([0; 4])
-    }
-}
 
 impl TmaDescriptor {
     pub fn with_gmem_addr(mut self, addr: u64) -> Self {

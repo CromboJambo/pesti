@@ -22,7 +22,7 @@
 //! - LoRA adapter: r×(d+k) parameters (trainable)
 //! - For d=k=4096, r=8: 2% of base model size!
 
-use super::adapter::{Adapter, AdapterBuilder, AdapterType};
+use super::adapter::{Adapter, AdapterType};
 use super::matrices::{MatA, MatB};
 use crate::peft::{AdapterConfig, AdapterError, Result};
 use rand::{Rng, SeedableRng};
@@ -167,7 +167,7 @@ impl LoRAAdapter {
         // Add to base weights: W' = W + scale * BA
         let mut merged_weights = vec![0.0f32; base_weights.len()];
         for (row, out_idx) in (0..self.out_features).enumerate() {
-            for (col, in_idx) in (0..self.in_features).enumerate() {
+            for (col, _in_idx) in (0..self.in_features).enumerate() {
                 let base_weight = base_weights[out_idx * self.in_features + col];
                 let ba_weight = ba[row * self.in_features + col] * scale;
                 merged_weights[out_idx * self.in_features + col] = base_weight + ba_weight;

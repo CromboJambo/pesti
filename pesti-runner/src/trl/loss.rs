@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 /// Supported loss function types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum LossType {
     /// Cross-entropy loss (standard language modeling)
+    #[default]
     CrossEntropy,
     /// KL divergence (for distillation or RLHF)
     KLDivergence,
@@ -15,11 +17,6 @@ pub enum LossType {
     MSELoss,
 }
 
-impl Default for LossType {
-    fn default() -> Self {
-        Self::CrossEntropy
-    }
-}
 
 /// Loss function trait.
 pub trait LossFunction: Send + Sync {
@@ -41,7 +38,7 @@ pub trait LossFunction: Send + Sync {
         // Default implementation: cross-entropy gradient
         match self.loss_type() {
             LossType::CrossEntropy => {
-                let batch_size = logits.len() / targets.len().max(1);
+                let _batch_size = logits.len() / targets.len().max(1);
                 let vocab_size = targets.len();
 
                 for (i, &target) in targets.iter().enumerate() {
@@ -51,7 +48,7 @@ pub trait LossFunction: Send + Sync {
                     }
                 }
 
-                for (i, logit) in logits.iter_mut().enumerate() {
+                for logit in logits.iter_mut() {
                     *logit *= scale;
                 }
             }
@@ -118,7 +115,7 @@ impl LossFunction for CrossEntropyLoss {
         // Apply label smoothing if enabled
         if self.label_smoothing > 0.0 {
             let smoothing = self.label_smoothing / vocab_size as f32;
-            let no_smoothing = (1.0 - self.label_smoothing) / vocab_size as f32;
+            let _no_smoothing = (1.0 - self.label_smoothing) / vocab_size as f32;
 
             for b in 0..batch_size {
                 let logit_idx = b * vocab_size + targets[b] as usize;

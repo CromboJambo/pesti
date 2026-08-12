@@ -230,8 +230,8 @@ impl DispatchContext {
         }
 
         // GPU path: allocate device buffers
-        let a_bytes = a_host.len() * std::mem::size_of::<f16>();
-        let b_bytes = b_host.len() * std::mem::size_of::<f16>();
+        let a_bytes = std::mem::size_of_val(a_host);
+        let b_bytes = std::mem::size_of_val(b_host);
         let c_bytes = c_len * std::mem::size_of::<f32>();
 
         let a_handle = self
@@ -269,7 +269,7 @@ impl DispatchContext {
             let c_init_bytes: &[u8] = unsafe {
                 std::slice::from_raw_parts(
                     c_init_data.as_ptr() as *const u8,
-                    c_init_data.len() * std::mem::size_of::<f32>(),
+                    std::mem::size_of_val(c_init_data),
                 )
             };
             self.memory
@@ -428,7 +428,7 @@ impl DispatchContext {
                 for i in 0..in_features {
                     sum += x[x_start + i] * weights[o * in_features + i];
                 }
-                if let Some(ref bias) = bias {
+                if let Some(bias) = bias {
                     sum += bias[o];
                 }
                 output[b * out_features + o] = sum;
@@ -477,7 +477,7 @@ impl DispatchContext {
         );
 
         // Allocate device buffer for query only (one-way transfer), then pull result back once
-        let query_bytes = query.len() * std::mem::size_of::<f16>();
+        let query_bytes = std::mem::size_of_val(query);
         let query_handle = self
             .memory
             .alloc(query_bytes)
@@ -627,7 +627,7 @@ fn ctx_dispatch_linear_cpu(
             for i in 0..in_features {
                 sum += x[x_start + i] * weights[o * in_features + i];
             }
-            if let Some(ref bias) = bias {
+            if let Some(bias) = bias {
                 sum += bias[o];
             }
             output[b * out_features + o] = sum;
@@ -713,7 +713,7 @@ impl AttentionDispatch {
                 .iter()
                 .map(|&v| half::f16::from_f32(v))
                 .collect();
-            if key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
+            key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err();
             if value_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
         }
 
@@ -978,7 +978,7 @@ impl AttentionDispatch {
                 .iter()
                 .map(|&val| half::f16::from_f32(val))
                 .collect();
-            if key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
+            key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err();
             if value_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
         }
 
@@ -994,14 +994,14 @@ impl AttentionDispatch {
 
         // Build K/V tensors: [1, cache_len, num_kv_heads, head_dim]
         let k_tensor = candle_bridge::f16_to_tensor(
-            &k_buf.to_vec(),
+            k_buf,
             &[1, cache_len, self.num_kv_heads, self.head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
 
         let v_tensor = candle_bridge::f16_to_tensor(
-            &v_buf.to_vec(),
+            v_buf,
             &[1, cache_len, self.num_kv_heads, self.head_dim],
             None,
         )

@@ -74,8 +74,10 @@ pub trait Adapter: Send + Sync {
 
 /// Type of adapter being used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AdapterType {
     /// Low-Rank Adaptation: W' = W + BA where A is (in_features x r) and B is (r x out_features)
+    #[default]
     LoRA,
     /// Quantized LoRA: LoRA on top of quantized base weights
     QLoRA,
@@ -87,11 +89,6 @@ pub enum AdapterType {
     PromptTuning,
 }
 
-impl Default for AdapterType {
-    fn default() -> Self {
-        Self::LoRA
-    }
-}
 
 /// Builder for creating adapters with common configurations.
 pub struct AdapterBuilder<T> {
@@ -141,7 +138,7 @@ impl<T: Adapter> AdapterBuilder<T> {
         if self.config.scaling <= 0.0 {
             return Err(AdapterError::InvalidScaling);
         }
-        Ok(T::empty_from_config(self.config)?)
+        T::empty_from_config(self.config)
     }
 
     /// Build from checkpoint (weights loaded from file).

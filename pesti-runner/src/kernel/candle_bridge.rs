@@ -301,7 +301,7 @@ pub fn swiglu(x: &Tensor) -> Result<Tensor, candle_core::Error> {
     let chunks = x.chunk(2, candle_core::D::Minus1)?;
     let x1 = &chunks[0];
     let x2 = &chunks[1];
-    Ok((x1 * sigmoid(x2))?)
+    x1 * sigmoid(x2)
 }
 
 #[cfg(test)]

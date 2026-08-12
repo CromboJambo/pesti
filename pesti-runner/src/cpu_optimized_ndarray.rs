@@ -137,7 +137,7 @@ pub fn reference_with_ndarray(
     // Combine all head results
     let mut output = Vec::with_capacity(seq_q * num_heads * head_dim);
     for h in 0..num_heads {
-        let start_idx = h * seq_q * head_dim;
+        let _start_idx = h * seq_q * head_dim;
         for i in 0..seq_q * head_dim {
             output.push(head_results[h][i]);
         }
@@ -285,7 +285,7 @@ pub fn reference_with_ndarray_manual(
     // Combine all head results
     let mut output = Vec::with_capacity(seq_q * num_heads * head_dim);
     for h in 0..num_heads {
-        let start_idx = h * seq_q * head_dim;
+        let _start_idx = h * seq_q * head_dim;
         for i in 0..seq_q * head_dim {
             output.push(head_results[h][i]);
         }

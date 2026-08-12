@@ -5,7 +5,7 @@ use super::state::{Metrics, State};
 /// Callback trait for hooking into training events.
 pub trait Callback: Send + Sync {
     /// Called at the start of training.
-    fn on_train_start(&mut self, state: &State) {}
+    fn on_train_start(&mut self, _state: &State) {}
 
     /// Called at the end of each epoch.
     fn on_epoch_end(&mut self, _state: &State) {}
@@ -151,7 +151,7 @@ impl CheckpointCallback {
 
 impl Callback for CheckpointCallback {
     fn on_epoch_end(&mut self, state: &State) {
-        if state.global_step % self.save_interval == 0 {
+        if state.global_step.is_multiple_of(self.save_interval) {
             let checkpoint_path = format!("{}/epoch_{}.ckpt", self.save_path, state.epoch);
             println!("Saving checkpoint: {}", checkpoint_path);
             // TODO: Implement actual checkpoint saving

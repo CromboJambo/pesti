@@ -65,7 +65,7 @@ pub trait Dataset: Send + Sync {
     fn get(&self, index: usize) -> Option<Batch>;
 
     /// Iterate over the dataset.
-    fn iter(&self) -> DatasetIterator<Self>
+    fn iter(&self) -> DatasetIterator<'_, Self>
     where
         Self: Sized,
     {
@@ -141,11 +141,10 @@ impl Dataset for InMemoryDataset {
 
         let batch = Batch::new(input_ids.clone(), attention_mask);
 
-        if let Some(labels) = &self.labels {
-            if index < labels.len() {
+        if let Some(labels) = &self.labels
+            && index < labels.len() {
                 return Some(batch.with_labels(labels[index].clone()));
             }
-        }
 
         Some(batch)
     }

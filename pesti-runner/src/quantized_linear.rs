@@ -84,12 +84,12 @@ impl QuantizedLinear {
     /// Compute the number of bytes per row based on quantization type.
     fn row_bytes(&self) -> usize {
         match self.dtype {
-            QuantDtype::Q4_0 => ((self.in_features + 31) / 32) * 18,
-            QuantDtype::Q4_1 => ((self.in_features + 31) / 32) * 20,
-            QuantDtype::Q8_0 => ((self.in_features + 31) / 32) * 34,
-            QuantDtype::Q4_K => ((self.in_features + 15) / 16) * 28,
-            QuantDtype::Q5_K => ((self.in_features + 15) / 16) * 36,
-            QuantDtype::Q6_K => ((self.in_features + 15) / 16) * 42,
+            QuantDtype::Q4_0 => self.in_features.div_ceil(32) * 18,
+            QuantDtype::Q4_1 => self.in_features.div_ceil(32) * 20,
+            QuantDtype::Q8_0 => self.in_features.div_ceil(32) * 34,
+            QuantDtype::Q4_K => self.in_features.div_ceil(16) * 28,
+            QuantDtype::Q5_K => self.in_features.div_ceil(16) * 36,
+            QuantDtype::Q6_K => self.in_features.div_ceil(16) * 42,
         }
     }
 

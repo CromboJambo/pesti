@@ -152,12 +152,11 @@ impl Runtime {
         // Check if already loaded
         {
             let current = self.current_model.read().await;
-            if let Some(state) = current.as_ref() {
-                if state.name == name {
+            if let Some(state) = current.as_ref()
+                && state.name == name {
                     debug!(model = name, "Model already loaded");
                     return Ok(());
                 }
-            }
         }
 
         // Unload current model
@@ -225,8 +224,7 @@ impl Runtime {
             );
 
             // Extract config from safetensors metadata
-            let _meta =
-                crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
+            crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
                     .map_err(|e| {
                         crate::error::RunnerError::ModelLoad(format!(
                             "Failed to extract safetensors config: {e}"
@@ -499,8 +497,9 @@ impl Runtime {
     }
 
     /// Get the current device preference.
-    pub fn device_preference(&self) -> () {
+    pub fn device_preference(&self) {
         // Stub - actual implementation only exists with CUDA
-        self.config.device_preference.clone()
+        self.config.device_preference;
+        ()
     }
 }

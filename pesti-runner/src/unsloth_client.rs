@@ -55,18 +55,15 @@ impl Default for ModelConfig {
 /// Quantization levels supported by Unsloth Studio
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Quantization {
     Bits8,
+    #[default]
     Bits4,
     Float16,
     Int4,
 }
 
-impl Default for Quantization {
-    fn default() -> Self {
-        Self::Bits4
-    }
-}
 
 /// Result from a chat/completion call (matches Python ChatResult)
 #[derive(Debug, Clone, Deserialize)]

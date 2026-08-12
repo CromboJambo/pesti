@@ -28,7 +28,7 @@
 //! }
 //! ```
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 // Re-export types from sync module for consistency
 pub use crate::unsloth_client::{

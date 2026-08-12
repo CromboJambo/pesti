@@ -77,7 +77,6 @@ impl<T> Drop for DeviceBuffer<T> {
         // If this buffer was allocated via a backend, free it.
         // For host-backed convenience buffers, nothing to free.
         if !self.backed {
-            return;
         }
         // Note: in the current design, the caller is responsible for
         // calling backend.free() explicitly. We don't free on drop here
@@ -214,7 +213,7 @@ impl<T> DeviceBuffer<T> {
     where
         T: Copy,
     {
-        let bytes = data.len() * std::mem::size_of::<T>();
+        let bytes = std::mem::size_of_val(data);
         let handle = backend
             .alloc(bytes)
             .map_err(|e| DeviceBufferError::Allocation(format!("alloc {} bytes: {e}", bytes)))?;
@@ -315,7 +314,7 @@ impl<T> DeviceBuffer<T> {
                 got: src.len(),
             });
         }
-        let bytes = src.len() * std::mem::size_of::<T>();
+        let bytes = std::mem::size_of_val(src);
         let src_bytes: &[u8] =
             unsafe { std::slice::from_raw_parts(src.as_ptr() as *const u8, bytes) };
         backend
@@ -329,7 +328,7 @@ impl<T> DeviceBuffer<T> {
     /// Returns None for backend-allocated buffers — use `to_host_vec()`
     /// or `to_host_slice()` instead.
     pub fn as_slice(&self) -> Option<&[T]> {
-        self.host_data.as_ref().map(|v| v.as_slice())
+        self.host_data.as_deref()
     }
 
     /// Get the raw device pointer (if applicable).
@@ -404,7 +403,7 @@ impl<T> DeviceBuffer<T> {
     /// Returns None for backend-allocated buffers — use `to_host_vec()`
     /// or `to_host_slice()` instead.
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
-        self.host_data.as_mut().map(|v| v.as_mut_slice())
+        self.host_data.as_deref_mut()
     }
 }
 

@@ -371,7 +371,7 @@ fn dequantize_q1_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         ];
 
         for i in 0..16usize {
-            let q1_val = (((q1 >> i) & 0x01) as u16) << 2;
+            let q1_val = ((q1 >> i) & 0x01) << 2;
             let q = q1_val as i32 - 4;
             let scale = if q1_val > 0 { h[i / 4] } else { 1.0 };
             result.push(d * (q as f32) * scale + d_min);
@@ -391,7 +391,7 @@ fn dequantize_q1_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         ];
 
         for i in 0..remaining {
-            let q1_val = (((q1 >> i) & 0x01) as u16) << 2;
+            let q1_val = ((q1 >> i) & 0x01) << 2;
             let q = q1_val as i32 - 4;
             let scale = if q1_val > 0 { h[i / 4] } else { 1.0 };
             result.push(d * (q as f32) * scale + d_min);
@@ -404,7 +404,7 @@ fn dequantize_q1_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 fn dequantize_q2_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 16;
     let remaining = element_count % 16;
-    let expected_size = (num_full_blocks * 17 + if remaining > 0 { 2 } else { 0 }) as usize;
+    let expected_size = num_full_blocks * 17 + if remaining > 0 { 2 } else { 0 };
 
     if data.len() < expected_size {
         return Err(RunnerError::Internal(format!(
@@ -791,12 +791,12 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             // Extract lower 2 bits from qs_low (stored as 2-bit values, 4 per byte)
             let byte_idx = i / 4;
             let bit_offset = (i % 4) * 2;
-            let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
+            let q_low = (data[qs_low_start + byte_idx] >> bit_offset) & 0x03;
 
             // Extract upper bits from qs_high_flags (2 bits per element, bit-packed)
             let flag_byte_idx = i / 4;
             let flag_bit = (i % 4) * 2;
-            let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
+            let flag = (data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03;
 
             // In Q6K, the upper nibble is derived from flags and scales
             // q = q_low + 4 * q_high where q_high comes from h_extra based on flag
@@ -834,12 +834,12 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         for i in 0..remaining {
             let byte_idx = i / 4;
             let bit_offset = (i % 4) * 2;
-            let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
+            let q_low = (data[qs_low_start + byte_idx] >> bit_offset) & 0x03;
 
             // Extract upper bits from qs_high_flags (2 bits per element, bit-packed)
             let flag_byte_idx = i / 4;
             let flag_bit = (i % 4) * 2;
-            let flag = ((data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03) as u8;
+            let flag = (data[qs_high_flags_start + flag_byte_idx] >> flag_bit) & 0x03;
 
             // In Q6K, the upper nibble is derived from flags and scales
             let q_high = if flag == 0 { 0 } else { (flag - 1) as usize };

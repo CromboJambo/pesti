@@ -3,7 +3,6 @@
 //! Provides numerically stable softmax with CUDA acceleration via cudarc.
 //! Feature-gated: `#[cfg(feature = "cuda")]` enables GPU version, otherwise uses CPU fallback.
 
-use half::f16;
 
 /// Numerically stable softmax on CPU.
 /// Subtracts max to prevent overflow in exp(), then normalizes.
@@ -19,9 +18,7 @@ pub fn softmax_cpu(logits: &[f32]) -> Vec<f32> {
     } else {
         // Fallback for all -inf logits
         let uniform = 1.0 / exps.len() as f32;
-        for x in &mut exps {
-            *x = uniform;
-        }
+        exps.fill(uniform);
     }
 
     exps
@@ -53,6 +50,12 @@ pub trait SoftmaxKernel: Send + Sync {
 
 /// CPU-based softmax kernel.
 pub struct CpuSoftmaxKernel;
+
+impl Default for CpuSoftmaxKernel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CpuSoftmaxKernel {
     pub fn new() -> Self {

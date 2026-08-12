@@ -70,7 +70,7 @@ impl ModelConfig {
         let num_layers = header.get_kv_u32("block_count").unwrap_or(24) as usize; // Default for Qwen2.5-0.5B
 
         let head_dim = if num_heads > 0 {
-            embed_dim / num_heads as usize
+            embed_dim / num_heads
         } else {
             64 // Default
         };
@@ -84,7 +84,7 @@ impl ModelConfig {
             num_layers,
             num_heads,
             head_dim,
-            max_seq: max_seq as usize,
+            max_seq,
             num_kv_heads,
             use_tma: false,
             attention_arch: AttentionArch::default(),
@@ -383,7 +383,7 @@ impl CpuModel {
                             .map(|chunk| {
                                 u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
                             })
-                            .map(|x| f32::from_bits(x))
+                            .map(f32::from_bits)
                             .collect(),
                     )
                 }
@@ -420,7 +420,7 @@ impl CpuModel {
                             .map(|chunk| {
                                 u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
                             })
-                            .map(|x| f32::from_bits(x))
+                            .map(f32::from_bits)
                             .collect(),
                     )
                 }
@@ -508,7 +508,7 @@ impl CpuModel {
             .encode(text, true)
             .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e)))?;
 
-        Ok(encoding.get_ids().iter().map(|&id| id as u32).collect())
+        Ok(encoding.get_ids().iter().copied().collect())
     }
 
     /// Decode token IDs to text.
@@ -536,7 +536,7 @@ impl CpuModel {
     }
 
     /// Forward pass through layers (stub - returns input for now).
-    pub fn forward_with_dispatch(&self, hidden: &[f32], start_pos: usize) -> Result<Vec<f32>> {
+    pub fn forward_with_dispatch(&self, hidden: &[f32], _start_pos: usize) -> Result<Vec<f32>> {
         // For now, just return the hidden state (no actual layer computation)
         Ok(hidden.to_vec())
     }

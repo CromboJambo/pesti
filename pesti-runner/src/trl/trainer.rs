@@ -1,6 +1,6 @@
 //! Main trainer implementation.
 
-use crate::peft::{Adapter, LoRAAdapter};
+use crate::peft::Adapter;
 
 #[cfg(feature = "cuda")]
 use crate::transformer::LlamaModel;
@@ -81,7 +81,7 @@ impl<A: Adapter> Trainer<A> {
         self.callbacks.on_train_start(&self.state);
 
         let mut total_loss = 0.0f32;
-        let num_batches = (dataset.len() + batch_size - 1) / batch_size;
+        let num_batches = dataset.len().div_ceil(batch_size);
 
         for batch_idx in 0..num_batches {
             // Get batch
@@ -111,12 +111,12 @@ impl<A: Adapter> Trainer<A> {
             self.callbacks.on_step_end(&self.state, loss);
 
             // Checkpoint every N steps
-            if self.state.epoch_step % self.config.save_steps == 0 {
+            if self.state.epoch_step.is_multiple_of(self.config.save_steps) {
                 println!("Checkpoint at step {}", self.state.global_step);
             }
 
             // Evaluation every N steps
-            if self.state.epoch_step % self.config.eval_steps == 0 {
+            if self.state.epoch_step.is_multiple_of(self.config.eval_steps) {
                 let eval_loss = self.evaluate(dataset)?;
                 println!("Eval loss: {:.4}", eval_loss);
             }
@@ -138,7 +138,7 @@ impl<A: Adapter> Trainer<A> {
         self.callbacks.on_eval_start(&self.state);
 
         let mut total_loss = 0.0f32;
-        let num_batches = (dataset.len() + self.config.batch_size - 1) / self.config.batch_size;
+        let num_batches = dataset.len().div_ceil(self.config.batch_size);
 
         for batch_idx in 0..num_batches {
             let batch = self.get_batch(dataset, batch_idx * self.config.batch_size)?;

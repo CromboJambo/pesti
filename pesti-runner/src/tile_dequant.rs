@@ -160,10 +160,10 @@ pub fn dequantize_q6_k_block(data: &[u8]) -> [f32; 16] {
         // Lower 2 bits from qs_low
         let byte_idx = i / 4;
         let bit_offset = (i % 4) * 2;
-        let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
+        let q_low = (data[qs_low_start + byte_idx] >> bit_offset) & 0x03;
 
         // Flag bits selecting scale group
-        let flag = ((data[qs_high_flags_start + byte_idx] >> bit_offset) & 0x03) as u8;
+        let flag = (data[qs_high_flags_start + byte_idx] >> bit_offset) & 0x03;
         let q_high = if flag == 0 { 0 } else { (flag - 1) as usize };
 
         // Full 6-bit quantized value
@@ -181,7 +181,7 @@ pub fn dequantize_q6_k_block(data: &[u8]) -> [f32; 16] {
 
 /// Dequantize a tile of Q4_0 weights (up to TILE_SIZE elements)
 pub fn dequantize_q4_0_tile(data: &[u8], start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
-    let num_blocks = (tile_size + 31) / 32; // Round up to full blocks
+    let num_blocks = tile_size.div_ceil(32); // Round up to full blocks
     let expected_size = num_blocks * 18;
 
     if data.len() < expected_size {
@@ -383,7 +383,7 @@ pub fn dequantize_q5_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) ->
 
 /// Dequantize a tile of Q8_0 weights (up to TILE_SIZE elements)
 pub fn dequantize_q8_0_tile(data: &[u8], _start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
-    let num_blocks = (tile_size + 31) / 32;
+    let num_blocks = tile_size.div_ceil(32);
     let expected_size = num_blocks * 34;
 
     if data.len() < expected_size {
@@ -421,7 +421,7 @@ pub fn dequantize_q8_0_tile(data: &[u8], _start_idx: usize, tile_size: usize) ->
 /// Q6_K block layout: 42 bytes per 16 elements.
 /// See `dequantize_q6_k_block` for the per-block format.
 pub fn dequantize_q6_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) -> Result<Vec<f32>> {
-    let num_blocks = (tile_size + 15) / 16;
+    let num_blocks = tile_size.div_ceil(16);
     let expected_size = num_blocks * 42;
 
     if data.len() < expected_size {
@@ -455,8 +455,8 @@ pub fn dequantize_q6_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) ->
             }
             let byte_idx = i / 4;
             let bit_offset = (i % 4) * 2;
-            let q_low = ((data[qs_low_start + byte_idx] >> bit_offset) & 0x03) as u8;
-            let flag = ((data[qs_high_flags_start + byte_idx] >> bit_offset) & 0x03) as u8;
+            let q_low = (data[qs_low_start + byte_idx] >> bit_offset) & 0x03;
+            let flag = (data[qs_high_flags_start + byte_idx] >> bit_offset) & 0x03;
             let q_high = if flag == 0 { 0 } else { (flag - 1) as usize };
             let q = (q_low as i32) + 4 * (q_high as i32);
             let scale = scales[i / 4];
@@ -471,12 +471,12 @@ pub fn dequantize_q6_k_tile(data: &[u8], _start_idx: usize, tile_size: usize) ->
 /// Get the number of blocks needed for a given element count
 pub fn num_blocks(dtype: &QuantDtype, element_count: usize) -> usize {
     match dtype {
-        QuantDtype::Q4_0 => (element_count + 31) / 32,
-        QuantDtype::Q4_1 => (element_count + 31) / 32,
-        QuantDtype::Q8_0 => (element_count + 31) / 32,
-        QuantDtype::Q4_K => (element_count + 15) / 16,
-        QuantDtype::Q5_K => (element_count + 15) / 16,
-        QuantDtype::Q6_K => (element_count + 15) / 16,
+        QuantDtype::Q4_0 => element_count.div_ceil(32),
+        QuantDtype::Q4_1 => element_count.div_ceil(32),
+        QuantDtype::Q8_0 => element_count.div_ceil(32),
+        QuantDtype::Q4_K => element_count.div_ceil(16),
+        QuantDtype::Q5_K => element_count.div_ceil(16),
+        QuantDtype::Q6_K => element_count.div_ceil(16),
     }
 }
 

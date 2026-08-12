@@ -111,7 +111,7 @@ pub fn reference_raw_scores_optimized(
             .enumerate()
             .filter(|(_, chunk)| chunk.len() == head_dim)
             .for_each(|(h, chunk)| {
-                let start_idx = h * head_dim;
+                let _start_idx = h * head_dim;
                 // Apply RoPE to each head independently (can be parallelized further)
                 for dim_pair in 0..head_dim / 2 {
                     let idx = dim_pair * 2;
@@ -134,7 +134,7 @@ pub fn reference_raw_scores_optimized(
         k_rope.par_chunks_mut(head_dim)
             .enumerate()
             .filter(|(_, chunk)| chunk.len() == head_dim)
-            .for_each(|(h, chunk)| {
+            .for_each(|(_h, chunk)| {
                 for dim_pair in 0..head_dim / 2 {
                     let idx = dim_pair * 2;
                     if idx + 1 < chunk.len() {

@@ -110,14 +110,11 @@ impl Default for OptimizerConfig {
 
 /// Supported optimizer types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum OptimizerType {
+    #[default]
     AdamW,
     Adam,
     SGD,
 }
 
-impl Default for OptimizerType {
-    fn default() -> Self {
-        Self::AdamW
-    }
-}

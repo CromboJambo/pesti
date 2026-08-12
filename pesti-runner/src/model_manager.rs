@@ -269,7 +269,7 @@ impl ModelManager {
 
         for (model_name, score) in candidates_to_queue.iter().take(slots_available) {
             if !queue.iter().any(|n| n.as_str() == model_name.as_str()) {
-                queue.push_back(model_name.clone().into());
+                queue.push_back(model_name.clone());
                 info!(
                     model = model_name.as_str(),
                     score = score,

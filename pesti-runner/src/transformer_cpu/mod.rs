@@ -149,7 +149,7 @@ pub fn sample_with_temp(logits: &[f32], temp: f32, _rng: &mut rand::rngs::StdRng
     let max_val = scaled.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let exps: Vec<f32> = scaled.iter().map(|&x| (x - max_val).exp()).collect();
     let sum: f32 = exps.iter().sum();
-    let probs: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
+    let _probs: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
 
     // Categorical sampling (placeholder - just return first token for now)
     0u32

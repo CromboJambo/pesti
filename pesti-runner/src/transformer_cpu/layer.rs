@@ -49,7 +49,7 @@ impl Attention {
 
     /// Forward pass with KV cache (simplified for single token).
     pub fn forward_with_cache_single(&self, x: &[f32], pos: usize) -> Result<Vec<f32>, String> {
-        let embed_dim = x.len();
+        let _embed_dim = x.len();
 
         // Project to Q, K, V
         let q = self.wq.forward(x, 1);
