@@ -159,8 +159,22 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
 
         let num_blocks = raw_data.len() / block_size;
         let inferred_count = num_blocks * elements_per_block;
-
-        (dtype, inferred_count)
+        
+        // Sanity check: verify inferred count is within 20% of claimed count
+        let ratio = inferred_count as f64 / claimed_element_count as f64;
+        if ratio < 0.8 || ratio > 1.2 {
+            // Data size doesn't match expected format - use claimed count instead
+            tracing::debug!(
+                tensor = %tensor.name,
+                ratio = ?ratio,
+                inferred = inferred_count,
+                claimed = claimed_element_count,
+                "Q4_K data size mismatch — using claimed element count"
+            );
+            (dtype, claimed_element_count)
+        } else {
+            (dtype, inferred_count)
+        }
     } else {
         // Non-K-family types - use claimed values
         (dtype, claimed_element_count)
@@ -250,12 +264,41 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
                 .collect())
         }
         GgufDtype::Q4K | GgufDtype::Q4K_M => {
-            let dequantized = dequantize_q4_k(raw_data, inferred_element_count)
-                .map_err(|e| RunnerError::Dequant(tensor.name.clone(), e.to_string()))?;
-            Ok(dequantized
-                .into_iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect())
+            // Try Q4_K dequantization first, fall back to Q4_0 if it fails (handles non-standard formats)
+            tracing::debug!(
+                tensor = %tensor.name,
+                data_size = raw_data.len(),
+                element_count = inferred_element_count,
+                "Attempting Q4_K dequantization"
+            );
+            
+            match dequantize_q4_k(raw_data, inferred_element_count) {
+                Ok(dequantized) => {
+                    tracing::debug!(
+                        tensor = %tensor.name,
+                        result_size = dequantized.len(),
+                        "Q4_K dequantization succeeded"
+                    );
+                    Ok(dequantized
+                        .into_iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect())
+                },
+                Err(e) => {
+                    eprintln!("Q4_K dequantization failed for {}: {:?}", tensor.name, e);
+                    tracing::warn!(
+                        tensor = %tensor.name,
+                        error = ?e,
+                        "Q4_K dequantization failed — trying Q4_0 fallback"
+                    );
+                    let dequantized = dequantize_q4_0_ggml(raw_data, inferred_element_count)
+                        .map_err(|e| RunnerError::Dequant(tensor.name.clone(), e.to_string()))?;
+                    Ok(dequantized
+                        .into_iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect())
+                }
+            }
         }
         GgufDtype::Q5K | GgufDtype::Q5K_M | GgufDtype::Q5K_S => {
             let dequantized = dequantize_q5_k(raw_data, inferred_element_count)
