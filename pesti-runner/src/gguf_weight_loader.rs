@@ -145,7 +145,8 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
     ) {
         // For K-family, use the claimed dtype but recalculate element count from data size
         let (block_size, elements_per_block) = match dtype {
-            GgufDtype::Q4K | GgufDtype::Q4K_M | GgufDtype::Q4K_S => (28, 16),
+            // All Q4_K variants (Q4_K, Q4_K_M, Q4_K_S): 32 elements per block, 54 bytes per block
+            GgufDtype::Q4K | GgufDtype::Q4K_M | GgufDtype::Q4K_S => (54, 32),
             GgufDtype::Q5K | GgufDtype::Q5K_M | GgufDtype::Q5K_S => (36, 16),
             GgufDtype::Q6K | GgufDtype::Q6K_S => (42, 16),
             GgufDtype::Q8K | GgufDtype::Q8K_M => (40, 16),

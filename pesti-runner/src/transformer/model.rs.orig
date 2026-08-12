@@ -645,7 +645,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);  // Shape is [out_features, in_features]
+        let (wq_in, wq_out) = weights.tensor_shape(&wq_name);
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
@@ -654,7 +654,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_k.weight"),
             _ => format!("{prefix}attention.wk.weight"),
         };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);  // Shape is [out_features, in_features]
+        let (wk_in, wk_out) = weights.tensor_shape(&wk_name);
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
@@ -663,7 +663,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_v.weight"),
             _ => format!("{prefix}attention.wv.weight"),
         };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);  // Shape is [out_features, in_features]
+        let (wv_in, wv_out) = weights.tensor_shape(&wv_name);
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
@@ -672,7 +672,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_output.weight"),
             _ => format!("{prefix}attention.wo.weight"),
         };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);  // Shape is [out_features, in_features]
+        let (wo_in, wo_out) = weights.tensor_shape(&wo_name);
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
@@ -728,27 +728,24 @@ impl LlamaModel {
 
         // Use tensor shapes for FFN weights
         let w1_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
         let w2_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
         let w3_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
@@ -886,7 +883,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);  // Shape is [out_features, in_features]
+        let (wq_in, wq_out) = weights.tensor_shape(&wq_name);
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
@@ -895,7 +892,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_k.weight"),
             _ => format!("{prefix}attention.wk.weight"),
         };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);  // Shape is [out_features, in_features]
+        let (wk_in, wk_out) = weights.tensor_shape(&wk_name);
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
@@ -904,7 +901,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_v.weight"),
             _ => format!("{prefix}attention.wv.weight"),
         };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);  // Shape is [out_features, in_features]
+        let (wv_in, wv_out) = weights.tensor_shape(&wv_name);
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
@@ -913,7 +910,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_output.weight"),
             _ => format!("{prefix}attention.wo.weight"),
         };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);  // Shape is [out_features, in_features]
+        let (wo_in, wo_out) = weights.tensor_shape(&wo_name);
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
@@ -969,27 +966,24 @@ impl LlamaModel {
 
         // Use tensor shapes for FFN weights
         let w1_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
         let w2_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
         let w3_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);  // Shape is [out_features, in_features]
-        eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);

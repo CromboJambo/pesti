@@ -18,6 +18,8 @@ pub mod cuda_shim;
 pub mod cuda_stub;
 pub mod dequantize;
 #[cfg(feature = "cuda")]
+pub mod gguf_dequant;
+#[cfg(feature = "cuda")]
 pub mod device;
 #[cfg(feature = "cuda")]
 pub mod device_discovery;
