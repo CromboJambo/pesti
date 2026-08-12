@@ -8,7 +8,7 @@ use cudarc::driver::safe::{CudaContext, CudaStream};
 use std::sync::Arc;
 
 /// Async memory transfer handle for tracking pending operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AsyncTransfer {
     /// Stream the transfer was launched on.
     pub stream: Arc<CudaStream>,
@@ -41,23 +41,24 @@ impl AsyncMemoryManager {
     ///
     /// Returns a handle that can be used to check completion status.
     pub fn copy_h2d_async(
-        &self,
+        &mut self,
         dst_ptr: u64,
         src_data: &[u8],
     ) -> Result<AsyncTransfer, AsyncMemoryError> {
         let size = src_data.len();
 
-        // Launch async copy using cudarc's safe API (no stream parameter)
+        // Launch async copy using cudarc's raw driver API
         unsafe {
-            let result = cudarc::driver::result::memcpy_htod_async(
+            let result = cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
                 dst_ptr,
                 src_data.as_ptr() as *const std::ffi::c_void,
-                size as usize,
+                size,
+                self.stream.cu_stream(),
             );
 
-            if let Err(e) = result {
+            if result != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
                 return Err(AsyncMemoryError::CopyFailed(format!(
-                    "H2D async copy failed: {:?}", e
+                    "H2D async copy failed: {:?}", result
                 )));
             }
 
@@ -67,30 +68,31 @@ impl AsyncMemoryManager {
                 pending: true,
             };
 
-            self.pending_transfers.push(transfer);
+            self.pending_transfers.push(transfer.clone());
             Ok(transfer)
         }
     }
 
     /// Launch an asynchronous D2H (device-to-host) transfer.
     pub fn copy_d2h_async(
-        &self,
+        &mut self,
         dst_data: &mut [u8],
         src_ptr: u64,
     ) -> Result<AsyncTransfer, AsyncMemoryError> {
         let size = dst_data.len();
 
-        // Launch async copy using cudarc's safe API (no stream parameter)
+        // Launch async copy using cudarc's raw driver API
         unsafe {
-            let result = cudarc::driver::result::memcpy_dtoh_async(
+            let result = cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
                 dst_data.as_mut_ptr() as *mut std::ffi::c_void,
                 src_ptr,
-                size as usize,
+                size,
+                self.stream.cu_stream(),
             );
 
-            if let Err(e) = result {
+            if result != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
                 return Err(AsyncMemoryError::CopyFailed(format!(
-                    "D2H async copy failed: {:?}", e
+                    "D2H async copy failed: {:?}", result
                 )));
             }
 
@@ -100,7 +102,7 @@ impl AsyncMemoryManager {
                 pending: true,
             };
 
-            self.pending_transfers.push(transfer);
+            self.pending_transfers.push(transfer.clone());
             Ok(transfer)
         }
     }
@@ -114,7 +116,7 @@ impl AsyncMemoryManager {
     }
 
     /// Wait for all pending transfers to complete.
-    pub fn synchronize(&self) -> Result<(), AsyncMemoryError> {
+    pub fn synchronize(&mut self) -> Result<(), AsyncMemoryError> {
         self.stream
             .synchronize()
             .map_err(|e| AsyncMemoryError::SyncFailed(format!("Stream sync failed: {:?}", e)))?;

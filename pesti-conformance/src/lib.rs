@@ -244,7 +244,7 @@ fn run_pesti_inference(model_path: &Path) -> Result<String> {
 
     // Initialize token embeddings from loaded weights
     let embed_dim = model.embed_dim;
-    let _vocab_size = model.vocab_size as usize;
+    let _vocab_size = model.vocab_size;
 
     // Create a simple input: single token [0] for conformance test
     let input_tokens: Vec<i32> = vec![0i32];

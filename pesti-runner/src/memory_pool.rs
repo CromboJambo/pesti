@@ -45,6 +45,8 @@ impl Default for MemoryPoolConfig {
                 32 * 1024,       // 32 KB (small tensors)
                 128 * 1024,      // 128 KB (medium tensors)
                 512 * 1024,      // 512 KB (large tensors)
+                4 * 1024 * 1024, // 4 MB (very large tensors - 256x256x8x64x4)
+                16 * 1024 * 1024, // 16 MB (huge tensors - 512x512x16x128x4)
             ],
         }
     }
@@ -112,10 +114,16 @@ impl MemoryPool {
         let class_idx = self
             .size_classes
             .iter()
-            .position(|&s| s >= size)
-            .ok_or_else(|| {
-                CudaError::DriverError(format!("No suitable size class for {}", size))
-            })?;
+            .position(|&s| s >= size);
+
+        // If no size class fits, fall back to direct allocation
+        let class_idx = match class_idx {
+            Some(idx) => idx,
+            None => {
+                let ptr = allocate_device_memory(size)?;
+                return Ok(PooledBuffer { ptr, size });
+            }
+        };
 
         // Try to get from pool
         {
@@ -126,29 +134,31 @@ impl MemoryPool {
         }
 
         // Pool exhausted, allocate new buffer (if under limit)
-        let mut stats = self.stats.lock().unwrap();
-        if stats.total_allocations < self.config.max_allocations {
-            drop(stats); // Release lock before allocation
-            
-            let ptr = allocate_device_memory(self.size_classes[class_idx])?;
-            let buffer = PooledBuffer { 
-                ptr, 
-                size: self.size_classes[class_idx] 
-            };
-
+        {
             let mut stats = self.stats.lock().unwrap();
-            stats.total_allocations += 1;
-            stats.current_memory_bytes += self.size_classes[class_idx];
-            if stats.current_memory_bytes > stats.peak_memory_bytes {
-                stats.peak_memory_bytes = stats.current_memory_bytes;
-            }
+            if stats.total_allocations < self.config.max_allocations {
+                drop(stats); // Release lock before allocation
 
-            Ok(buffer)
-        } else {
-            // Under memory pressure, fall back to direct allocation
-            let ptr = allocate_device_memory(size)?;
-            Ok(PooledBuffer { ptr, size })
+                let ptr = allocate_device_memory(self.size_classes[class_idx])?;
+                let buffer = PooledBuffer {
+                    ptr,
+                    size: self.size_classes[class_idx],
+                };
+
+                let mut stats = self.stats.lock().unwrap();
+                stats.total_allocations += 1;
+                stats.current_memory_bytes += self.size_classes[class_idx];
+                if stats.current_memory_bytes > stats.peak_memory_bytes {
+                    stats.peak_memory_bytes = stats.current_memory_bytes;
+                }
+
+                return Ok(buffer);
+            }
         }
+
+        // Under memory pressure, fall back to direct allocation
+        let ptr = allocate_device_memory(size)?;
+        Ok(PooledBuffer { ptr, size })
     }
 
     /// Return a buffer to the pool for reuse.
