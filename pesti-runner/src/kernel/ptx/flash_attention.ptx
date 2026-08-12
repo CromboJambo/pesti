@@ -1,0 +1,55 @@
+// Flash Attention Kernel - CUDA PTX
+// Fused Q @ K^T + softmax + V computation
+// Target: sm_89 (RTX 4070 Ti SUPER)
+
+// Note: This is a stub kernel structure. Full implementation requires:
+// 1. Shared memory tiling for Q/K/V tiles
+// 2. WGMMA/tcgen05 or mma.sync tensor core instructions
+// 3. Numerically stable softmax in parallel
+// 4. Causal mask support (optional)
+
+.version 8.9
+.target sm_89
+.address_size 64
+
+// Kernel signature:
+// __global__ void flash_attention_kernel(
+//     float scale,
+//     const half* q,      // [seq_q, num_heads, head_dim]
+//     const half* k,      // [seq_k, num_heads, head_dim]
+//     const half* v,      // [seq_k, num_heads, head_dim]
+//     float* o,           // [seq_q, num_heads, head_dim]
+//     int seq_q,
+//     int seq_k,
+//     int num_heads,
+//     int head_dim
+// )
+
+.visible .entry _Z23flash_attention_kernelfPK6__halfS1_S1_S1_Pfiiii(
+    .param .u64 param_0,
+    .param .u64 param_1,
+    .param .u64 param_2,
+    .param .u64 param_3,
+    .param .u64 param_4,
+    .param .u64 param_5,
+    .param .u64 param_6,
+    .param .u64 param_7
+)
+{
+    // TODO: Full implementation
+    // For now, placeholder to allow compilation
+    
+    // Shared memory for tiling (1024 bytes = 256 floats)
+    .local .align 8 .b8 shared_mem[1024];
+    
+    // Thread indices
+    .reg .s32 r0;
+    .reg .s32 r1;
+    
+    // Load thread indices
+    ld.global.s32 r0, [tid.x];
+    ld.global.s32 r1, [tid.y];
+    
+    // Placeholder: just return
+    ret;
+}
