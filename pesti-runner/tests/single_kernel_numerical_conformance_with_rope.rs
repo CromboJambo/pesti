@@ -238,24 +238,25 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     params[8] = &mut num_heads_v as *mut u32 as *mut std::ffi::c_void;
     params[9] = &mut head_dim_v as *mut u32 as *mut std::ffi::c_void;
     
+    // Write Q, K, V data to device (async - synchronize after)
     unsafe {
-        // Write Q, K, V data to device (all point to same buffer)
-        let _ = cudarc::driver::result::memcpy_htod_async(combined_ptr as u64, &q_h, stream.cu_stream());
+        cudarc::driver::result::memcpy_htod_async(
+            combined_ptr as u64,
+            &q_h,
+            stream.cu_stream(),
+        );
         
-        let _ = cudarc::driver::result::memcpy_htod_async(
+        cudarc::driver::result::memcpy_htod_async(
             (combined_ptr as u64) + (q_h.len() * 2) as u64,
             &k_h,
             stream.cu_stream(),
         );
         
-        let _ = cudarc::driver::result::memcpy_htod_async(
+        cudarc::driver::result::memcpy_htod_async(
             (combined_ptr as u64) + (k_h.len() * 2) as u64,
             &v_h,
             stream.cu_stream(),
         );
-        
-        // Synchronize to ensure all data is written before launching kernel
-        cuda_rt.synchronize().unwrap();
     }
     
     unsafe {
@@ -280,15 +281,14 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     
     unsafe {
         let out_device_ptr_u64 = combined_ptr as u64 + score_buffer_size as u64;
-        let out_host_slice: &mut [f16] = std::slice::from_raw_parts_mut(out_host.as_mut_ptr(), seq_q * num_heads * head_dim);
-        let _ = cudarc::driver::result::memcpy_dtoh_async(
-            out_host_slice,
+        cudarc::driver::result::memcpy_dtoh_async(
+            &mut out_host,
             out_device_ptr_u64,
             stream.cu_stream(),
         );
     }
     
-    // Wait for async memcpy to complete
+    // Wait for read-back to complete
     cuda_rt.synchronize().unwrap();
     
     println!(
@@ -300,6 +300,31 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     println!("First 4 output values (f32):");
     for i in 0..4.min(out_host.len()) {
         println!("  [{}] = {:.6}", i, out_host[i].to_f32());
+    }
+    
+    // Compute numerical conformance vs reference
+    let mut max_rel_error: f32 = 0.0;
+    for (i, &out_val) in out_host.iter().enumerate() {
+        let out_f32 = out_val.to_f32();
+        let ref_val = llama_probs[i]; // Reference attention output
+        let abs_error = (out_f32 - ref_val).abs();
+        let rel_error = if ref_val.abs() > 1e-6 {
+            abs_error / ref_val.abs()
+        } else {
+            abs_error // Absolute error when reference is near zero
+        };
+        max_rel_error = max_rel_error.max(rel_error);
+    }
+    
+    println!("\n=== Numerical Conformance Results ===");
+    println!("Max relative error: {:.2e}", max_rel_error);
+    if max_rel_error < 1e-4 {
+        println!("✅ PASS: Error within target (<1e-4)");
+    } else {
+        println!(
+            "⚠️  WARNING: Error exceeds target (max_rel_error = {:.2e})",
+            max_rel_error
+        );
     }
     
     // Cleanup
