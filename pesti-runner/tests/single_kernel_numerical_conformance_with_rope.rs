@@ -1,4 +1,4 @@
-//! Single-kernel numerical conformance with RoPE and causal mask (full test)
+//! Single-kernel numerical conformance with RoPE using exact_pattern (separate Q,K,V)
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
@@ -186,16 +186,30 @@ fn test_single_kernel_numerical_conformance_with_rope() {
             .fold(f32::NEG_INFINITY, |max_val, &x| f32::max(max_val, x))
     );
     
+    // Allocate SEPARATE buffers for Q, K, V (like exact_pattern expects)
+    let q_size = seq_q * num_heads * head_dim * 2; // half
+    let k_size = seq_k * num_heads * head_dim * 2; // half
+    let v_size = seq_k * num_heads * head_dim * 2; // half
+    
     // Allocate ONE buffer containing both scores AND output (like two-kernel)
     let score_buffer_size = seq_q * num_heads * seq_k * 4; // float
     let output_buffer_bytes = seq_q * num_heads * head_dim * 2; // half
-    let total_size = score_buffer_size + output_buffer_bytes;
+    let combined_ptr = 
+        pesti_runner::cuda_runtime::allocate_device_memory(
+            score_buffer_size + output_buffer_bytes
+        ).unwrap();
     
-    let combined_ptr = pesti_runner::cuda_runtime::allocate_device_memory(total_size).unwrap();
+    let q_ptr = pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap();
+    let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap();
+    let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap();
     
-    println!("✅ Allocated single buffer: {} bytes", total_size);
+    println!("✅ Allocated separate buffers:");
+    println!("   Q: {} bytes", q_size);
+    println!("   K: {} bytes", k_size);
+    println!("   V: {} bytes", v_size);
+    println!("   Scores+Output: {} bytes", score_buffer_size + output_buffer_bytes);
     
-    // Load exact pattern kernel (writes to both scores and output buffers)
+    // Load exact pattern kernel (stable with separate allocations)
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_exact_pattern.ptx");
     let module =
         pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
@@ -206,11 +220,11 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     
     println!("✅ Loaded exact pattern kernel");
     
-    // Parameters: q_ptr, k_ptr, v_ptr, s_ptr (scores), out_ptr, scale, seq_q, seq_k, num_heads, head_dim
+    // Parameters: q_ptr, k_ptr, v_ptr (separate), s_ptr (scores), out_ptr, scale, seq_q, seq_k, num_heads, head_dim
     let mut scale_v: f32 = 1.0 / (head_dim as f32).sqrt();
-    let mut q_ptr_v: u64 = combined_ptr as u64; // Q,K,V all point to same buffer for this test
-    let mut k_ptr_v: u64 = combined_ptr as u64;
-    let mut v_ptr_v: u64 = combined_ptr as u64;
+    let mut q_ptr_v: u64 = q_ptr as u64; // Separate allocation!
+    let mut k_ptr_v: u64 = k_ptr as u64; // Separate allocation!
+    let mut v_ptr_v: u64 = v_ptr as u64; // Separate allocation!
     let mut s_ptr_v: u64 = combined_ptr as u64; // scores start at offset 0
     let mut out_ptr_v: u64 = (combined_ptr as u64) + score_buffer_size as u64; // output starts after scores
     
@@ -240,23 +254,9 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     
     // Write Q, K, V data to device (async - synchronize after)
     unsafe {
-        cudarc::driver::result::memcpy_htod_async(
-            combined_ptr as u64,
-            &q_h,
-            stream.cu_stream(),
-        );
-        
-        cudarc::driver::result::memcpy_htod_async(
-            (combined_ptr as u64) + (q_h.len() * 2) as u64,
-            &k_h,
-            stream.cu_stream(),
-        );
-        
-        cudarc::driver::result::memcpy_htod_async(
-            (combined_ptr as u64) + (k_h.len() * 2) as u64,
-            &v_h,
-            stream.cu_stream(),
-        );
+        cudarc::driver::result::memcpy_htod_async(q_ptr as u64, &q_h, stream.cu_stream());
+        cudarc::driver::result::memcpy_htod_async(k_ptr as u64, &k_h, stream.cu_stream());
+        cudarc::driver::result::memcpy_htod_async(v_ptr as u64, &v_h, stream.cu_stream());
     }
     
     unsafe {
@@ -328,7 +328,12 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     }
     
     // Cleanup
-    pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
+    unsafe {
+        pesti_runner::cuda_runtime::free_device_memory(q_ptr).unwrap();
+        pesti_runner::cuda_runtime::free_device_memory(k_ptr).unwrap();
+        pesti_runner::cuda_runtime::free_device_memory(v_ptr).unwrap();
+        pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
+    }
     
     println!("\n=== Single-Kernel with RoPE Test PASSED ===");
 }
