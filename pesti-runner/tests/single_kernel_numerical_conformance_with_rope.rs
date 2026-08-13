@@ -254,9 +254,9 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     
     // Write Q, K, V data to device (async - synchronize after)
     unsafe {
-        cudarc::driver::result::memcpy_htod_async(q_ptr as u64, &q_h, stream.cu_stream());
-        cudarc::driver::result::memcpy_htod_async(k_ptr as u64, &k_h, stream.cu_stream());
-        cudarc::driver::result::memcpy_htod_async(v_ptr as u64, &v_h, stream.cu_stream());
+        let _ = cudarc::driver::result::memcpy_htod_async(q_ptr as u64, &q_h, stream.cu_stream());
+        let _ = cudarc::driver::result::memcpy_htod_async(k_ptr as u64, &k_h, stream.cu_stream());
+        let _ = cudarc::driver::result::memcpy_htod_async(v_ptr as u64, &v_h, stream.cu_stream());
     }
     
     unsafe {
