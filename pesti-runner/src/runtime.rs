@@ -134,7 +134,7 @@ impl Runtime {
 
     /// Discover available models from filesystem search paths.
     pub async fn discover_models(&self) -> Result<Vec<DiscoveredModel>> {
-        let discovery = ModelDiscovery::new();
+        let discovery = ModelDiscovery::from_env();
         let models = discovery.discover_models().map_err(|e| {
             crate::error::RunnerError::Internal(format!("Failed to discover models: {}", e))
         })?;

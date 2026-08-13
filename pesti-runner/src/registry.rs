@@ -87,7 +87,7 @@ impl Registry {
 
     /// Scan filesystem for discovered models.
     pub fn refresh_discovered_models(&mut self) {
-        let discovery = ModelDiscovery::new();
+        let discovery = ModelDiscovery::from_env();
         if let Ok(models) = discovery.discover_models() {
             self.discovered_models.clear();
             for model in models {
