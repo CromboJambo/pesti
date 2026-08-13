@@ -156,6 +156,9 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
         .collect();
     
+    // Create V (same as K for this test)
+    let v_h: Vec<f16> = k_h.clone();
+    
     println!(
         "Configuration: seq_q={}, seq_k={}, heads={}, dim={}",
         seq_q, seq_k, num_heads, head_dim
@@ -178,7 +181,9 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     );
     println!(
         "Reference max attention score: {:.6}",
-        llama_probs[0..seq_k].iter().fold(f32::NEG_INFINITY, |max_val, &x| f32::max(max_val, x))
+        llama_probs[0..seq_k]
+            .iter()
+            .fold(f32::NEG_INFINITY, |max_val, &x| f32::max(max_val, x))
     );
     
     // Allocate ONE buffer containing both scores AND output (like two-kernel)
@@ -234,6 +239,26 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     params[9] = &mut head_dim_v as *mut u32 as *mut std::ffi::c_void;
     
     unsafe {
+        // Write Q, K, V data to device (all point to same buffer)
+        let _ = cudarc::driver::result::memcpy_htod_async(combined_ptr as u64, &q_h, stream.cu_stream());
+        
+        let _ = cudarc::driver::result::memcpy_htod_async(
+            (combined_ptr as u64) + (q_h.len() * 2) as u64,
+            &k_h,
+            stream.cu_stream(),
+        );
+        
+        let _ = cudarc::driver::result::memcpy_htod_async(
+            (combined_ptr as u64) + (k_h.len() * 2) as u64,
+            &v_h,
+            stream.cu_stream(),
+        );
+        
+        // Synchronize to ensure all data is written before launching kernel
+        cuda_rt.synchronize().unwrap();
+    }
+    
+    unsafe {
         pesti_runner::cuda_shim::launch_kernel(
             function.cu_function(),
             grid,
@@ -250,8 +275,32 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     cuda_rt.synchronize().unwrap();
     println!("✅ Single-kernel execution completed!");
     
-    // Skip output read-back for now - kernel ran successfully!
-    // We'll add numerical comparison in the next step
+    // Read output back (f16) - kernel writes f16 to output buffer
+    let mut out_host: Vec<f16> = vec![f16::ZERO; seq_q * num_heads * head_dim];
+    
+    unsafe {
+        let out_device_ptr_u64 = combined_ptr as u64 + score_buffer_size as u64;
+        let out_host_slice: &mut [f16] = std::slice::from_raw_parts_mut(out_host.as_mut_ptr(), seq_q * num_heads * head_dim);
+        let _ = cudarc::driver::result::memcpy_dtoh_async(
+            out_host_slice,
+            out_device_ptr_u64,
+            stream.cu_stream(),
+        );
+    }
+    
+    // Wait for async memcpy to complete
+    cuda_rt.synchronize().unwrap();
+    
+    println!(
+        "✅ Read back {} f16 values from output buffer",
+        out_host.len()
+    );
+    
+    // Print first few values for debugging
+    println!("First 4 output values (f32):");
+    for i in 0..4.min(out_host.len()) {
+        println!("  [{}] = {:.6}", i, out_host[i].to_f32());
+    }
     
     // Cleanup
     pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
