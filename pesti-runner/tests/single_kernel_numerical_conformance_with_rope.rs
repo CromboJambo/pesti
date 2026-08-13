@@ -281,7 +281,7 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     
     unsafe {
         let out_device_ptr_u64 = combined_ptr as u64 + score_buffer_size as u64;
-        cudarc::driver::result::memcpy_dtoh_async(
+        let _ = cudarc::driver::result::memcpy_dtoh_async(
             &mut out_host,
             out_device_ptr_u64,
             stream.cu_stream(),
