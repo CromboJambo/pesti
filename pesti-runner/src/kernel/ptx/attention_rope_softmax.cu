@@ -28,38 +28,44 @@ __global__ void fused_attention_kernel(
     
     float dot_product = 0.0f;
     
+    // Half-swap RoPE rotation (matches llama.cpp / HuggingFace transformers)
+    // For each dimension d in first half, pair with (d + head_dim/2)
     for (int chunk = threadIdx.x; chunk < head_dim / 2; chunk += blockDim.x) {
-        int d = chunk * 2;
+        int d = chunk;  // Iterate over first half dimensions (0..dim/2-1)
         
-        int q_idx = q_pos * num_heads * head_dim + head * head_dim + d;
-        float q0 = __half2float(q_ptr[q_idx]);
-        float q1 = __half2float(q_ptr[q_idx + 1]);
+        int q_idx_first = q_pos * num_heads * head_dim + head * head_dim + d;
+        int q_idx_second = q_pos * num_heads * head_dim + head * head_dim + (d + head_dim / 2);
         
-        int k_idx = k_pos * num_heads * head_dim + head * head_dim + d;
-        float k0 = __half2float(k_ptr[k_idx]);
-        float k1 = __half2float(k_ptr[k_idx + 1]);
+        int k_idx_first = k_pos * num_heads * head_dim + head * head_dim + d;
+        int k_idx_second = k_pos * num_heads * head_dim + head * head_dim + (d + head_dim / 2);
         
-        // Apply RoPE to Q (rotated by q_pos) and K (rotated by k_pos) before dot product
+        float q_first = __half2float(q_ptr[q_idx_first]);
+        float q_second = __half2float(q_ptr[q_idx_second]);
+        
+        float k_first = __half2float(k_ptr[k_idx_first]);
+        float k_second = __half2float(k_ptr[k_idx_second]);
+        
+        // Apply RoPE to Q (rotated by q_pos) before dot product
         float inv_freq_q = 1.0f / powf(rope_base, (float)d / ((float)head_dim / 2.0f));
         float freq_q = (float)q_pos * inv_freq_q;
         float cos_val_q = cosf(freq_q);
         float sin_val_q = sinf(freq_q);
         
-        // RoPE on Q
-        float q0_rope = q0 * cos_val_q - q1 * sin_val_q;
-        float q1_rope = q0 * sin_val_q + q1 * cos_val_q;
+        // Half-swap rotation: [first, second] -> [first*cos - second*sin, first*sin + second*cos]
+        float q_first_rope = q_first * cos_val_q - q_second * sin_val_q;
+        float q_second_rope = q_first * sin_val_q + q_second * cos_val_q;
         
-        // Apply RoPE to K (rotated by k_pos)
+        // Apply RoPE to K (rotated by k_pos) before dot product
         float inv_freq_k = 1.0f / powf(rope_base, (float)d / ((float)head_dim / 2.0f));
         float freq_k = (float)k_pos * inv_freq_k;
         float cos_val_k = cosf(freq_k);
         float sin_val_k = sinf(freq_k);
         
-        // RoPE on K
-        float k0_rope = k0 * cos_val_k - k1 * sin_val_k;
-        float k1_rope = k0 * sin_val_k + k1 * cos_val_k;
+        // Half-swap rotation for K
+        float k_first_rope = k_first * cos_val_k - k_second * sin_val_k;
+        float k_second_rope = k_first * sin_val_k + k_second * cos_val_k;
         
-        dot_product += q0_rope * k0_rope + q1_rope * k1_rope;
+        dot_product += q_first_rope * k_first_rope + q_second_rope * k_second_rope;
     }
     
     shared_dot[threadIdx.x] = dot_product;
