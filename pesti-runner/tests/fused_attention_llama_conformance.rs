@@ -6,26 +6,27 @@
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
 
-/// Reference RoPE implementation matching llama.cpp
+/// Reference RoPE implementation matching llama.cpp (HALF-SWAP rotation)
 fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     let half_dim = head_dim / 2;
-    for dim_pair in 0..half_dim {
-        let idx = dim_pair * 2;
-        if idx + 1 >= q.len() {
-            continue;
-        }
-
-        // Compute cos/sin for this position and dimension pair
-        let inv_freq = 1.0 / (rope_base.powf((dim_pair as f32) / half_dim as f32));
+    
+    // HALF-SWAP rotation: dimension i pairs with (i + head_dim/2)
+    // This matches llama.cpp and HuggingFace transformers exactly!
+    for dim in 0..half_dim {
+        let idx_first = dim;                              // First half: dimensions 0..dim/2-1
+        let idx_second = dim + half_dim;                  // Second half: dimensions dim/2..dim-1
+        
+        // Compute cos/sin for this position and dimension
+        let inv_freq = 1.0 / (rope_base.powf((dim as f32) / half_dim as f32));
         let freq = pos as f32 * inv_freq;
         let cos_val = freq.cos();
         let sin_val = freq.sin();
-
-        // Apply RoPE rotation: [q0, q1] -> [q0*cos - q1*sin, q0*sin + q1*cos]
-        let q0 = q[idx];
-        let q1 = q[idx + 1];
-        q[idx] = q0 * cos_val - q1 * sin_val;
-        q[idx + 1] = q0 * sin_val + q1 * cos_val;
+        
+        // Half-swap rotation: [first, second] -> [first*cos - second*sin, first*sin + second*cos]
+        let q_first = q[idx_first];
+        let q_second = q[idx_second];
+        q[idx_first] = q_first * cos_val - q_second * sin_val;
+        q[idx_second] = q_first * sin_val + q_second * cos_val;
     }
 }
 
@@ -125,12 +126,13 @@ fn reference_softmax(scores: &[f32], seq_q: usize, seq_k: usize, num_heads: usiz
     probs
 }
 
-/// Apply causal mask (llama.cpp style: q_pos >= k_pos = -inf) - per head
+/// Apply causal mask (llama.cpp style: mask future tokens where k_pos > q_pos) - per head
 fn apply_causal_mask(scores: &mut [f32], seq_q: usize, seq_k: usize, num_heads: usize) {
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             for k_pos in 0..seq_k {
-                if q_pos >= k_pos {
+                // Mask future tokens: if k_pos > q_pos, set to -inf
+                if k_pos > q_pos {
                     scores[q_pos * num_heads * seq_k + head * seq_k + k_pos] = -1e9;
                 }
             }
@@ -281,8 +283,21 @@ fn test_fused_attention_vs_llama_cpp() {
                 let llama_val = llama_probs[q_pos * num_heads * seq_k + head * seq_k + k_pos];
                 let gpu_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
                 let gpu_val = gpu_probs[gpu_idx];
+                
+                // Debug: Print first few values
+                if q_pos == 0 && head == 0 && k_pos < 5 {
+                    println!("Debug: q={}, h={}, k={} | llama={:.6} | gpu={:.6} | diff={:.6}", 
+                             q_pos, head, k_pos, llama_val, gpu_val, (llama_val - gpu_val).abs());
+                }
 
                 let abs_err = (llama_val - gpu_val).abs();
+                
+                // Debug: Print first few values for each query position  
+                if (q_pos == 0 || q_pos == 1) && head == 0 && k_pos < 10 {
+                    println!("Debug: q={}, h={}, k={} | llama={:.6} | gpu={:.6} | diff={:.6}", 
+                             q_pos, head, k_pos, llama_val, gpu_val, abs_err);
+                }
+
                 let rel_err = if llama_val.abs() > 1e-8 {
                     abs_err / llama_val.abs()
                 } else {
