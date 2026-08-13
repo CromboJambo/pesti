@@ -168,7 +168,7 @@ fn run_single_model_conformance(model_path: &Path, config: &ConformanceConfig) -
     }
 
     // Step 2: Check if we have a reference llama.cpp binary for differential testing
-    let reference_output = if let Some(ref llama_cpp) = &config.reference_llama_cpp {
+    let reference_output = if let Some(llama_cpp) = &config.reference_llama_cpp {
         if llama_cpp.exists() {
             tracing::info!("Running llama.cpp reference with model {:?}", model_path);
             let output = Command::new(llama_cpp.as_path())
