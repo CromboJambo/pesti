@@ -3,6 +3,8 @@
 //! Compares baseline fused attention vs flash attention (single-kernel approach)
 
 use pesti_runner::cuda_runtime::CudaRuntime;
+use pesti_runner::kernel::flash_attention::{FlashAttentionConfig, FlashAttentionKernel};
+use pesti_runner::AttentionKernel;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,10 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Building flash attention kernel (single-kernel fusion)...");
     let start = std::time::Instant::now();
     
-    match pesti_runner::kernel::flash_attention::build_flash_attention_kernel(
-        pesti_runner::kernel::flash_attention::FlashAttentionArch::MmaSync,
+    match FlashAttentionKernel::new(
         cuda_rt.context().clone(),
         stream.clone(),
+        pesti_runner::kernel::memory::CudaMemoryBackend::new(stream.clone()),
+        FlashAttentionConfig::default(),
     ) {
         Ok(kernel) => {
             let elapsed = start.elapsed();
