@@ -72,11 +72,11 @@ impl FlashAttentionKernel {
 
         // Read PTX file content
         let ptx_content = std::fs::read_to_string(&ptx_path)
-            .map_err(|e| AttentionError::Cuda(format!("PTX read: {e}")))?;
+            .map_err(|e| AttentionError::Cuda(format!("PTX read: {}", e)))?;
 
         // Load PTX module using cuda_shim
         let ptx_module = crate::cuda_shim::CudaModule::load_from_ptx(&context, &ptx_content)
-            .map_err(|e| AttentionError::Cuda(format!("PTX load: {e}")))?;
+            .map_err(|e| AttentionError::Cuda(format!("PTX load: {}", e)))?;
 
         tracing::info!("Flash Attention PTX loaded successfully");
 
@@ -130,7 +130,8 @@ impl AttentionKernel for FlashAttentionKernel {
         if key_cache.seq_len() != value_cache.seq_len() {
             return Err(AttentionError::Cuda(format!(
                 "Shape mismatch: key seq_len={}, value seq_len={}",
-                key_cache.seq_len(), value_cache.seq_len()
+                key_cache.seq_len(),
+                value_cache.seq_len()
             )));
         }
 
@@ -141,15 +142,19 @@ impl AttentionKernel for FlashAttentionKernel {
         let output_handle = self
             .memory
             .alloc(output_size * 4) // f32 = 4 bytes
-            .map_err(|e| AttentionError::Cuda(format!("Output allocation: {e}")))?;
+            .map_err(|e| AttentionError::Cuda(format!("Output allocation: {}", e)))?;
 
         let mut output = DeviceBuffer::<f32>::from_backend(output_handle, output_size);
 
         // Get PTX module and kernel handles
         let ptx_module = self.ptx_module.as_ref();
-
-        // Launch kernel (simplified - actual implementation would need proper grid/block config)
-        // TODO: Implement proper kernel launch with mma.sync instructions
+        
+        // Launch kernel with proper grid/block configuration
+        // Flash attention computes: output = softmax(Q @ K^T / scale) @ V
+        // Kernel signature: flash_attention_kernel(
+        //   float scale, const half* q, const half* k, const half* v, 
+        //   float* output, int seq_q, int seq_kv, int num_heads, int head_dim)
+        
         tracing::debug!(
             query_seq_len,
             seq_len,
@@ -158,8 +163,69 @@ impl AttentionKernel for FlashAttentionKernel {
             "Launching Flash Attention kernel"
         );
 
-        // Placeholder: return zero output (needs actual PTX launch)
-        // In real implementation: ptx_module.get_function("flash_attention")?.launch(...)
+        // Get the kernel function (mangled name from PTX)
+        let kernel_func = ptx_module
+            .load_function("_Z22flash_attention_kernelfPK6__halfS1_S1_Pfiiii")
+            .map_err(|e| {
+                AttentionError::Cuda(format!("Failed to load flash attention kernel: {}", e))
+            })?;
+
+        // Prepare kernel parameters
+        use cudarc::driver::sys;
+        
+        let scale_f32 = self.config.scale;
+        
+        // Get device pointers for Q, K, V, and output
+        let q_ptr = query.device_ptr();
+        let k_ptr = key_cache.device_ptr().expect("Kvcache must be CUDA-backed");
+        let v_ptr = value_cache.device_ptr().expect("Kvcache must be CUDA-backed");
+        let out_ptr = output.device_ptr();
+        
+        let mut scale_v: f32 = scale_f32;
+        let mut q_v: u64 = q_ptr;
+        let mut k_v: u64 = k_ptr;
+        let mut v_v: u64 = v_ptr;
+        let mut out_v: u64 = out_ptr;
+        let mut seq_q_v: u32 = query_seq_len as u32;
+        let mut seq_kv_v: u32 = seq_len as u32;
+        let mut num_heads_v: u32 = flash_config.num_heads as u32;
+        let mut head_dim_v: u32 = flash_config.head_dim as u32;
+        
+        // Prepare parameter array (8 parameters total)
+        let mut params: [*mut std::ffi::c_void; 8] = [
+            &mut scale_v as *mut f32 as *mut std::ffi::c_void,
+            &mut q_v as *mut u64 as *mut std::ffi::c_void,
+            &mut k_v as *mut u64 as *mut std::ffi::c_void,
+            &mut v_v as *mut u64 as *mut std::ffi::c_void,
+            &mut out_v as *mut u64 as *mut std::ffi::c_void,
+            &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
+            &mut seq_kv_v as *mut u32 as *mut std::ffi::c_void,
+            &mut num_heads_v as *mut u32 as *mut std::ffi::c_void,
+        ];
+        
+        // Add head_dim parameter (8th param)
+        params[7] = &mut head_dim_v as *mut u32 as *mut std::ffi::c_void;
+
+        // Grid/block configuration for flash attention
+        // One block per query token, with shared memory for tiles
+        let block_dim = 128u32; // 128 threads per block (typical for attention)
+        let grid_dim = query_seq_len as u32; // One block per query token
+        
+        // Launch kernel
+        unsafe {
+            use crate::cuda_shim::launch_kernel;
+            launch_kernel(
+                kernel_func.cu_function(),
+                (grid_dim, 1, 1),
+                (block_dim, 1, 1),
+                0, // shared memory (kernel will allocate internally)
+                self.stream.cu_stream(),
+                &mut params,
+            )
+            .map_err(|e| {
+                AttentionError::Cuda(format!("Flash attention kernel launch failed: {}", e))
+            })?;
+        }
 
         Ok(output)
     }
