@@ -1,67 +1,94 @@
-# Week 9 Debugging Session - Single-Kernel Architecture
+# Week 9 - Single-Kernel Fused Attention Debugging Session
 
-## The Breakthrough
+## Summary
 
-After days of debugging `CUDA_ERROR_ILLEGAL_ADDRESS` crashes in our single-kernel fused attention, we discovered the root cause: **memory layout mismatch**.
+After extensive debugging of `CUDA_ERROR_ILLEGAL_ADDRESS` crashes, we successfully resolved the single-kernel fused attention implementation and achieved numerical conformance testing readiness.
 
-### What We Thought Was True ❌
-We assumed our single-kernel test should allocate **separate** device memory for:
-- Q, K, V inputs
-- Score buffer  
-- Output buffer
+## Key Discovery: Memory Layout Mismatch
 
-### What We Discovered ✅
-The two-kernel architecture actually uses **ONE contiguous device buffer** with offsets:
+### Root Cause
+The two-kernel architecture uses **ONE contiguous buffer with offsets**, not separate allocations!
+
+**Two-kernel memory layout:**
+- `score_buffer` at offset 0 (floats)
+- `output_buffer` immediately after scores in same allocation (half precision)
+
+**Single-kernel bug:**
+We initially allocated separate buffers for scores and output, causing out-of-bounds access.
+
+### The Fix
+
 ```rust
+// Allocate ONE buffer containing both scores AND output
+let score_buffer_size = seq_q * num_heads * seq_k * 4; // float
+let output_buffer_bytes = seq_q * num_heads * head_dim * 2; // half
 let total_size = score_buffer_size + output_buffer_bytes;
+
 let combined_ptr = allocate_device_memory(total_size);
 
-// Scores start at offset 0
+// Scores at offset 0, output after it
 let s_ptr = combined_ptr;
-
-// Output starts AFTER scores in same allocation
 let out_ptr = (combined_ptr as u64) + score_buffer_size as u64;
 ```
 
-### The Two-Kernel Memory Layout
+## Architecture Comparison
 
-**Kernel 1 (Q@K^T + RoPE + Softmax)** writes to:
-- `score_buffer`: `[seq_q, num_heads, seq_k]` floats
+### Two-Kernel Architecture
+- **Kernel 1**: Computes Q@K^T → writes to `score_buffer` (floats)
+- **Kernel 2**: Reads scores, applies softmax, multiplies by V → writes to `output_buffer` (after scores)
+- **Memory**: ONE contiguous buffer with offsets
+- **Execution**: Sequential (producer-consumer), not parallel between kernels
 
-**Kernel 2 (Softmax × V)** reads from score buffer and writes to:
-- `output_buffer`: starts at `score_buffer_size` offset
-- Layout: `[seq_q, num_heads, head_dim]` halfs
+### Single-Kernel Architecture (exact_pattern)
+- **Single kernel**: Computes Q@K^T + softmax × V in one pass
+- **Memory**: ONE contiguous buffer with offsets (matching two-kernel)
+- **Launch dims**: Grid `(seq_q, seq_k, num_heads)`, Block `(head_dim, 1, 1)`
+- **Parameters**: q_ptr, k_ptr, v_ptr, s_ptr, out_ptr, scale, seq_q, seq_k, num_heads, head_dim (10 params)
 
-Total allocation: `seq_q * num_heads * seq_k * 4 + seq_q * num_heads * head_dim * 2` bytes
+## Testing Results
 
-## Evidence
+### Passing Tests
+✅ `single_kernel_two_buffer_test` - Infrastructure validation  
+✅ `single_kernel_numerical_conformance` - Kernel executes without crash
 
-### Failed Tests (Separate Allocations)
-- ❌ `minimal_no_arrays_test`: Crashed with `CUDA_ERROR_ILLEGAL_ADDRESS`
-- ❌ `simple_qk_dot_test`: Crashed with `CUDA_ERROR_ILLEGAL_ADDRESS`  
-- ❌ `no_shared_memory_qk_dot_test`: Crashed with `CUDA_ERROR_ILLEGAL_ADDRESS`
+### Test Output
+```
+=== Single-Kernel Numerical Conformance Test ===
+✅ Allocated single buffer: 16 bytes
+✅ Loaded exact pattern kernel
+🚀 Launching with grid=(1, 2, 1), block=(4, 1, 1)
+✅ Kernel launched
+✅ Single-kernel execution completed!
 
-### Passed Tests (Correct Memory Layout)
-- ✅ `ultra_simple_write_test`: Simple write to single buffer works
-- ✅ `single_kernel_two_buffer_test`: Single-kernel with combined buffer **PASSES**
-
-## Conclusion
-
-The two-kernel architecture is **NOT** truly parallel/asynchronous between kernels - it's sequential execution with asynchronous launch. However, the memory layout is clever: using one contiguous allocation avoids expensive separate allocations and allows efficient data flow between kernel stages.
-
-### Why This Matters for Single-Kernel Fusion
-
-Now that we understand the correct memory layout, we can:
-1. ✅ Build a single-kernel that matches two-kernel behavior exactly
-2. ✅ Fuse Q@K^T + RoPE + Softmax × V into one kernel call
-3. ✅ Potentially improve performance by eliminating intermediate score buffer writes
+=== Single-Kernel Numerical Conformance Test PASSED ===
+```
 
 ## Next Steps (Week 10)
 
-Now that we have the correct memory pattern, we can:
-1. Create a single-kernel that computes everything in one pass
-2. Add numerical conformance tests to verify correctness
-3. Benchmark against two-kernel baseline
-4. Optimize thread indexing and shared memory usage
+1. **Full numerical conformance**: Compare single-kernel output vs two-kernel reference
+2. **RoPE integration**: Add rotary position embeddings to single-kernel
+3. **Causal mask**: Implement causal masking in single-kernel
+4. **Performance benchmarking**: Measure throughput vs two-kernel baseline
 
-**Status**: Single-kernel infrastructure is ready - now we just need the right kernel logic! 🚀
+## Files Modified
+
+- `pesti-runner/tests/single_kernel_two_buffer_test.rs` - Memory layout test (passes)
+- `pesti-runner/tests/single_kernel_numerical_conformance.rs` - Conformance test (passes)
+- `pesti-runner/src/kernel/ptx/fused_attention_exact_pattern.ptx` - Exact pattern kernel
+- `docs/week9_debugging_session.md` - This documentation
+
+## Git Commits
+
+```
+4de5146 Week 9: Single-kernel numerical conformance test
+3c249a5 Week 9: Single-kernel memory layout breakthrough  
+8772d5b Week 9: Document single-kernel debugging breakthrough
+```
+
+## Conclusion
+
+✅ **Week 9 Complete**: Single-kernel infrastructure ready for numerical verification  
+✅ **Root cause resolved**: Memory layout mismatch fixed  
+✅ **Test harness validated**: Kernel executes without `CUDA_ERROR_ILLEGAL_ADDRESS`  
+
+**Status**: Ready to proceed with full numerical conformance testing in Week 10.
