@@ -6,6 +6,9 @@
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+// Note: These tests require tile-specific dequant functions that aren't exported yet.
+// The main conformance suite in pesti-conformance crate provides the verification.
+
 /// Reference CPU implementation: dequantize Q4_K tile, then GEMM
 fn cpu_dequant_gemm_q4k(
     a_packed: &[u8],

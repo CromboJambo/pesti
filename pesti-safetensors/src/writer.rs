@@ -1,4 +1,3 @@
-use byteorder::WriteBytesExt;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -66,7 +65,7 @@ impl SafetensorsWriter {
 
         // 3. Write padding
         for _ in 0..padding {
-            writer.write_u8(0)?;
+            writer.write(&[0u8])?;
         }
 
         // 4. Write tensor data

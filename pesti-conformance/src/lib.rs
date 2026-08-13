@@ -13,6 +13,9 @@ use std::process::Command;
 #[cfg(test)]
 mod integration_tests;
 
+#[cfg(test)]
+mod q4k_conformance;
+
 /// Error type for conformance testing.
 #[derive(Debug)]
 pub enum ConformanceError {
