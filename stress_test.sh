@@ -1,7 +1,6 @@
 #!/bin/bash
 
-cd /home/crombo/projects/pesti
-
+cd /home/crombo/projects/pesti || exit 1
 echo "=== REAL STRESS TEST - Larger Models ==="
 echo "GPU: RTX 4070 Ti SUPER (sm_8.9)"
 echo "Baseline llama.cpp CPU: ~85 tok/s (0.5B)"
