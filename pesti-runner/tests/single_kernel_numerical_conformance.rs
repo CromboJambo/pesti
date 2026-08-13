@@ -25,8 +25,7 @@ fn test_single_kernel_numerical_conformance() {
     
     let total_size = score_buffer_size + output_buffer_bytes;
     
-    let combined_ptr =
-        unsafe { pesti_runner::cuda_runtime::allocate_device_memory(total_size).unwrap() };
+    let combined_ptr = pesti_runner::cuda_runtime::allocate_device_memory(total_size).unwrap();
     
     println!("✅ Allocated single buffer: {} bytes", total_size);
     
@@ -94,9 +93,7 @@ fn test_single_kernel_numerical_conformance() {
     // Full numerical conformance would compare against two-kernel reference
     
     // Cleanup
-    unsafe {
-        pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
-    }
+    pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
     
     println!("\n=== Single-Kernel Numerical Conformance Test PASSED ===");
 }
