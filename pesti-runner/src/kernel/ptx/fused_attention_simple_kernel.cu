@@ -31,6 +31,9 @@ __global__ void fused_attention_simple_kernel(
     int head = blockIdx.y;                // Attention head
     int tid = threadIdx.x;                // Thread ID
     
+    // Early exit if this thread is out of bounds for head_dim
+    if (tid >= head_dim) return;
+    
     if (q_pos >= seq_q || head >= num_heads) return;
     
     const int MAX_K = 32;  // Max sequence length for this test
