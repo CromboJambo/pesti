@@ -212,6 +212,7 @@ impl MemoryBackend for CpuMemoryBackend {
 }
 
 /// CUDA-backed memory using cudarc sys calls.
+#[derive(Clone)]
 pub struct CudaMemoryBackend {
     stream: Arc<CudaStream>,
     device_info: crate::cuda_runtime::CudaDeviceInfo,

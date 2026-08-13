@@ -13,6 +13,8 @@ default = []
 mistralrs = ["dep:mistralrs"]
 # CUDA GPU backend (requires CUDA 12.5+ and NVIDIA GPU)
 cuda = ["dep:cudarc", "dep:intel-mkl-src", "candle-core/cuda", "candle-nn/cuda"]
+# Flash Attention PTX kernel (Option C - experimental, requires cuda + sm_8.9 GPU)
+flash-attention = ["cuda"]
 
 [dependencies]
 candle-core.workspace = true

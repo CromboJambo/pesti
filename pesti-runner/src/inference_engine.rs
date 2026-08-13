@@ -152,13 +152,44 @@ impl InferenceEngine {
                         crate::kernel::memory::CudaMemoryBackend::with_device_info(s.clone(), info),
                     );
 
-                    // GemmBasedAttentionKernel::new() returns the struct directly (no Result)
-                    let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
-                        Box::new(crate::kernel::CpuSoftmaxKernel::new());
-                    let attention_kernel =
-                        GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
-                    tracing::info!("Using GEMM-based attention kernel (Option A)");
-                    (Box::new(attention_kernel), Some(backend))
+                    // Check if we should use Flash Attention (Option C) or GEMM-based (Option A)
+                    #[cfg(feature = "flash-attention")]
+                    {
+                        // Try to load Flash Attention kernel first
+                        let flash_config = crate::kernel::FlashAttentionConfig::default();
+                        match crate::kernel::FlashAttentionKernel::new(
+                            cuda_rt.context().clone(),
+                            s.clone(),
+                            (*backend).clone(), // Dereference Arc to get CudaMemoryBackend
+                            flash_config,
+                        ) {
+                            Ok(flash_kernel) => {
+                                tracing::info!("Using Flash Attention PTX kernel (Option C)");
+                                (Box::new(flash_kernel), Some(backend))
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Flash Attention failed, falling back to GEMM-based attention");
+                                // Fall through to GEMM-based attention below
+                                let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
+                                    Box::new(crate::kernel::CpuSoftmaxKernel::new());
+                                let attention_kernel =
+                                    GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
+                                tracing::info!("Using GEMM-based attention kernel (Option A)");
+                                (Box::new(attention_kernel), Some(backend))
+                            }
+                        }
+                    }
+
+                    #[cfg(not(feature = "flash-attention"))]
+                    {
+                        // Default to GEMM-based attention when flash-attention feature is disabled
+                        let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
+                            Box::new(crate::kernel::CpuSoftmaxKernel::new());
+                        let attention_kernel =
+                            GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
+                        tracing::info!("Using GEMM-based attention kernel (Option A)");
+                        (Box::new(attention_kernel), Some(backend))
+                    }
                 } else {
                     (
                         Box::new(crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu)),

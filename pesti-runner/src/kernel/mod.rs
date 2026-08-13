@@ -110,8 +110,12 @@ pub mod tma_descriptor;
 #[cfg(feature = "cuda")]
 pub use attention::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
-    CpuAttentionKernel, CudaAttentionKernel, CudaAttentionKernelBuilder, GemmBasedAttentionKernel,
+    CpuAttentionKernel, CudaAttentionKernel, CudaAttentionKernelBuilder,
 };
+
+#[cfg(feature = "flash-attention")]
+pub use flash_attention::{FlashAttentionConfig, FlashAttentionKernel};
+
 #[cfg(not(feature = "cuda"))]
 pub use attention_stub::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
