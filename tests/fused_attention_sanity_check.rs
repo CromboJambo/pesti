@@ -86,13 +86,10 @@ fn main() {
     
     // Step 4: Weighted sum of V → output
     // Since weight[0]≈0, weight[1]=1, output = V[1] = [2, 2, 2, 2]
-    let out_0 = weight0 * v_h[0].to_f32() + weight1 * v_h[4].to_f32(); // = 0*1 + 1*2 = 2.0
-    let out_1 = weight0 * v_h[1].to_f32() + weight1 * v_h[5].to_f32(); // = 0*1 + 1*2 = 2.0
-    let out_2 = weight0 * v_h[2].to_f32() + weight1 * v_h[6].to_f32(); // = 0*1 + 1*2 = 2.0
-    let out_3 = weight0 * v_h[3].to_f32() + weight1 * v_h[7].to_f32(); // = 0*1 + 1*2 = 2.0
+    let expected_output: Vec<f32> = vec![2.0, 2.0, 2.0, 2.0]; // All dimensions should be 2.0
     
     println!("\nStep 4: Weighted sum of V");
-    println!("  output = [ {:.1}, {:.1}, {:.1}, {:.1} ]", out_0, out_1, out_2, out_3);
+    println!("  output = [ {:.1}, {:.1}, {:.1}, {:.1} ]", expected_output[0], expected_output[1], expected_output[2], expected_output[3]);
     
     println!("\n=== Expected GPU Output ===");
     println!("  [2.0, 2.0, 2.0, 2.0]");
@@ -148,10 +145,10 @@ fn main() {
     println!("GPU Output: [{:.4}, {:.4}, {:.4}, {:.4}]", 
              gpu_output[0], gpu_output[1], gpu_output[2], gpu_output[3]);
     
-    // Check for correctness
+    // Check for correctness - FIXED BUG: use expected_output[i] instead of out_i
     let mut max_err = 0.0;
     for i in 0..head_dim {
-        let err = (gpu_output[i] - out_i).abs();
+        let err = (gpu_output[i] - expected_output[i]).abs();
         if err > max_err { max_err = err; }
     }
     
