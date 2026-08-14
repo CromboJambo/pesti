@@ -314,20 +314,60 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         println!("  [{}] = {:.6}", i, scores_host_f32[i]);
     }
     
-    // Compute numerical conformance vs reference (compare pre-softmax scores)
-    let mut max_abs_error: f32 = 0.0;
-    for (i, &score_val) in scores_host_f32.iter().enumerate() {
-        let ref_score = llama_probs[i]; // Reference attention output (already softmaxed!)
+    // Add function to compute pre-softmax scores from softmax probabilities (inverse softmax)
+    fn log_softmax(probs: &[f32]) -> Vec<f32> {
+        probs.iter().map(|&p| if p > 0.0 { p.ln() } else { f32::NEG_INFINITY }).collect()
+    }
+    
+    // Compute numerical conformance vs reference (compare post-softmax probabilities)
+    let mut max_rel_error: f32 = 0.0;
+    
+    // Apply softmax to kernel logits across seq_k dimension for each (q_pos, head) pair
+    let mut kernel_probs: Vec<f32> = vec![0.0; scores_host_f32.len()];
+    for q_pos in 0..seq_q {
+        for head in 0..num_heads {
+            let start = q_pos * num_heads * seq_k + head * seq_k;
+            let end = start + seq_k;
+            
+            // Find max for numerical stability
+            let max_val = scores_host_f32[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            
+            // Apply softmax
+            let mut sum = 0.0;
+            for i in start..end {
+                if scores_host_f32[i] == f32::NEG_INFINITY {
+                    kernel_probs[i] = 0.0;
+                } else {
+                    let exp_val = (scores_host_f32[i] - max_val).exp();
+                    kernel_probs[i] = exp_val;
+                    sum += exp_val;
+                }
+            }
+            
+            // Normalize
+            for i in start..end {
+                if sum > 0.0 {
+                    kernel_probs[i] /= sum;
+                }
+            }
+        }
+    }
+    
+    // Compare with reference
+    for (i, &kernel_prob) in kernel_probs.iter().enumerate() {
+        let ref_prob = llama_probs[i];
         
-        // Since kernel outputs softmax probabilities, compare to reference probs
-        // But reference_probs are already softmaxed, so we need pre-softmax scores for comparison
-        // For now, just check that values are reasonable (not all zeros or -inf)
-        let abs_error = score_val.abs();
-        max_abs_error = max_abs_error.max(abs_error);
+        let abs_error = (kernel_prob - ref_prob).abs();
+        let rel_error = if ref_prob > 1e-6 {
+            abs_error / ref_prob
+        } else {
+            abs_error
+        };
+        max_rel_error = max_rel_error.max(rel_error);
     }
     
     println!("\n=== Numerical Conformance Results ===");
-    println!("Max absolute score value: {:.6}", max_abs_error);
+    println!("Max relative error: {:.2e}", max_rel_error);
     
     // Check if we got any non-zero, non-negative-infinity values
     let has_valid_scores = scores_host_f32.iter().any(|&x| x > f32::NEG_INFINITY && x != 0.0);
