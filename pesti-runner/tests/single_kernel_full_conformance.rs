@@ -3,8 +3,9 @@
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
-use pesti_runner::cuda_shim::{launch_kernel, cu_stream};
+use pesti_runner::cuda_shim::{cu_stream, launch_kernel};
 
+#[cfg(feature = "cuda")]
 #[test]
 fn test_single_kernel_numerical_conformance() {
     let cuda_rt = CudaRuntime::new(0).unwrap();
@@ -179,6 +180,13 @@ fn test_single_kernel_numerical_conformance() {
     println!("  Max absolute error: {:.6e}", max_abs_err);
     println!("  Max relative error: {:.6e}", max_rel_err);
     println!();
+    
+    // ASSERTION: Conformance requires <1e-4 relative error
+    assert!(
+        max_rel_err < 1e-4,
+        "Numerical conformance FAILED: max_rel_error={:.6e} >= 1e-4 target",
+        max_rel_err
+    );
     
     if max_rel_err < 1e-4 {
         println!("✅ Numerical conformance PASSED (rel error < 1e-4)");

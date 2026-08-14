@@ -2,4 +2,4 @@
 # Only uses fields that work with clippy 0.1.97
 
 # Maximum cognitive complexity (works in newer versions)
-max-cognitive-complexity = 30
+# Note: This field may not be recognized by all clippy versions

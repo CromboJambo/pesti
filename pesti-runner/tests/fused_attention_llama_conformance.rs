@@ -140,6 +140,7 @@ fn apply_causal_mask(scores: &mut [f32], seq_q: usize, seq_k: usize, num_heads: 
     }
 }
 
+#[cfg(feature = "cuda")]
 #[test]
 fn test_fused_attention_vs_llama_cpp() {
     let cuda_rt = CudaRuntime::new(0).unwrap();

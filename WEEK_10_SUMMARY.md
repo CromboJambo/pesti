@@ -2,6 +2,7 @@
 
 **Date**: August 15, 2026  
 **Status**: ✅ **All objectives completed** | 🚀 **Ready for numerical verification** | 📊 **48,500× error reduction achieved**
+**Recovery Note**: Week 10 did not establish model-level conformance. The "perfect" result (commit 04f9b7d) must be downgraded to an experimental kernel-score observation until adversarial test passes.
 
 ---
 
@@ -142,6 +143,8 @@ A simple sign error (`>=` vs `>`) completely changes which positions are attende
 
 ---
 
+---
+
 ## 🎓 Lessons Learned
 
 ### Lesson #1: Reference Implementation Matters
@@ -155,6 +158,61 @@ Commit small changes frequently with clear messages. This makes it easy to trace
 
 ---
 
+## 🔧 Week 10/12 Recovery Plan (New)
+
+**Date**: August 15, 2026  
+**Trigger**: Discovery that Week 10 "perfect conformance" was based on non-discriminating inputs and weak assertions
+
+### Identified Issues:
+1. **`exact_pattern_minimal.rs`** reads uninitialized memory - no Q/K/V host→device copy
+2. **`single_kernel_full_conformance.rs`** only prints error, no `assert!(rel_error < tolerance)` assertion
+3. **Simple kernel bug** (line 57-67): Each thread computes partial dot product but no block-wide reduction for head_dim > 1
+4. **Causal softmax collapse**: Deterministic inputs `[0, -5, -10, ...]` cause softmax to output ~[1, 0, 0, ...], making error non-discriminating
+5. **Experimental PTX not wired in**: Production uses `attention_rope_softmax.ptx`, not the new single-kernel variants
+6. **No CUDA feature gate**: Tests run without `--features cuda` but fail silently or skip properly
+
+### Fixes Applied (Session):
+✅ **Added failing assertion** to `single_kernel_full_conformance.rs`:
+```rust
+assert!(
+    max_rel_err < 1e-4,
+    "Numerical conformance FAILED: max_rel_error={:.6e} >= 1e-4 target",
+    max_rel_err
+);
+```
+
+✅ **Gated CUDA tests** with `#[cfg(feature = "cuda")]`:
+- `single_kernel_full_conformance.rs`
+- `fused_attention_llama_conformance.rs`
+- `single_kernel_numerical_conformance.rs`
+
+✅ **Fixed simple kernel dot-product reduction**:
+- Added shared memory for block-wide reduction when head_dim > blockDim.x
+- Recompiled PTX: `nvcc -arch=sm_89 -ptx fused_attention_simple_kernel.cu -o fused_attention_simple_kernel.ptx`
+
+✅ **Created adversarial test** (`adversarial_attention_conformance.rs`):
+- Bounded inputs in range [-10.0, 10.0] with varied patterns
+- Multi-position causal cases (q=0, q=1, q=2)
+- Full CPU reference with RoPE + softmax + V-multiply
+
+✅ **Documented recovery** in `WEEK_10_SUMMARY.md`:
+- Added "Recovery Note" header
+- Documented identified issues and fixes applied
+
+### Next Steps (Pending Verification):
+⏳ Run adversarial test: `cargo test --package pesti-runner adversarial_attention_conformance --features cuda`
+⏳ Verify simple kernel fix resolves reduction bug for head_dim > 1
+⏳ Integrate verified kernel into runtime (`fused_attention_conformant.rs`)
+⏳ Run real-GGUF model benchmark (separate from conformance test)
+
+### Acceptance Criteria:
+- [ ] Adversarial test passes with `max_rel_error < 1e-4`
+- [ ] Simple kernel produces correct output for head_dim=64 (not just head_dim=16)
+- [ ] All CUDA tests gated with `#[cfg(feature = "cuda")]`
+- [ ] Documentation reflects "experimental observation" status, not "acceptance evidence"
+
+---
+
 ## 🚦 Ready for Next Steps?
 
 **Status**: ✅ **YES!**
@@ -163,9 +221,9 @@ We've completed all Week 10 planning objectives:
 - ✅ RoPE fix verified (q=0 perfect match)
 - ✅ Single-kernel PTX created and loads correctly
 - ✅ Documentation complete
-- ⏳ Numerical verification pending (integration work needed)
+- ⏳ Numerical verification pending (adversarial test execution)
 
-**Next milestone**: Integrate single-kernel into conformance test and achieve <1e-4 relative error!
+**Next milestone**: Run adversarial test to verify conformance with varied inputs!
 
 ---
 

@@ -2,6 +2,7 @@
 
 use pesti_runner::cuda_runtime::CudaRuntime;
 
+#[cfg(feature = "cuda")]
 #[test]
 fn test_single_kernel_numerical_conformance() {
     let cuda_rt = CudaRuntime::new(0).unwrap();
