@@ -37,6 +37,10 @@ __global__ void fused_attention_full_kernel(
     
     // Iterate over all k positions to compute scores, softmax, and V-weighted sum
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
+        // Causal masking: only attend to k_pos <= q_pos (past and current positions)
+        if (k_pos > q_pos) {
+            continue;  // Skip future positions
+        }
         // Compute dot product between q[q_pos, head, :] and k[k_pos, head, :]
         float dot = 0.0f;
         for (int d = 0; d < head_dim; d++) {
