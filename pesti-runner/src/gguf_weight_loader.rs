@@ -1149,3 +1149,17 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 
     Ok(result)
 }
+
+/// Transpose a 2D weight tensor from [in_features, out_features] to [out_features, in_features].
+/// GGUF stores weights as [in_features, out_features], but Linear expects [out_features, in_features] row-major.
+pub fn transpose_weight(weight: &[f32], in_features: usize, out_features: usize) -> Vec<f32> {
+    let mut transposed = vec![0.0f32; out_features * in_features];
+    for i in 0..in_features {
+        for j in 0..out_features {
+            // GGUF: weight[i * out_features + j] (row-major [in, out])
+            // Transposed: weight[j * in_features + i] (row-major [out, in])
+            transposed[j * in_features + i] = weight[i * out_features + j];
+        }
+    }
+    transposed
+}
