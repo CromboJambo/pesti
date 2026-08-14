@@ -31,15 +31,13 @@ __global__ void fused_attention_simple_kernel(
     int head = blockIdx.y;                // Attention head
     int tid = threadIdx.x;                // Thread ID
     
-    // Early exit if this thread is out of bounds for head_dim
-    if (tid >= head_dim) return;
-    
     if (q_pos >= seq_q || head >= num_heads) return;
     
     const int MAX_K = 32;  // Max sequence length for this test
     
-    float scores[MAX_K];
-    float probs[MAX_K];
+    // Use shared memory to avoid stack overflow with large blocks
+    __shared__ float s_scores[MAX_K];
+    __shared__ float s_probs[MAX_K];
     
     // ========================================================================
     // STEP 1: Compute attention scores with causal mask
@@ -50,7 +48,7 @@ __global__ void fused_attention_simple_kernel(
     for (int k_pos = 0; k_pos < seq_k && k_pos < MAX_K; k_pos++) {
         // Apply causal mask: mask out future tokens (k_pos > q_pos)
         if (k_pos > q_pos) {
-            scores[k_pos] = -FLT_MAX;
+            s_scores[k_pos] = -FLT_MAX;
             continue;
         }
         
@@ -68,7 +66,7 @@ __global__ void fused_attention_simple_kernel(
         
         // Scale by 1/sqrt(head_dim)
         score *= scale;
-        scores[k_pos] = score;
+        s_scores[k_pos] = score;
         
         // Track max for numerical stability
         if (score > max_score) {
@@ -76,28 +74,40 @@ __global__ void fused_attention_simple_kernel(
         }
     }
     
+    __syncthreads();
+    
     // ========================================================================
     // STEP 2: Apply softmax with max-subtraction trick
     // ========================================================================
     
     float exp_sum = 0.0f;
     
-    for (int k_pos = 0; k_pos < seq_k && k_pos < MAX_K; k_pos++) {
-        if (scores[k_pos] == -FLT_MAX) {
-            probs[k_pos] = 0.0f;
+    for (int k_pos = tid; k_pos < seq_k && k_pos < MAX_K; k_pos += blockDim.x) {
+        if (s_scores[k_pos] == -FLT_MAX) {
+            s_probs[k_pos] = 0.0f;
         } else {
-            float exp_val = expf(scores[k_pos] - max_score);
-            probs[k_pos] = exp_val;
+            float exp_val = expf(s_scores[k_pos] - max_score);
+            s_probs[k_pos] = exp_val;
             exp_sum += exp_val;
         }
     }
     
-    // Normalize
-    if (exp_sum > 0.0f) {
-        for (int k_pos = 0; k_pos < seq_k && k_pos < MAX_K; k_pos++) {
-            probs[k_pos] /= exp_sum;
+    // Reduce exp_sum across threads (simple sequential for small blocks)
+    if (tid == 0) {
+        for (int t = 1; t < blockDim.x && t < seq_k; t++) {
+            exp_sum += s_probs[t];
         }
     }
+    __syncthreads();
+    
+    // Normalize using shared exp_sum
+    if (exp_sum > 0.0f) {
+        for (int k_pos = tid; k_pos < seq_k && k_pos < MAX_K; k_pos += blockDim.x) {
+            s_probs[k_pos] /= exp_sum;
+        }
+    }
+    
+    __syncthreads();
     
     // ========================================================================
     // STEP 3: Weighted sum of V to get final output
@@ -107,10 +117,10 @@ __global__ void fused_attention_simple_kernel(
         float out_val = 0.0f;
         
         for (int k_pos = 0; k_pos < seq_k && k_pos < MAX_K; k_pos++) {
-            if (probs[k_pos] > 0.0f) {  // Skip masked positions
+            if (s_probs[k_pos] > 0.0f) {  // Skip masked positions
                 int idx_v = k_pos * num_heads * head_dim + head * head_dim + d;
                 float v_val = __half2float(v_ptr[idx_v]);
-                out_val += probs[k_pos] * v_val;
+                out_val += s_probs[k_pos] * v_val;
             }
         }
         
