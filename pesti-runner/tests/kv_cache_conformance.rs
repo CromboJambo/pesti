@@ -1,19 +1,19 @@
 //! KV Cache conformance test for one-stage full fusion attention kernel
 //! 
-//! Validates that the kernel can use pre-computed KV cache instead of recomputing K/V.
+//! Validates that the kernel can use pre-computed K/V tensors (simulating KV cache usage).
 
 #![cfg(feature = "cuda")]
 
 use pesti_runner::cuda_runtime::{allocate_device_memory, copy_host_to_device, CudaRuntime};
-use pesti_runner::cuda_shim::{cu_stream, launch_kernel, CudaModule};
+use pesti_runner::cuda_shim::{CudaModule, launch_kernel, cu_stream};
 
-/// Reference causal attention with KV cache (uses pre-computed K and V from cache)
-fn reference_kv_attention(
+/// Reference attention (causal) for comparison
+fn reference_attention(
     q: &[f32],
-    kv_cache_k: &[f32], // Pre-computed keys from cache
-    kv_cache_v: &[f32], // Pre-computed values from cache
-    seq_q: usize,       // Query sequence length (typically 1 for decode)
-    seq_k: usize,       // Total sequence length (including cached positions)
+    k: &[f32],
+    v: &[f32],
+    seq_q: usize,
+    seq_k: usize,
     num_heads: usize,
     head_dim: usize,
 ) -> Vec<f32> {
@@ -24,16 +24,15 @@ fn reference_kv_attention(
             for dim_idx in 0..head_dim {
                 let mut sum = 0.0f32;
                 
-                // Compute scores over cached k positions (causal: only k_pos <= q_pos)
+                // Compute scores over k positions (causal: only k_pos <= q_pos)
                 let mut scores = vec![f32::NEG_INFINITY; seq_k];
                 for k_pos in 0..=q_pos.min(seq_k - 1) {
-                    let q_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
                     
                     // Dot product over head_dim
                     for d in 0..head_dim {
                         let q_d = q[q_pos * num_heads * head_dim + head * head_dim + d];
-                        let k_d = kv_cache_k[k_idx]; // Use cached K
+                        let k_d = k[k_idx + d];
                         scores[k_pos] += q_d * k_d;
                     }
                     scores[k_pos] /= (head_dim as f32).sqrt();
@@ -56,7 +55,7 @@ fn reference_kv_attention(
                     if scores[k_pos].is_finite() && exp_sum > 1e-6 {
                         let softmax_val = (scores[k_pos] - max_score).exp() / exp_sum;
                         let v_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
-                        sum += softmax_val * kv_cache_v[v_idx]; // Use cached V
+                        sum += softmax_val * v[v_idx];
                     }
                 }
 
@@ -69,15 +68,15 @@ fn reference_kv_attention(
 }
 
 /// Launch the fused attention kernel (synchronous)
-fn launch_fused_attention_with_kv(
+fn launch_fused_attention(
     cuda_rt: &CudaRuntime,
     module: &CudaModule,
-    q_ptr: *mut u8,       // Query (new token)
-    k_cache_ptr: *mut u8, // Cached keys
-    v_cache_ptr: *mut u8, // Cached values
-    out_ptr: *mut u8,     // Output
-    seq_q: usize,         // Query sequence length (typically 1 for decode)
-    seq_k: usize,         // Total sequence length (cached + new)
+    q_ptr: *mut u8,
+    k_ptr: *mut u8,
+    v_ptr: *mut u8,
+    out_ptr: *mut u8,
+    seq_q: usize,
+    seq_k: usize,
     num_heads: usize,
     head_dim: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -89,8 +88,8 @@ fn launch_fused_attention_with_kv(
 
     // Parameters (10 total, matching fused kernel signature)
     let mut q_v: u64 = q_ptr as u64;
-    let mut k_cache_v: u64 = k_cache_ptr as u64; // Point to cached K
-    let mut v_cache_v: u64 = v_cache_ptr as u64; // Point to cached V
+    let mut k_v: u64 = k_ptr as u64;
+    let mut v_v: u64 = v_ptr as u64;
     let mut out_v: u64 = out_ptr as u64;
     let mut seq_q_v: u32 = seq_q as u32;
     let mut seq_k_v: u32 = seq_k as u32;
@@ -105,8 +104,8 @@ fn launch_fused_attention_with_kv(
 
     let mut params: [*mut std::ffi::c_void; 10] = [
         &mut q_v as *mut u64 as *mut std::ffi::c_void,
-        &mut k_cache_v as *mut u64 as *mut std::ffi::c_void,
-        &mut v_cache_v as *mut u64 as *mut std::ffi::c_void,
+        &mut k_v as *mut u64 as *mut std::ffi::c_void,
+        &mut v_v as *mut u64 as *mut std::ffi::c_void,
         &mut out_v as *mut u64 as *mut std::ffi::c_void,
         &mut (scale as f32) as *mut f32 as *mut std::ffi::c_void,
         &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
@@ -131,59 +130,63 @@ fn launch_fused_attention_with_kv(
 }
 
 #[test]
-fn test_kv_cache_decode() {
-    println!("\n=== KV Cache Decode Test ===");
-    println!("Simulating autoregressive decode (seq_q=1, seq_k=cached_positions)");
+fn test_attention_with_k_cache() {
+    println!("\n=== Attention with K/V Cache Test ===");
+    println!("Testing kernel with pre-computed K/V (simulating cache read)");
 
     let cuda_rt = CudaRuntime::new(0).unwrap();
 
-    // Configuration: 1 new token to generate, with 3 cached positions
+    // Configuration: decode mode - 1 query token attending to cached positions
     let seq_q = 1;      // New query (single token)
-    let seq_k = 4;      // Total sequence (3 cached + 1 new)
+    let seq_k = 4;      // Total sequence length (cached positions)
     let num_heads = 2;
     let head_dim = 8;
 
     let q_size = seq_q * num_heads * head_dim * 2;  // f16
-    let k_cache_size = seq_k * num_heads * head_dim * 2;
-    let v_cache_size = seq_k * num_heads * head_dim * 2;
+    let k_size = seq_k * num_heads * head_dim * 2;
+    let v_size = seq_k * num_heads * head_dim * 2;
     let output_size = seq_q * num_heads * head_dim * 4;
 
-    // Initialize with deterministic values
-    let q_host: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0]; // New query token
-    let k_cache_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
+    // Initialize with deterministic values (simulating cache contents)
+    let q_host: Vec<f32> = (0..seq_q * num_heads * head_dim)
+        .map(|i| (i as f32 - (seq_q * num_heads * head_dim) as f32 / 2.0) * 0.1)
+        .collect();
+    let k_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
         .map(|i| (i as f32 - (seq_k * num_heads * head_dim) as f32 / 2.0) * 0.15)
         .collect();
-    let v_cache_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
+    let v_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
         .map(|i| (i as f32 - (seq_k * num_heads * head_dim) as f32 / 2.0) * 0.2)
         .collect();
 
+    println!("  Array sizes: q={}, k={}, v={}, output={}", q_host.len(), k_host.len(), v_host.len(), output_size);
+
     // Allocate GPU memory
     let q_ptr = unsafe { allocate_device_memory(q_size).unwrap() };
-    let k_cache_ptr = unsafe { allocate_device_memory(k_cache_size).unwrap() };
-    let v_cache_ptr = unsafe { allocate_device_memory(v_cache_size).unwrap() };
+    let k_ptr = unsafe { allocate_device_memory(k_size).unwrap() };
+    let v_ptr = unsafe { allocate_device_memory(v_size).unwrap() };
     let out_ptr = unsafe { allocate_device_memory(output_size).unwrap() };
 
     // Copy to device (convert f32 to f16)
     let q_host_f16: Vec<half::f16> = q_host.iter().map(|&x| half::f16::from_f32(x)).collect();
-    let k_cache_host_f16: Vec<half::f16> = k_cache_host.iter().map(|&x| half::f16::from_f32(x)).collect();
-    let v_cache_host_f16: Vec<half::f16> = v_cache_host.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let k_host_f16: Vec<half::f16> = k_host.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let v_host_f16: Vec<half::f16> = v_host.iter().map(|&x| half::f16::from_f32(x)).collect();
 
     unsafe {
         copy_host_to_device(q_ptr, q_host_f16.as_ptr() as *const u8, q_size).unwrap();
-        copy_host_to_device(k_cache_ptr, k_cache_host_f16.as_ptr() as *const u8, k_cache_size).unwrap();
-        copy_host_to_device(v_cache_ptr, v_cache_host_f16.as_ptr() as *const u8, v_cache_size).unwrap();
+        copy_host_to_device(k_ptr, k_host_f16.as_ptr() as *const u8, k_size).unwrap();
+        copy_host_to_device(v_ptr, v_host_f16.as_ptr() as *const u8, v_size).unwrap();
     }
 
     // Load PTX and launch
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
-    launch_fused_attention_with_kv(
+    launch_fused_attention(
         &cuda_rt,
         &module,
         q_ptr,
-        k_cache_ptr,
-        v_cache_ptr,
+        k_ptr,
+        v_ptr,
         out_ptr,
         seq_q,
         seq_k,
@@ -200,8 +203,8 @@ fn test_kv_cache_decode() {
         copy_host_to_device(out_ptr, gpu_output.as_mut_ptr() as *mut u8, output_size).unwrap();
     }
 
-    // Compare with CPU reference (using cached K/V)
-    let cpu_output = reference_kv_attention(&q_host, &k_cache_host, &v_cache_host, seq_q, seq_k, num_heads, head_dim);
+    // Compare with CPU reference (causal attention)
+    let cpu_output = reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
 
     // Compute error metrics
     let mut max_abs_err = 0.0f32;
@@ -213,73 +216,71 @@ fn test_kv_cache_decode() {
 
     println!("  Max absolute error: {:.6e}", max_abs_err);
 
-    // With KV cache, error should be < 1e-3 (same as non-causal)
+    // With causal masking, error should be < 1e-3
     assert!(
         max_abs_err < 1e-3,
-        "KV cache attention error {} exceeds threshold",
+        "Attention with cache error {} exceeds threshold",
         max_abs_err
     );
 
-    println!("✅ KV cache decode PASSED");
+    println!("✅ Attention with K/V cache PASSED");
 }
 
 #[test]
-fn test_kv_cache_prefill_vs_decode() {
-    println!("\n=== KV Cache Prefill vs Decode Comparison ===");
-
+fn test_prefill_with_full_cache() {
+    println!("\n=== Prefill with Full Cache Test ===");
+    
     let cuda_rt = CudaRuntime::new(0).unwrap();
 
     // Prefill: process multiple tokens at once (seq_q > 1)
-    // Decode: process one token at a time (seq_q = 1)
-    
-    let seq_k_prefill = 8;  // Total sequence length
-    let seq_q_prefill = 4;  // Process 4 tokens at once
+    let seq_k = 8;  // Total sequence length
+    let seq_q = 4;  // Process 4 tokens at once
     let num_heads = 2;
     let head_dim = 8;
 
-    let q_size = seq_q_prefill * num_heads * head_dim * 2;
-    let k_cache_size = seq_k_prefill * num_heads * head_dim * 2;
-    let v_cache_size = seq_k_prefill * num_heads * head_dim * 2;
-    let output_size = seq_q_prefill * num_heads * head_dim * 4;
+    let q_size = seq_q * num_heads * head_dim * 2;
+    let k_size = seq_k * num_heads * head_dim * 2;
+    let v_size = seq_k * num_heads * head_dim * 2;
+    let output_size = seq_q * num_heads * head_dim * 4;
 
     // Initialize with deterministic values
-    let q_host: Vec<f32> = (0..seq_q_prefill * num_heads * head_dim)
-        .map(|i| (i as f32 - (seq_q_prefill * num_heads * head_dim) as f32 / 2.0) * 0.1)
+    let q_host: Vec<f32> = (0..seq_q * num_heads * head_dim)
+        .map(|i| (i as f32 - (seq_q * num_heads * head_dim) as f32 / 2.0) * 0.1)
         .collect();
-    let k_cache_host: Vec<f32> = (0..seq_k_prefill * num_heads * head_dim)
-        .map(|i| (i as f32 - (seq_k_prefill * num_heads * head_dim) as f32 / 2.0) * 0.15)
+    let k_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
+        .map(|i| (i as f32 - (seq_k * num_heads * head_dim) as f32 / 2.0) * 0.15)
         .collect();
-    let v_cache_host: Vec<f32> = (0..seq_k_prefill * num_heads * head_dim)
-        .map(|i| (i as f32 - (seq_k_prefill * num_heads * head_dim) as f32 / 2.0) * 0.2)
+    let v_host: Vec<f32> = (0..seq_k * num_heads * head_dim)
+        .map(|i| (i as f32 - (seq_k * num_heads * head_dim) as f32 / 2.0) * 0.2)
         .collect();
 
     let q_ptr = unsafe { allocate_device_memory(q_size).unwrap() };
-    let k_cache_ptr = unsafe { allocate_device_memory(k_cache_size).unwrap() };
-    let v_cache_ptr = unsafe { allocate_device_memory(v_cache_size).unwrap() };
+    let k_ptr = unsafe { allocate_device_memory(k_size).unwrap() };
+    let v_ptr = unsafe { allocate_device_memory(v_size).unwrap() };
     let out_ptr = unsafe { allocate_device_memory(output_size).unwrap() };
 
     let q_host_f16: Vec<half::f16> = q_host.iter().map(|&x| half::f16::from_f32(x)).collect();
-    let k_cache_host_f16: Vec<half::f16> = k_cache_host.iter().map(|&x| half::f16::from_f32(x)).collect();
-    let v_cache_host_f16: Vec<half::f16> = v_cache_host.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let k_host_f16: Vec<half::f16> = k_host.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let v_host_f16: Vec<half::f16> = v_host.iter().map(|&x| half::f16::from_f32(x)).collect();
 
     unsafe {
         copy_host_to_device(q_ptr, q_host_f16.as_ptr() as *const u8, q_size).unwrap();
-        copy_host_to_device(k_cache_ptr, k_cache_host_f16.as_ptr() as *const u8, k_cache_size).unwrap();
-        copy_host_to_device(v_cache_ptr, v_cache_host_f16.as_ptr() as *const u8, v_cache_size).unwrap();
+        copy_host_to_device(k_ptr, k_host_f16.as_ptr() as *const u8, k_size).unwrap();
+        copy_host_to_device(v_ptr, v_host_f16.as_ptr() as *const u8, v_size).unwrap();
     }
 
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
-    launch_fused_attention_with_kv(
+    launch_fused_attention(
         &cuda_rt,
         &module,
         q_ptr,
-        k_cache_ptr,
-        v_cache_ptr,
+        k_ptr,
+        v_ptr,
         out_ptr,
-        seq_q_prefill,
-        seq_k_prefill,
+        seq_q,
+        seq_k,
         num_heads,
         head_dim,
     )
@@ -292,13 +293,24 @@ fn test_kv_cache_prefill_vs_decode() {
         copy_host_to_device(out_ptr, gpu_output.as_mut_ptr() as *mut u8, output_size).unwrap();
     }
 
-    // Prefill should produce reasonable outputs (not all zeros)
-    let has_nonzero = gpu_output.iter().any(|&x| x.abs() > 1e-6);
-    
-    println!("  GPU output (first 8 values): {:?}", &gpu_output[0..8.min(gpu_output.len())]);
-    println!("  Has non-zero outputs: {}", has_nonzero);
-    
-    assert!(has_nonzero, "Prefill with KV cache should produce non-zero outputs");
+    // Compare with CPU reference
+    let cpu_output = reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
 
-    println!("✅ KV cache prefill PASSED");
+    // Compute error metrics
+    let mut max_abs_err = 0.0f32;
+    for i in 0..(seq_q * num_heads * head_dim) {
+        let abs_err = (gpu_output[i] - cpu_output[i]).abs();
+        max_abs_err = max_abs_err.max(abs_err);
+    }
+
+    println!("  Max absolute error: {:.6e}", max_abs_err);
+    println!("  GPU output (first 8 values): {:?}", &gpu_output[0..8.min(gpu_output.len())]);
+    
+    assert!(
+        max_abs_err < 1e-3,
+        "Prefill attention error {} exceeds threshold",
+        max_abs_err
+    );
+
+    println!("✅ Prefill with full cache PASSED");
 }
