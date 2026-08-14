@@ -55,11 +55,7 @@ __global__ void fused_attention_simple_kernel(
         }
         
         // Compute dot product Q @ K for this k_pos
-        // Use shared memory for block-wide reduction when head_dim > blockDim.x
-        __shared__ float partial_sum[128]; // Max threads per block
-        partial_sum[tid] = 0.0f;
-        
-        float thread_sum = 0.0f;
+        float score = 0.0f;
         for (int d = tid; d < head_dim; d += blockDim.x) {
             int idx_q = q_pos * num_heads * head_dim + head * head_dim + d;
             int idx_k = k_pos * num_heads * head_dim + head * head_dim + d;
@@ -67,20 +63,11 @@ __global__ void fused_attention_simple_kernel(
             float q_val = __half2float(q_ptr[idx_q]);
             float k_val = __half2float(k_ptr[idx_k]);
             
-            thread_sum += q_val * k_val;
+            score += q_val * k_val;
         }
         
-        partial_sum[tid] = thread_sum;
-        __syncthreads();
-        
-        // Block-wide reduction for head_dim > blockDim.x
-        float score = 0.0f;
-        if (tid == 0) {
-            for (int t = 0; t < blockDim.x && t < head_dim; t++) {
-                score += partial_sum[t];
-            }
-        }
-        __syncthreads();
+        // Scale by 1/sqrt(head_dim)
+        score *= scale;
         scores[k_pos] = score;
         
         // Track max for numerical stability
