@@ -29,8 +29,8 @@ __global__ void fused_attention_full_kernel(
     if (q_pos >= seq_q || head >= num_heads || dim_idx >= head_dim)
         return;
     
-    // Shared memory for softmax computation
-    __shared__ float s_scores[256];  // Max seq_k = 256 for shared buffer
+    // Shared memory for softmax computation (supports seq_k up to 512)
+    __shared__ float s_scores[512];  // Max seq_k = 512 for shared buffer
     __shared__ float s_exp_sum;
     
     float sum_v = 0.0f;
@@ -169,9 +169,9 @@ __global__ void fused_attention_kernel(
     
     float sum_v = 0.0f;
     
-    // First pass: compute all scores and find max
+    // First pass: compute all scores and find max (supports seq_k up to 512)
     float max_score = -INFINITY;
-    float scores[256];  // Stack-allocated for seq_k <= 256
+    float scores[512];  // Stack-allocated for seq_k <= 512
     
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
         // Dot product

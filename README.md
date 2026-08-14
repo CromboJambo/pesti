@@ -235,3 +235,4 @@ Built with ❤️ by PESTI Contributors
 *Learning-first design, production-ready performance*
 
 *Last Updated: August 11, 2026*
+p⃗ >,,~~−∞~~,,< ℓ⃗

@@ -348,7 +348,7 @@ $L__BB1_8:
 	.param .u32 _Z22fused_attention_kernelPK6__halfS1_S1_Pfiiii_param_7
 )
 {
-	.local .align 16 .b8 	__local_depot2[1024];
+	.local .align 16 .b8 	__local_depot2[2048];
 	.reg .b64 	%SP;
 	.reg .b64 	%SPL;
 	.reg .pred 	%p<28>;
