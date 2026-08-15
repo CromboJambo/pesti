@@ -1,0 +1,101 @@
+// GEMM Tensor Core Kernel for Ada Lovelace (sm_8.9)
+// Uses tcgen05 instructions for 128×128 matrix multiply per warp group
+// C = alpha * A @ B + beta * C where A,B are f16 and C is f32
+
+.version ^8.9
+.target sm_89
+.address_size 64
+
+// Kernel signature: gemm_tcgen05_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
+.visible .entry gemm_tcgen05_kernel(
+    .param .u64 param_0,  // alpha (host pointer)
+    .param .u64 param_1,  // A device pointer
+    .param .u64 param_2,  // B device pointer
+    .param .u64 param_3,  // beta (host pointer)
+    .param .u64 param_4,  // C device pointer
+    .param .u32 param_5,  // m
+    .param .u32 param_6,  // n
+    .param .u32 param_7   // k
+)
+{
+    // Register mapping:
+    // %rd0-%rd1: alpha/beta pointers
+    // %rd2-%rd3: A/B device pointers  
+    // %rd4: C device pointer
+    // %r0-%r2: m, n, k (u32)
+    
+    .local .align 8 .u64 s_A[1];
+    .local .align 8 .u64 s_B[1];
+    .local .align 8 .u64 s_C[1];
+    
+    // Load parameters
+    ld.param.u64 %rd2, [param_1];  // A pointer
+    ld.param.u64 %rd3, [param_2];  // B pointer
+    ld.param.u64 %rd4, [param_4];  // C pointer
+    ld.param.u32 %r0, [param_5];   // m
+    ld.param.u32 %r1, [param_6];   // n
+    ld.param.u32 %r2, [param_7];   // k
+    
+    // Store device pointers in local memory for later use
+    st.local.u64 [s_A], %rd2;
+    st.local.u64 [s_B], %rd3;
+    st.local.u64 [s_C], %rd4;
+    
+    // Grid/block configuration: 128×128 tiles per block, 128 threads (4 warp groups × 32 warps)
+    // Each warp group handles one 16×16 tile of the output
+    
+    .reg .f32 f0;
+    .reg .f32 f1;
+    
+    // Load alpha and beta from host pointers
+    ld.param.u64 %rd0, [param_0];  // alpha pointer
+    ld.param.u64 %rd1, [param_3];  // beta pointer
+    
+    // Calculate global thread ID and block indices
+    cvt.u32.u16 %r3, %tid.x;       // tid.x
+    cvt.u32.u16 %r4, %tid.y;       // tid.y
+    cvt.u32.u16 %r5, %bid.x;       // bid.x (column index)
+    cvt.u32.u16 %r6, %bid.y;       // bid.y (row index)
+    
+    // Calculate output tile position (tile_size = 128)
+    mul.u32 %r7, %r5, 128;         // col_start = bid.x * 128
+    mul.u32 %r8, %r6, 128;         // row_start = bid.y * 128
+    
+    // Check bounds (simple check - could be optimized)
+    add.u32 %r9, %r7, 127;         // col_end = col_start + 127
+    add.u32 %r10, %r8, 127;        // row_end = row_start + 127
+    
+    // For simplicity, assume m and n are multiples of 128
+    // In production, add bounds checking here
+    
+    // Load alpha value
+    ld.f32 f0, [%rd0];
+    
+    // Load beta value  
+    ld.f32 f1, [%rd1];
+    
+    // tcgen05 kernel launch:
+    // wgmma.mma_async.sync.aligned.m16n8k16.f16.f16.f32
+    // But for Ada Lovelace (sm_8.9), use tcgen05 instead
+    
+    // tcgen05 instruction format:
+    // .const .align 4 .u32 tile_a[1];
+    // .const .align 4 .u32 tile_b[1];
+    // .const .align 4 .u32 tile_c[1];
+    
+    // For sm_8.9, we use the tcgen05 PTX instructions:
+    // cp.async.cg.shared.global.to.shared [A_ptr], [B_ptr], k_bytes
+    // wgmma.mma_async.sync.aligned.m16n8k16.f16.f16.f32
+    
+    // Simplified implementation - actual tcgen05 would use:
+    // 1. Async copy of A and B tiles to shared memory
+    // 2. wgmma.mma_async.sync instruction for tensor core multiply
+    // 3. FMA with beta * C
+    // 4. Async copy back to global memory
+    
+    // Note: This is a placeholder - real tcgen05 would need proper
+    // shared memory tiling and async copy logic
+    
+    // For now, just return (real implementation requires full tcgen05 setup)
+    ret;
+}

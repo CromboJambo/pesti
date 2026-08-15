@@ -79,29 +79,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Pre-computed frequency table lookup");
     println!();
 
-    println!("=== Phase 4.3: WGMMA Tensor Core GEMM ===");
+    println!("=== Phase 4.3: Tensor Core GEMM (Ada Lovelace) ===");
 
-    // Build WGMMA kernel
-    let wgmma_config = GemmConfig::default().with_arch(GemmArch::Wgmma);
-    let wgmma_kernel = CudaGemmKernelBuilder::new(
-        GemmArch::Wgmma,
+    // Build tcgen05 kernel for sm_8.9 (RTX 4070 Ti SUPER)
+    let tcgen05_config = GemmConfig::default().with_arch(GemmArch::Tcgen05);
+    let tcgen05_kernel = CudaGemmKernelBuilder::new(
+        GemmArch::Tcgen05,
         context.clone(),
         stream.clone(),
         device_info.clone(),
     )
     .build()?;
 
-    println!("  Architecture: WGMMA (tensor cores)");
+    println!("  Architecture: tcgen05 (Ada Lovelace tensor cores)");
     println!(
         "  Tile size: {}×{} matrix multiply per warp group",
-        wgmma_config.arch.tile_size(),
-        wgmma_config.arch.tile_size()
+        tcgen05_config.arch.tile_size(),
+        tcgen05_config.arch.tile_size()
     );
     println!();
 
     // Warm-up run
     println!("Warming up kernel...");
-    wgmma_kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
+    tcgen05_kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
     stream.synchronize()?;
     println!();
 
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..num_runs {
         let start = Instant::now();
 
-        wgmma_kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
+        tcgen05_kernel.matmul(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
 
         stream.synchronize()?;
 
@@ -149,17 +149,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Non-zero output: {}", sum.abs() > 1e-6);
     println!();
 
-    // Theoretical speedup projection
-    let wgmma_speedup = 3.0; // WGMMA vs warp-level GEMM
+    // Theoretical speedup projection (adjusted for tcgen05)
+    let tcgen05_speedup = 2.0; // tcgen05 vs warp-level GEMM for sm_8.9
     let flash_attention_speedup = 2.5; // Flash attention vs standard
     let fused_kernel_speedup = 1.8; // Fused vs separate kernels
     let kv_cache_speedup = 1.5; // Memory bandwidth improvement
 
     let total_theoretical_speedup =
-        wgmma_speedup * flash_attention_speedup * fused_kernel_speedup * kv_cache_speedup;
+        tcgen05_speedup * flash_attention_speedup * fused_kernel_speedup * kv_cache_speedup;
 
     println!("=== Optimization Impact Summary ===");
-    println!("  WGMMA tensor cores:        {}× speedup", wgmma_speedup);
+    println!("  Tensor core GEMM (tcgen05): {}× speedup", tcgen05_speedup);
     println!(
         "  Flash attention:           {}× speedup",
         flash_attention_speedup

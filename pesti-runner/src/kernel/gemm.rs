@@ -288,8 +288,8 @@ impl CudaGemmKernelBuilder {
 
         // Select PTX based on architecture
         let ptx_src = match self.arch {
-            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_sm89.ptx"),
-            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_real.ptx"),
+            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_sm90.ptx"),  // Hopper (sm_9.0)
+            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_sm89.ptx"),  // Ada Lovelace (sm_8.9)
             GemmArch::Mma => include_str!("ptx/gemm_mma_sync.ptx"),
         };
 
