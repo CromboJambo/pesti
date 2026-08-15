@@ -11,14 +11,10 @@ pub mod cpu_optimized_ndarray; // ndarray-based implementation for comparison
 pub mod cuda_runtime;
 pub mod memory_pool; // Pre-allocated device memory pool for efficiency
 #[cfg(feature = "cuda")]
-pub mod async_memory; // Async H2D/D2H transfers for 15-25% throughput gain
-#[cfg(feature = "cuda")]
 pub mod cuda_shim;
 #[cfg(not(feature = "cuda"))]
 pub mod cuda_stub;
 pub mod dequantize;
-#[cfg(feature = "cuda")]
-pub mod gguf_dequant;
 #[cfg(feature = "cuda")]
 pub mod device;
 #[cfg(feature = "cuda")]
@@ -67,6 +63,8 @@ pub use cuda_runtime::{
     CudaDeviceInfo, CudaError, CudaRuntime, device_count, enumerate_devices, is_available,
     select_best_device,
 };
+#[cfg(feature = "cuda")]
+pub use cuda_shim::{cu_stream, launch_kernel, CudaModule, CudaFunction};
 #[cfg(feature = "cuda")]
 pub use device::{DeviceBackend, DeviceInfo, DeviceSelection, DeviceSelector, DeviceType};
 #[cfg(feature = "cuda")]
