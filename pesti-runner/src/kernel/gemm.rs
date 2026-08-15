@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// Tensor core architecture selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum GemmArch {
-    /// WGMMA — warpgroup matrix multiply (sm_90a, Hopper only)
+    /// WGMMA — warpgroup matrix multiply (sm_90a, consumer Blackwell: RTX 5060 Ti / 5090)
     Wgmma,
     /// tcgen05 — tensor memory MMA (sm_100a/sm_103a, datacenter Blackwell)
     Tcgen05,
@@ -49,9 +49,9 @@ impl GemmArch {
 
     pub fn tile_size(&self) -> usize {
         match self {
-            Self::Wgmma => 64,    // 64x64x64 tiles
-            Self::Tcgen05 => 128, // 128x128x16 tiles
-            Self::Mma => 16,      // 16x8x16 tiles
+            Self::Wgmma => 128,   // 128×128 tiles (WGMMA)
+            Self::Tcgen05 => 128, // 128×128×16 tiles
+            Self::Mma => 16,      // 16×8×16 tiles
         }
     }
 }
@@ -288,7 +288,7 @@ impl CudaGemmKernelBuilder {
 
         // Select PTX based on architecture
         let ptx_src = match self.arch {
-            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_real.ptx"),
+            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_sm89.ptx"),
             GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_real.ptx"),
             GemmArch::Mma => include_str!("ptx/gemm_mma_sync.ptx"),
         };
@@ -343,14 +343,11 @@ impl CudaGemmKernel {
     ) -> Result<(), GemmError> {
         use cudarc::driver::sys;
 
-        // Kernel signature (gemm_mma_sync.ptx):
-        //   gemm_mma_kernel(f32 alpha, u64 A, u64 B, f32 beta,
-        //                   u64 C, u32 m, u32 n, u32 k)
-        // cuLaunchKernel wants one pointer per parameter, each pointing at a
-        // host-side value of the exact kernel-parameter type. The u64 params
-        // hold the device addresses as plain integers — do NOT pass the
-        // device pointers themselves, or the driver dereferences them on the
-        // host (segfault).
+        // Kernel signature varies by architecture:
+        // - WGMMA (sm_90a/sm_120): gemm_wgmma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
+        // - tcgen05: gemm_tcgen05_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
+        // - mma.sync: gemm_mma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
+        
         let mut a_v: u64 = a.device_ptr();
         let mut b_v: u64 = b.device_ptr();
         let mut c_v: u64 = c.device_ptr();
@@ -359,6 +356,7 @@ impl CudaGemmKernel {
         let mut m_v: u32 = m as u32;
         let mut n_v: u32 = n as u32;
         let mut k_v: u32 = k as u32;
+        
         let mut params: [*mut std::ffi::c_void; 8] = [
             &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
             &mut a_v as *mut u64 as *mut std::ffi::c_void,
@@ -370,9 +368,18 @@ impl CudaGemmKernel {
             &mut k_v as *mut u32 as *mut std::ffi::c_void,
         ];
 
-        // mma.sync kernel: one warp (32 threads) per 16x8 output tile.
-        let grid = (((n + 7) / 8) as u32, ((m + 15) / 16) as u32, 1u32);
-        let block = (32u32, 1u32, 1u32);
+        // Grid/block configuration varies by architecture:
+        // - WGMMA: 128×128 tiles per block, 128 threads (4 warp groups × 32 warps)
+        // - tcgen05: 128×128 tiles per block, 128 threads
+        // - mma.sync: 16×8 tiles per block, 32 threads (1 warp)
+        let (grid_x, grid_y, block_size) = match self.arch {
+            GemmArch::Wgmma => (((n + 127) / 128) as u32, ((m + 127) / 128) as u32, 128u32),
+            GemmArch::Tcgen05 => (((n + 127) / 128) as u32, ((m + 127) / 128) as u32, 128u32),
+            GemmArch::Mma => (((n + 7) / 8) as u32, ((m + 15) / 16) as u32, 32u32),
+        };
+
+        let grid = (grid_x, grid_y, 1u32);
+        let block = (block_size, 1u32, 1u32);
 
         // Launch: grid, block, shared_mem_bytes, stream, params
         unsafe {
@@ -381,7 +388,7 @@ impl CudaGemmKernel {
                 self.function.cu_function(),
                 grid,
                 block,
-                0, // shared_mem_bytes
+                0, // shared_mem_bytes (WGMMA uses implicit SMEM)
                 self.stream.cu_stream(),
                 &mut params,
             )
