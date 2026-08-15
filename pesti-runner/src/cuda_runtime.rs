@@ -74,12 +74,21 @@ impl CudaDeviceInfo {
         }
     }
 
-    /// Whether this device supports tcgen05 (sm_100a/sm_103a, datacenter...[truncated]
-    /// Blackwell B200/B300). Consumer Blackwell (sm_120, RTX 50-series) has
-    /// no tensor memory and no tcgen05 — ptxas rejects it for sm_120a.
+    /// Whether this device supports tcgen05 (sm_100a/sm_103a, datacenter Blackwell B200/B300).
+    /// Consumer Blackwell (sm_120, RTX 50-series) has no tensor memory and no tcgen05 — ptxas rejects it for sm_120a.
+    /// Ada Lovelace (sm_8.9, RTX 40-series) uses mma.sync tensor cores instead of tcgen05.
     pub fn supports_tcgen05(&self) -> bool {
         let (major, minor) = self.compute_capability;
+        // Blackwell datacenter: sm_10.0 or sm_10.3
         (major, minor) == (10, 0) || (major, minor) == (10, 3)
+    }
+
+    /// Whether this device supports Ada Lovelace tensor cores (sm_8.9).
+    /// Uses mma.sync instructions instead of tcgen05.
+    pub fn supports_adalovelace_tensor_cores(&self) -> bool {
+        let (major, minor) = self.compute_capability;
+        // Ada Lovelace: sm_8.9 (RTX 40-series consumer GPUs)
+        (major, minor) == (8, 9)
     }
 
     /// Whether this device supports WGMMA (sm_90a, Hopper H100/H200 only).

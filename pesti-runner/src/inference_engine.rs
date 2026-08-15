@@ -100,12 +100,33 @@ impl InferenceEngine {
 
             // Initialize GEMM kernel first
             let mut gpu_gemm = false;
+            
+            // Select architecture based on device capabilities:
+            // - WGMMA (sm_90a): Hopper/Blackwell datacenter GPUs
+            // - Tcgen05 (sm_10.x): Datacenter Blackwell B200/B300
+            // - Ada Lovelace (sm_8.9): Consumer RTX 40-series uses mma.sync tensor cores
+            // - Mma (default): All tensor core GPUs with mma.sync support
             let arch = if let Some(cuda_rt) = &cuda_runtime {
-                if cuda_rt.device_info().supports_wgmma() {
+                let info = cuda_rt.device_info();
+                
+                // Check for WGMMA first (Hopper/Blackwell datacenter)
+                if info.supports_wgmma() {
+                    tracing::info!("Detected Hopper/Blackwell architecture, using WGMMA");
                     Some(GemmArch::Wgmma)
-                } else if cuda_rt.device_info().supports_tcgen05() {
+                }
+                // Check for tcgen05 (datacenter Blackwell B200/B300)
+                else if info.supports_tcgen05() {
+                    tracing::info!("Detected datacenter Blackwell architecture, using tcgen05");
                     Some(GemmArch::Tcgen05)
-                } else {
+                }
+                // Check for Ada Lovelace (RTX 40-series consumer GPUs like your RTX 4070 Ti SUPER)
+                else if info.supports_adalovelace_tensor_cores() {
+                    tracing::info!("Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores");
+                    Some(GemmArch::Mma) // Use mma.sync for Ada Lovelace
+                }
+                // Fallback to mma.sync (classic warp-level GEMM)
+                else {
+                    tracing::warn!("No tensor core support detected, using mma.sync fallback");
                     Some(GemmArch::Mma)
                 }
             } else {
