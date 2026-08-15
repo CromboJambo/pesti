@@ -98,9 +98,11 @@ pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
 pub mod rope;
 #[cfg(feature = "cuda")]
-pub mod optimized_attention;
+pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 #[cfg(feature = "cuda")]
 pub mod flash_attention; // Fused Q @ K^T + softmax + V (Option C - focused)
+#[cfg(feature = "cuda")]
+pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
 pub mod softmax;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
