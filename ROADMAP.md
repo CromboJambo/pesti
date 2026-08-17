@@ -249,7 +249,46 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 
 ---
 
-## Week 13: End-to-End Benchmarking & Performance Profiling (✅ COMPLETE!) 🆕🆕
+## Week 14: Real End-to-End Decode Measurement (🔄 REWRITTEN - 30GB VRAM)
+
+### Date
+August 17, 2026
+
+### Goal
+Get a real measured tok/s number on a real model with a real decoder, then profile the hot path.
+
+### Hardware Context (Rewritten)
+- **Current GPUs**: RTX 4070 Ti SUPER + RTX 5060 Ti = **32GB VRAM total**
+- **Old plan assumption**: 8GB VRAM, Qwen2.5-0.5B only
+- **New reality**: 27B parameter models are viable. The constraint is decoder efficiency, not model size.
+
+### Model Target
+**Primary**: Bonsai-27B-Q1_0.gguf (~3.6GB, fits easily in VRAM)
+**Fallback**: gemma-4-26B-A4B-it-Q4_K_M.gguf, Qwen3.6-27B-Q4_K_M.gguf
+
+### Why This Changed
+Week 13 projections (~500-1,728 tok/s) were based on synthetic micro-benchmarks and sync timing that does not represent real transformer decode cost. The only useful Week 14 artifact is real measurement.
+
+### Deliverables
+- [ ] `pesti-runner/examples/week14_e2e_decode.rs` - Real decode benchmark using existing loader/tokenizer/sample path
+- [ ] Real tok/s measurement on Bonsai-27B or fallback model
+- [ ] llama.cpp baseline on same model/prompt/hardware
+- [ ] `WEEK_14_E2E_RESULTS.md` - Measured numbers, bottlenecks, next steps
+- [ ] Updated `ROADMAP.md` with real data instead of projections
+
+### Success Criteria
+- [x] Plan updated to reflect actual hardware
+- [ ] Decode benchmark completes and prints real tok/s
+- [ ] Clear statement of top 3 bottlenecks from profiling
+- [ ] Comparison vs llama.cpp baseline
+
+### Notes
+- CPU decode path already exists and loads GGUF correctly
+- Tokenizer integration verified with Qwen2.5 model
+- This is now a measurement sprint, not a projection sprint
+- Old targets: ~72-150 tok/s (0.5B). New target: real tok/s on 27B model.
+
+---
 
 ### Goal
 Complete end-to-end benchmarking and performance profiling to verify CUDA GEMM integration and project realistic throughput.

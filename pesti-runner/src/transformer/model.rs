@@ -639,13 +639,14 @@ impl LlamaModel {
         }?;
 
         // Use tensor shapes for correct in_features/out_features.
-        // Shape is [out_features, in_features] in both GGUF and safetensors.
+        // GGUF stores weights as [in_features, out_features].
+        // tensor_shape() returns (shape[0], shape[1]) = (in_features, out_features).
         let wq_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);  // Shape is [out_features, in_features]
+        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
@@ -731,7 +732,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);  // Shape is [out_features, in_features]
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
@@ -739,7 +740,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);  // Shape is [out_features, in_features]
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
@@ -747,7 +748,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);  // Shape is [out_features, in_features]
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
@@ -880,13 +881,14 @@ impl LlamaModel {
         }?;
 
         // Use tensor shapes for correct in_features/out_features.
-        // Shape is [out_features, in_features] in both GGUF and safetensors.
+        // GGUF stores weights as [in_features, out_features].
+        // tensor_shape() returns (shape[0], shape[1]) = (in_features, out_features).
         let wq_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
             _ => format!("{prefix}attention.wq.weight"),
         };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);  // Shape is [out_features, in_features]
+        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
@@ -972,7 +974,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
             _ => format!("{prefix}feed_forward.w1.weight"),
         };
-        let (w1_out, w1_in) = weights.tensor_shape(&w1_name);  // Shape is [out_features, in_features]
+        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
@@ -980,7 +982,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
             _ => format!("{prefix}feed_forward.w2.weight"),
         };
-        let (w2_out, w2_in) = weights.tensor_shape(&w2_name);  // Shape is [out_features, in_features]
+        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
@@ -988,7 +990,7 @@ impl LlamaModel {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
             _ => format!("{prefix}feed_forward.w3.weight"),
         };
-        let (w3_out, w3_in) = weights.tensor_shape(&w3_name);  // Shape is [out_features, in_features]
+        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
@@ -1317,7 +1319,7 @@ impl LlamaModel {
         crate::transformer::argmax(logits)
     }
 
-    /// Generate tokens autoregressively.
+    /// Generate tokens autoregressively with GPU acceleration support.
     ///
     /// `prompt` — input token IDs
     /// `max_tokens` — maximum tokens to generate
@@ -1327,7 +1329,7 @@ impl LlamaModel {
     ///
     /// Returns: generated token IDs (excluding prompt)
     pub fn generate(
-        &self,
+        &mut self,
         prompt: &[u32],
         max_tokens: usize,
         sampling_config: &crate::transformer::SamplingConfig,
@@ -1346,8 +1348,15 @@ impl LlamaModel {
                 .last()
                 .ok_or_else(|| RunnerError::ModelLoad("empty context".to_string()))?;
 
-            // Get logits for the last token
-            let logits = self.forward(last_token, pos)?;
+            // Get hidden state via embedding (CPU lookup)
+            let hidden = self.embed(last_token, pos)?;
+
+            // Pass through transformer layers
+            // TODO: Future - integrate GPU path via forward_with_dispatch when dispatch is properly initialized
+            let logits_hidden = self.forward_layers(&hidden, pos)?;
+
+            // Apply output head (LM head) to get logits
+            let logits = self.apply_output_head(&logits_hidden)?;
 
             // Sample next token
             let next_token = if sampling_config.temperature == 0.0 {
