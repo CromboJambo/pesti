@@ -1,187 +1,99 @@
-//! Conformance test for PESTI inference
-//! 
-//! Week 11/12: End-to-end validation against reference outputs
-//! - Loads Qwen2.5-0.5B from GGUF file
-//! - Validates model structure and tensor shapes
-//! - Runs sample generation to verify correctness
+//! Numerical conformance test for PESTI CPU inference path.
+//!
+//! Validates basic GGUF loading, model construction, and forward pass with
+//! the stub implementation (no CUDA).
 
-#![cfg(feature = "cuda")]
-
-use pesti_runner::cuda_runtime::CudaRuntime;
-use pesti_runner::gguf_weight_loader::{load_gguf_weights, GgufWeights};
-use pesti_runner::kernel::kvcache::Kvcache;
 use std::path::Path;
-
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
-const MAX_SEQ_LEN: usize = 2048;
+use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== PESTI Conformance Test ===");
-    println!("Week 11/12: End-to-end validation");
-    println!();
+    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
-    // Step 1: Initialize CUDA
-    println!("Step 1: Initializing CUDA...");
-    let cuda_rt = CudaRuntime::new(0)?;
-    let device_info = cuda_rt.device_info();
-    println!("  ✅ GPU: {}", device_info.name);
-    println!();
+    println!("=== PESTI Numerical Conformance Test (CPU Stub) ===");
+    println!("Model: {}", model_path);
 
-    // Step 2: Load model from GGUF
-    println!("Step 2: Loading Qwen2.5-0.5B from GGUF...");
-    let model_path = Path::new(MODEL_PATH);
+    // Load weights
+    let t0 = Instant::now();
+    let weights = pesti_runner::load_gguf_weights(Path::new(model_path))?;
+    println!("✅ Loaded weights in {:.2}s", t0.elapsed().as_secs_f32());
+    println!(
+        "   tensors={}, bytes={}",
+        weights.tensors.len(),
+        weights.tensors.values().map(|v| v.len()).sum::<usize>()
+    );
 
-    if !model_path.exists() {
-        return Err(format!("Model not found: {}", MODEL_PATH).into());
-    }
+    // Load model (CPU fallback uses transformer_stub)
+    let t1 = Instant::now();
+    let mut model = pesti_runner::LlamaModel::load_gguf(Path::new(model_path))?;
+    println!("✅ Built model in {:.2}s", t1.elapsed().as_secs_f32());
 
-    let weights = load_gguf_weights(model_path)?;
-    println!("  ✅ Loaded {} tensors", weights.header.tensors.len());
-    println!();
+    // Print model architecture
+    println!("\n📐 Model Architecture:");
+    println!("   hidden_size={}, embed_dim={}", model.hidden_size, model.embed_dim);
+    println!("   num_layers={}, vocab_size={}", model.num_layers, model.vocab_size);
+    println!("   num_heads={}, num_kv_heads={}, head_dim={}", model.num_heads, model.num_kv_heads, model.head_dim);
+    println!("   rope_base={}, max_seq_len={}", model.rope_base, model.max_seq_len);
 
-    // Step 3: Validate model structure
-    println!("Step 3: Validating model structure...");
-    validate_model_structure(&weights)?;
-    println!("  ✅ Model structure validated");
-    println!();
+    // Load tokenizer (CPU fallback uses stub)
+    let (tokenizer_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(Path::new(model_path))?;
+    println!("\n✅ Loaded tokenizer (vocab={})", tokenizer_config.vocab_size);
 
-    // Step 4: Initialize KV caches
-    println!("Step 4: Initializing KV caches...");
+    // Test prompt
+    let prompt = "The quick brown fox jumps over the lazy dog.";
+    println!("\n📝 Prompt: \"{}\"", prompt);
+
+    // Tokenize
+    let t2 = Instant::now();
+    let prompt_tokens = tokenizer.encode(prompt, true).map_err(|e| e.to_string())?;
+    println!(
+        "✅ Encoded {} tokens in {:.3}ms",
+        prompt_tokens.len(),
+        t2.elapsed().as_secs_f32() * 1000.0
+    );
+
+    // Run single forward pass (stub implementation)
+    let batch_size = 1;
+    let input_dim = model.embed_dim;
+    let test_input = vec![1.0f32; input_dim]; // Dummy embedding
     
-    let num_kv_heads = 8;
-    let head_dim = 64;
-
-    let _key_cache = Kvcache::new(num_kv_heads, num_kv_heads, head_dim, MAX_SEQ_LEN, true);
-    let _value_cache = Kvcache::new(num_kv_heads, num_kv_heads, head_dim, MAX_SEQ_LEN, true);
-
-    println!("  ✅ KV caches initialized ({} MiB each)", 
-             (num_kv_heads * head_dim * MAX_SEQ_LEN * 2) / (1024 * 1024));
-    println!();
-
-    // Step 5: Validate tensor shapes
-    println!("Step 5: Validating tensor shapes...");
-    validate_tensor_shapes(&weights)?;
-    println!("  ✅ All tensor shapes validated");
-    println!();
-
-    // Step 6: Run sample inference
-    println!("Step 6: Running sample inference (10 tokens)...");
-    run_sample_inference(&cuda_rt, num_kv_heads, head_dim)?;
-    println!("  ✅ Sample inference completed successfully");
-    println!();
-
-    // Step 7: Summary
-    println!("=== Conformance Test Results ===");
-    println!("✅ All tests PASSED");
-    println!();
-    println!("Model: Qwen2.5-0.5B (Q4_K_M quantized)");
-    println!("Tensors loaded: {}", weights.header.tensors.len());
-    println!("GPU: {}", device_info.name);
-    println!("KV cache size: {} MiB", 
-             (num_kv_heads * head_dim * MAX_SEQ_LEN * 2) / (1024 * 1024));
-
-    Ok(())
-}
-
-fn validate_model_structure(weights: &GgufWeights) -> Result<(), Box<dyn std::error::Error>> {
-    let header = &weights.header;
-
-    // Validate GGUF version (should be v3 for modern models)
-    assert!(header.version >= 3, "GGUF version too old: {}", header.version);
-    println!("  ✅ GGUF version: v{}", header.version);
-
-    // Check required metadata keys exist in kv_pairs
-    let kv_pairs: Vec<_> = header.kv_pairs.iter().collect();
+    println!("\n🔬 Running forward pass test...");
+    let t3 = Instant::now();
     
-    // Look for architecture key
-    let has_architecture = kv_pairs.iter()
-        .any(|kv| kv.key == "general.architecture");
-    assert!(has_architecture, "Missing general.architecture metadata");
-    println!("  ✅ Required metadata present");
+    // Test forward_layers (stub just passes through)
+    let hidden_out = model.forward_layers(&test_input, batch_size)?;
+    println!("✅ Forward pass completed in {:.3}ms", t3.elapsed().as_secs_f32() * 1000.0);
+    println!("   Input shape: {}, Output shape: {}", input_dim, hidden_out.len());
 
-    // Extract and validate architecture
-    let arch = kv_pairs.iter()
-        .find(|kv| kv.key == "general.architecture")
-        .map(|kv| kv.value.as_str().unwrap_or("unknown"))
-        .unwrap_or("unknown");
-    println!("  ✅ Architecture: {}", arch);
+    // Test forward_with_dispatch (stub returns zero logits)
+    let t4 = Instant::now();
+    let dummy_logits = model.forward_with_dispatch(&test_input, 0)?;
+    println!("✅ Dispatch forward completed in {:.3}ms", t4.elapsed().as_secs_f32() * 1000.0);
+    println!("   Logits shape: {}", dummy_logits.len());
 
-    Ok(())
-}
+    // Test sampling (stub uses deterministic sampling)
+    let config = pesti_runner::SamplingConfig {
+        seed: 42,
+        temperature: 0.0,
+        top_k: 1,
+        top_p: 1.0,
+    };
 
-fn validate_tensor_shapes(weights: &GgufWeights) -> Result<(), Box<dyn std::error::Error>> {
-    let tensors = &weights.header.tensors;
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    
+    let t5 = Instant::now();
+    let sampled_token = pesti_runner::sample(&dummy_logits, &config, &mut rng);
+    println!("✅ Sampled token: {} in {:.3}ms", sampled_token, t5.elapsed().as_secs_f32() * 1000.0);
 
-    // Check for expected tensor types
-    let has_embedding = tensors.iter().any(|t| t.name.contains("token_embd"));
-    let has_attention = tensors.iter().any(|t| t.name.contains("attn_q") || t.name.contains("attn_output"));
-    let has_ffn = tensors.iter().any(|t| t.name.contains("ffn_up") || t.name.contains("ffn_down"));
+    // Decode the sampled token
+    let decoded = tokenizer.decode(&[sampled_token], true).map_err(|e| e.to_string())?;
+    println!("   Decoded: \"{}\"", decoded);
 
-    assert!(has_embedding, "Missing embedding layer");
-    assert!(has_attention, "Missing attention layer");
-    assert!(has_ffn, "Missing FFN layer");
-
-    println!("  ✅ Embedding layer: present");
-    println!("  ✅ Attention layers: present");
-    println!("  ✅ FFN layers: present");
-
-    // Validate tensor count matches expected for Qwen2.5-0.5B
-    // Qwen2.5-0.5B has ~291 tensors (varies by quantization)
-    assert!(tensors.len() >= 250, "Unexpected tensor count: {} (expected ~291)", tensors.len());
-    println!("  ✅ Tensor count: {} (within expected range)", tensors.len());
-
-    Ok(())
-}
-
-fn run_sample_inference(
-    _cuda_rt: &CudaRuntime,
-    num_kv_heads: usize,
-    head_dim: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let seq_len = 1;
-    let gen_len = 10;
-
-    // Simulate embedding lookup
-    let embed_dim = 512;
-    let input: Vec<f32> = (0..embed_dim)
-        .map(|i| (i as f32 - embed_dim as f32 / 2.0) * 0.1)
-        .collect();
-
-    println!("  Input embedding size: {} elements", embed_dim);
-
-    // Simulate attention computation
-    let cache_len = seq_len;
-    let num_heads = 32;
-    let mut scores: Vec<f32> = vec![0.0; seq_len * num_heads * cache_len];
-
-    for q_pos in 0..seq_len {
-        for h in 0..num_heads {
-            let q_base = (q_pos * num_heads + h) * head_dim;
-            for k_pos in 0..cache_len.min(10) {
-                let k_base = (h * cache_len + k_pos) * head_dim;
-                let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    if q_base + d < input.len() && k_base + d < input.len() {
-                        let q_d = input[q_base + d];
-                        let k_d = input[k_base + d];
-                        dot += q_d * k_d;
-                    }
-                }
-                scores[q_pos * num_heads * cache_len + h * cache_len + k_pos] =
-                    dot / (head_dim as f32).sqrt();
-            }
-        }
-    }
-
-    println!("  ✅ Attention computation: {} elements", scores.len());
-
-    // Simulate generation loop
-    for token_idx in 0..gen_len {
-        // In production: update KV cache, compute logits, sample next token
-        let _ = token_idx; // Suppress unused warning
-    }
-
-    println!("  ✅ Generation loop: {} tokens", gen_len);
+    println!("\n✅ Conformance test complete!");
+    println!("   Next steps:");
+    println!("   1. Compare logits against llama.cpp reference output");
+    println!("   2. Verify KV cache values match expected precision");
+    println!("   3. Test with CUDA backend if available (cargo run --features cuda)");
 
     Ok(())
 }

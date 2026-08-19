@@ -77,25 +77,39 @@ impl InferenceEngine {
             use crate::cuda_runtime::{CudaRuntime, is_available};
             use crate::kernel::{AttentionArch, CudaGemmKernelBuilder, GemmArch};
 
-            // Try to initialize CUDA only if the caller requested a CUDA device.
-            let (cuda_runtime, stream) = match &device {
-                Device::Cuda(cuda_dev) => {
-                    let ordinal = match cuda_dev.location() {
+            // Initialize CUDA when the feature is on and a GPU is present.
+            //
+            // NOTE: we do NOT gate on `Device::Cuda` — candle-core is built
+            // without its `cuda` feature here, so `Device::Cuda` is never
+            // constructable and that branch was dead code. The engine uses its
+            // own cudarc-backed `CudaRuntime`, so we initialize directly. The
+            // `device` arg only supplies the ordinal hint.
+            let (cuda_runtime, stream) = if is_available() {
+                let ordinal = match &device {
+                    Device::Cuda(cuda_dev) => match cuda_dev.location() {
                         candle_core::DeviceLocation::Cuda { gpu_id } => gpu_id,
                         _ => 0,
-                    };
-                    match CudaRuntime::new(ordinal) {
-                        Ok(rt) => {
-                            let rt = Arc::new(rt);
-                            match rt.new_stream() {
-                                Ok(s) => (Some(rt), Some(s)),
-                                Err(e) => (Some(rt), None),
+                    },
+                    _ => 0,
+                };
+                match CudaRuntime::new(ordinal) {
+                    Ok(rt) => {
+                        let rt = Arc::new(rt);
+                        match rt.new_stream() {
+                            Ok(s) => (Some(rt), Some(s)),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "CUDA stream creation failed");
+                                (Some(rt), None)
                             }
                         }
-                        Err(e) => (None, None),
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "CudaRuntime init failed, using CPU");
+                        (None, None)
                     }
                 }
-                _ => (None, None),
+            } else {
+                (None, None)
             };
 
             // Initialize GEMM kernel first
@@ -255,6 +269,21 @@ impl InferenceEngine {
         {
             false
         }
+    }
+
+    /// Get the CUDA stream used by the engine's kernels (None = CPU-only).
+    ///
+    /// Callers that allocate device buffers (e.g. `CudaMemoryBackend`) MUST use
+    /// this same stream, otherwise H2D/D2H copies race with kernel launches.
+    #[cfg(feature = "cuda")]
+    pub fn cuda_stream(&self) -> Option<&Arc<cudarc::driver::safe::CudaStream>> {
+        self.stream.as_ref()
+    }
+
+    /// Get the CUDA device info (None = CPU-only).
+    #[cfg(feature = "cuda")]
+    pub fn cuda_device_info(&self) -> Option<&crate::cuda_runtime::CudaDeviceInfo> {
+        self.cuda_runtime.as_ref().map(|rt| rt.device_info())
     }
 
     /// Get device info including CUDA details if available.

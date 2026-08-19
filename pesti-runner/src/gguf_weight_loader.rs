@@ -594,7 +594,7 @@ fn dequantize_q3_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     Ok(result)
 }
 
-fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
+pub fn dequantize_q4_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     // block_q4_K (144 B / 256 elem):
     //   [0..2)    d (f16)
     //   [2..4)    dmin (f16)

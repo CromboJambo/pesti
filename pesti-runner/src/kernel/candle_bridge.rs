@@ -48,6 +48,19 @@ pub fn bridge_device() -> &'static Device {
     })
 }
 
+/// Whether the bridge is actually running on a CUDA device.
+///
+/// `candle-core` is only built with its `cuda` feature when the workspace
+/// enables it. When it is NOT, `Device::new_cuda(0)` fails and the bridge
+/// silently falls back to CPU — in which case the candle_bridge "GPU" ops are
+/// just a slower CPU path (and the attention shapes there are not yet correct
+/// for GQA). Callers that want a *real* GPU path must check this before
+/// routing through `candle_bridge`; otherwise they should use the native
+/// CPU dispatch kernels, which are correct.
+pub fn bridge_is_cuda() -> bool {
+    bridge_device().is_cuda()
+}
+
 /// Convert a `DeviceBuffer<f16>` to a candle-core `Tensor`.
 ///
 /// # Safety

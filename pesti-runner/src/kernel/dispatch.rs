@@ -131,20 +131,65 @@ pub struct DispatchContext {
 
 impl DispatchContext {
     /// Create a new dispatch context, auto-detecting GPU availability.
+    ///
+    /// When the `cuda` feature is enabled and a GPU is present, this builds a
+    /// `Device::Cuda` engine (which initializes the CUDA runtime + GEMM kernel)
+    /// and a CUDA-backed `MemoryManager` on the SAME stream the engine uses.
+    /// Otherwise it falls back to a CPU-only engine and memory backend.
     pub fn new() -> Self {
-        let engine = InferenceEngine::new(Device::Cpu, DType::F32);
+        let device = Self::detect_device();
+        let engine = InferenceEngine::new(device, DType::F32);
         let prefer_gpu = engine.gpu_available();
         let backend_desc = engine.backend_description();
         tracing::info!(backend = %backend_desc, "DispatchContext initialized");
+
+        // The memory manager MUST share the engine's CUDA stream. Using a
+        // separate stream (or the CPU backend) makes H2D/D2H race with kernel
+        // launches and silently corrupts results.
+        let memory = Self::build_memory(&engine);
+
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
-                1024 * 1024,
-            )),
+            memory,
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
         }
+    }
+
+    /// Pick the target device: CUDA when the feature is on and a GPU exists.
+    fn detect_device() -> Device {
+        #[cfg(feature = "cuda")]
+        {
+            use crate::cuda_runtime::is_available;
+            if is_available() {
+                match Device::new_cuda(0) {
+                    Ok(dev) => return dev,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "CUDA device creation failed, using CPU");
+                    }
+                }
+            }
+            Device::Cpu
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            Device::Cpu
+        }
+    }
+
+    /// Build a memory manager that matches the engine's backend.
+    fn build_memory(engine: &InferenceEngine) -> MemoryManager {
+        #[cfg(feature = "cuda")]
+        {
+            if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
+                return MemoryManager::Cuda(crate::kernel::memory::CudaMemoryBackend::with_device_info(
+                    stream.clone(),
+                    info.clone(),
+                ));
+            }
+        }
+        MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024))
     }
 
     /// Create a dispatch context with explicit GPU preference.
@@ -375,8 +420,13 @@ impl DispatchContext {
             out
         };
 
-        // Use candle_bridge::gemm when GPU is available, CPU fallback otherwise
-        let mut result = if self.prefer_gpu && self.gpu_available() {
+        // Use candle_bridge::gemm when a real CUDA device is available, CPU
+        // fallback otherwise. (The bridge only runs on GPU when candle-core is
+        // built with its cuda feature; otherwise prefer the native CPU GEMM.)
+        let mut result = if self.prefer_gpu
+            && self.gpu_available()
+            && crate::kernel::candle_bridge::bridge_is_cuda()
+        {
             debug!(m, n, k, "Linear: using candle_bridge::gemm (GPU)");
 
             // Validate weight shape before transpose
@@ -682,8 +732,13 @@ impl AttentionDispatch {
         let k = self.wk.forward(ctx, x, batch_size)?;
         let v = self.wv.forward(ctx, x, batch_size)?;
 
-        // GPU-accelerated path when available
-        if ctx.gpu_available() {
+        // GPU-accelerated path when available.
+        //
+        // NOTE: this routes through `candle_bridge`, which only runs on a real
+        // CUDA device when candle-core is built with its `cuda` feature. When
+        // the bridge falls back to CPU, the native CPU dispatch path below is
+        // used instead (it is correct and avoids the bridge's GQA shape bugs).
+        if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
             return self.forward_gpu(
                 ctx,
                 &q,

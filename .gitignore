@@ -2,33 +2,43 @@
 target/
 **/target/
 Cargo.lock
+*.o
+*.rlib
 guard.db
 knowledge.db
 cobertura.xml
 
 # Generated files
 tarpaulin-report.html
+tarpaulin-report.json
+
+# Python / tool caches
+__pycache__/
+*.pyc
+unsloth_compiled_cache/
 
 # Model weights / large binary blobs
 # models/  # Removed - merged into conformance-corpus/
+models
 projects/
 state-docs/
 conformance-corpus/*.gguf
+test_models/*.gguf
+pesti-conformance/test-corpus/tiny-model.gguf
+lms-models/
+test_real_file_bin
+pesti-gguf/src/parser.rs.bak
+pesti-gguf/src/parser.rs.fixed
+pesti-gguf/src/string_case.tmp
 
 # OS/editor junk
 .DS_Store
 *.swp
 *.swo
 *~
-models
-llm-runner/examples/tcgen05_gemm/target/
-pesti-conformance/test-corpus/tiny-model.gguf
-pesti-gguf/src/parser.rs.bak
-pesti-gguf/src/parser.rs.fixed
-pesti-gguf/src/string_case.tmp
-lms-models/
-test_real_file_bin
-tarpaulin-report.json
-test_models/*.gguf
+
+# Historical archive (kept locally, not committed)
 historical/
-docs/
+
+# Orphaned / scratch code (not part of any workspace crate; kept locally)
+scratch/

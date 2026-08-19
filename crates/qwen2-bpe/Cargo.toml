@@ -1,0 +1,17 @@
+[package]
+name = "qwen2-bpe"
+version = "0.1.0"
+edition = "2024"
+description = "Pure Rust implementation of Qwen2's custom byte-level BPE tokenizer"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+thiserror = "2.0"
+
+[features]
+default = []
+integration = []
+rust-tokenizer = []
