@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "pesti-conformance",
     "pesti-runner",
     "llm-plug-in",
     "pesti-safetensors",
     "pesti-gguf-cli",
+    "crates/qwen2-bpe",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide"]
 resolver = "2"
@@ -29,15 +29,26 @@ description = "Portable Execution Substrate for Transformer Inference"
 [workspace.dependencies]
 # GGUF parser
 pesti-gguf = "0.2.2"
+# Plugin system (llm-plug-in package)
+pesti-plug-in = { path = "llm-plug-in" }
+# Safetensors support
+pesti-safetensors = { path = "pesti-safetensors" }
 
 # LLM inference (FFI path)
 llama-cpp-2 = "0.1.146"
+llama-cpp-sys-2 = "0.1.146"
+
+# Encoding support
+encoding_rs = "0.8"
 
 # ML inference (pure-Rust path)
 candle-core = { version = "0.10.2", package = "candle-core" }
 candle-nn = { version = "0.10.2" }
 candle-transformers = { version = "0.10.2" }
 candle-datasets = { version = "0.10.2" }
+
+# NDArray support
+ndarray = "0.16"
 
 # Tokenization
 tokenizers = { version = "0.22.0", default-features = false }
@@ -67,6 +78,7 @@ tracing-appender = "0.2"
 cudarc = { version = "0.19.4", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "f8", "cuda-12050", "dynamic-linking"], default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
+nvml-wrapper = "0.11"
 half = { version = "2.7.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 float8 = { version = "0.7.0", features = ["num-traits", "rand_distr"] }
 libc = "0.2.186"

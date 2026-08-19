@@ -16,6 +16,8 @@ pub trait GgufHeaderExt {
     fn vocab_size(&self) -> u32;
     fn get_kv_f32(&self, key: &str) -> Option<f32>;
     fn get_kv_bool(&self, key: &str) -> Option<bool>;
+    fn get_kv_array_str(&self, key: &str) -> Option<Vec<String>>;
+    fn get_kv_array_i32(&self, key: &str) -> Option<Vec<i32>>;
 }
 
 impl GgufHeaderExt for GgufHeader {
@@ -44,6 +46,18 @@ impl GgufHeaderExt for GgufHeader {
     fn vocab_size(&self) -> u32 {
         self.get_kv_u32("tokenizer.ggml.vocab_size")
             .or_else(|| self.get_kv_u32("tokenizer.ggml.tokens"))
+            .or_else(|| {
+                // Standard llama.cpp stores `tokenizer.ggml.tokens` as an ARRAY of
+                // token strings — its length IS the vocab size. `get_kv_u32` returns
+                // None for an array, so read the length directly.
+                self.kv_pairs
+                    .iter()
+                    .find(|kv| kv.key == "tokenizer.ggml.tokens")
+                    .and_then(|kv| match &kv.value {
+                        pesti_gguf::types::GgufKvValue::Array(a) => Some(a.len() as u32),
+                        _ => None,
+                    })
+            })
             .unwrap_or(32000)
     }
 
@@ -59,6 +73,39 @@ impl GgufHeaderExt for GgufHeader {
             .iter()
             .find(|kv| kv.key == key)
             .and_then(|kv| kv.value.as_bool())
+    }
+
+    fn get_kv_array_str(&self, key: &str) -> Option<Vec<String>> {
+        self.kv_pairs
+            .iter()
+            .find(|kv| kv.key == key)
+            .and_then(|kv| match &kv.value {
+                pesti_gguf::GgufKvValue::Array(arr) => Some(arr),
+                _ => None,
+            })
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+    }
+
+    fn get_kv_array_i32(&self, key: &str) -> Option<Vec<i32>> {
+        self.kv_pairs
+            .iter()
+            .find(|kv| kv.key == key)
+            .and_then(|kv| match &kv.value {
+                pesti_gguf::GgufKvValue::Array(arr) => Some(arr),
+                _ => None,
+            })
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| match v {
+                        pesti_gguf::GgufKvValue::Int32(x) => Some(*x),
+                        _ => None,
+                    })
+                    .collect()
+            })
     }
 }
 

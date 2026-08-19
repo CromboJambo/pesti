@@ -8,7 +8,7 @@
 //! - `rms_norm` — RMS normalization
 //! - `rope` — Rotary positional embeddings
 //! - `sampling` — Token sampling (temperature, top-p, top-k)
-//! - `tokenizer` — GGUF tokenizer integration
+//! - `tokenizer` — GGUF tokenizer integration with multi-backend support
 //! - `kv_cache` — KV cache for autoregressive generation
 //!
 //! ## Inference Flow
@@ -29,5 +29,4 @@ pub mod tokenizer;
 pub use kv_cache::LayerKvCache;
 pub use model::{LlamaConfig, LlamaModel, ModelArch};
 pub use sampling::{SamplingConfig, argmax, sample};
-pub use tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf};
-pub use tokenizers::tokenizer::Tokenizer as GgufTokenizer;
+pub use tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf, TokenizerBackend};

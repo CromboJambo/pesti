@@ -1,76 +1,78 @@
 [package]
 name = "pesti-runner"
-publish = false
-version.workspace = true
+version = "0.1.0"
 edition = "2024"
-license.workspace = true
-authors.workspace = true
-description = "LLM inference engine: tensor computation, model loading, tokenizer, device backend, external runner bridge"
+
+[dependencies]
+# Core PESTI crates (workspace inheritance)
+pesti-gguf.workspace = true
+pesti-plug-in.workspace = true
+pesti-safetensors.workspace = true
+
+# Tokenizers - using tokenizers crate with ByteLevel BPE config
+tokenizers = { workspace = true, features = ["fancy-regex"] }
+tiktoken-rs.workspace = true
+
+# Pure Rust Qwen2 BPE tokenizer (optional)
+qwen2-bpe = { path = "../crates/qwen2-bpe", optional = true }
+
+# Tracing and error handling
+tracing.workspace = true
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+
+# Mistral.rs for Qwen2 tokenizer support
+mistralrs-core = "0.8.1"
+mistralrs-vision = "0.8.1"
+serde_json.workspace = true
+
+# CPU parallelism
+rayon.workspace = true
+
+# Half precision floats
+half.workspace = true
+
+# Random number generation
+rand.workspace = true
+
+# NDArray support
+ndarray.workspace = true
+
+# CUDA support (optional)
+cudarc = { workspace = true, optional = true }
+nvml-wrapper.workspace = true
+
+# Async runtime and HTTP
+tokio.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
+rusqlite.workspace = true
+
+# Regex support
+regex.workspace = true
+
+# Safetensors runtime
+safetensors.workspace = true
+
+# Temp files for tokenizer config
+tempfile.workspace = true
+
+# HuggingFace Hub
+hf-hub.workspace = true
+
+# ML inference (pure-Rust path)
+candle-core = { workspace = true, package = "candle-core" }
+candle-nn.workspace = true
+
+# Llama C++ FFI
+llama-cpp-2.workspace = true
+llama-cpp-sys-2.workspace = true
+
+# Encoding support
+encoding_rs.workspace = true
 
 [features]
 default = []
-# Production-grade GPU kernels via mistral.rs (requires CUDA toolchain)
-mistralrs = ["dep:mistralrs"]
-# CUDA GPU backend (requires CUDA 12.5+ and NVIDIA GPU)
-cuda = ["dep:cudarc", "dep:intel-mkl-src", "candle-core/cuda", "candle-nn/cuda"]
-# Flash Attention PTX kernel (Option C - experimental, requires cuda + sm_8.9 GPU)
-flash-attention = ["cuda"]
-
-[dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
-candle-transformers.workspace = true
-candle-datasets.workspace = true
-tokenizers.workspace = true
-tiktoken-rs.workspace = true
-serde.workspace = true
-byteorder = "1.4"
-serde_json.workspace = true
-chrono.workspace = true
-uuid.workspace = true
-rusqlite.workspace = true
-tracing.workspace = true
-tracing-appender.workspace = true
-thiserror.workspace = true
-anyhow.workspace = true
-pesti-plug-in = { path = "../llm-plug-in" }
-pesti-safetensors = { path = "../pesti-safetensors" }
-pesti-gguf = { workspace = true }
-ggml-quants = "0.1"
-encoding_rs = "0.8"
-gemm.workspace = true
-ndarray = "0.15"
-half.workspace = true
-float8.workspace = true
-libc.workspace = true
-libm.workspace = true
-num-traits.workspace = true
-num_cpus.workspace = true
-rayon.workspace = true
-hf-hub.workspace = true
-zip.workspace = true
-memmap2.workspace = true
-safetensors.workspace = true
-regex = { version = "1.12.3", default-features = false, features = ["perf", "unicode"] }
-tokio.workspace = true
-rand.workspace = true
-rand_distr = { workspace = true, default-features = true }
-reqwest.workspace = true
-llama-cpp-2.workspace = true
-llama-cpp-sys-2 = "0.1.146"
-nvml-wrapper = "0.12"
-
-# CUDA support via cudarc (stable-compatible)
-cudarc = { workspace = true, optional = true }
-
-# MKL for CPU acceleration
-intel-mkl-src = { workspace = true, optional = true }
-
-# Production-grade GPU kernels (optional, enabled via `mistralrs` feature)
-mistralrs = { version = "0.8", optional = true }
-
-[dev-dependencies]
-tempfile.workspace = true
-criterion.workspace = true
-rand.workspace = true
-rand_distr.workspace = true
+cuda = ["cudarc"]
+rust-tokenizer = ["qwen2-bpe"]

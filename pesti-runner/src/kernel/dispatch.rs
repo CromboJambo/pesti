@@ -652,6 +652,9 @@ pub struct AttentionDispatch {
     pub num_kv_heads: usize,
     pub head_dim: usize,
     pub kv_dim: usize,
+    /// RoPE base (theta). Qwen2.5 uses 1e6, not the 1e4 LLaMA default —
+    /// must come from the model config, never hardcoded.
+    pub rope_base: f32,
 }
 
 impl AttentionDispatch {
@@ -718,43 +721,48 @@ impl AttentionDispatch {
         }
 
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
+        let cache_len = start_pos + seq_len;
+        let heads_per_group = self.num_heads / self.num_kv_heads;
         for b in 0..batch_size {
             for pos in 0..seq_len {
                 let q_idx = (b * seq_len + pos) * embed_dim;
-                let mut attn_weights = vec![0.0f32; start_pos + seq_len];
+                let mut attn_output = vec![0.0f32; self.num_heads * self.head_dim];
 
-                for j in 0..(start_pos + seq_len) {
-                    let mut sum = 0.0f32;
-                    for h in 0..self.num_heads {
-                        let q_start = q_idx + h * self.head_dim;
-                        let group = h / (self.num_heads / self.num_kv_heads);
+                // Per-head GQA attention. Each query head h attends over the KV
+                // cache using its group's KV head (h / heads_per_group), with its
+                // OWN score vector and OWN softmax. (The previous code summed all
+                // heads' Q·K into one scalar per position and shared a single
+                // softmax across heads — that is not attention and produced
+                // garbage.)
+                for h in 0..self.num_heads {
+                    let q_start = q_idx + h * self.head_dim;
+                    let group = h / heads_per_group;
+
+                    // scores[j] = scale * dot(q_head_h, k_head_group @ pos j)
+                    let mut scores = vec![0.0f32; cache_len];
+                    for j in 0..cache_len {
                         let k_slice =
                             Self::extract_head_slice(key_cache, true, group, j, self.head_dim);
                         if k_slice.len() == self.head_dim {
+                            let mut sum = 0.0f32;
                             for d in 0..self.head_dim {
                                 sum += q_rope[q_start + d] * k_slice[d].to_f32();
                             }
+                            scores[j] = sum * scale;
                         }
                     }
-                    attn_weights[j] = sum * scale;
-                }
 
-                let max_val = attn_weights
-                    .iter()
-                    .cloned()
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let exps: Vec<f32> = attn_weights.iter().map(|w| (*w - max_val).exp()).collect();
-                let exp_sum: f32 = exps.iter().sum();
-                let softmax_out: Vec<f32> = if exp_sum > 0.0 {
-                    exps.iter().map(|e| e / exp_sum).collect()
-                } else {
-                    vec![1.0 / (start_pos + seq_len) as f32; start_pos + seq_len]
-                };
+                    // Per-head numerically-stable softmax.
+                    let max_val = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = scores.iter().map(|w| (*w - max_val).exp()).collect();
+                    let exp_sum: f32 = exps.iter().sum();
+                    let inv_sum = if exp_sum > 0.0 {
+                        1.0 / exp_sum
+                    } else {
+                        1.0 / cache_len as f32
+                    };
 
-                let mut attn_output = vec![0.0f32; self.num_heads * self.head_dim];
-                let cache_len = start_pos + seq_len;
-                for h in 0..self.num_heads {
-                    let group = h / (self.num_heads / self.num_kv_heads);
+                    // V-weighted sum for this head.
                     for d in 0..self.head_dim {
                         let mut sum = 0.0f32;
                         for j in 0..cache_len {
@@ -766,7 +774,7 @@ impl AttentionDispatch {
                                 self.head_dim,
                             );
                             if !v_slice.is_empty() {
-                                sum += softmax_out[j] * v_slice[d].to_f32();
+                                sum += (exps[j] * inv_sum) * v_slice[d].to_f32();
                             }
                         }
                         attn_output[h * self.head_dim + d] = sum;
@@ -786,29 +794,35 @@ impl AttentionDispatch {
     /// Apply RoPE (Rotary Positional Embeddings) to Q and K.
     fn apply_rope(&self, q: &mut [f32], k: &mut [f32], seq_len: usize, start_pos: usize) {
         let dim = self.head_dim;
+        // inv_freq[i] = rope_base^(-2i/dim). Base comes from the model config
+        // (Qwen2.5 = 1e6); hardcoding 1e4 here silently corrupted attention.
         let inv_freq: Vec<f32> = (0..dim / 2)
-            .map(|i| 1.0 / (10000.0_f32.powf(2.0 * i as f32 / dim as f32)))
+            .map(|i| 1.0 / self.rope_base.powf(2.0 * i as f32 / dim as f32))
             .collect();
 
         for pos in 0..seq_len {
             let global_pos = start_pos + pos;
             for head in 0..self.num_heads {
                 let q_start = head * dim;
-                let k_start = head * dim;
                 for i in 0..dim / 2 {
                     let freq = inv_freq[i] * global_pos as f32;
                     let cos = freq.cos();
                     let sin = freq.sin();
-
-                    // Rotate Q
                     let q0_idx = q_start + i;
                     let q1_idx = q0_idx + dim / 2;
                     let q0 = q[q0_idx];
                     let q1 = q[q1_idx];
                     q[q0_idx] = q0 * cos - q1 * sin;
                     q[q1_idx] = q0 * sin + q1 * cos;
+                }
+            }
 
-                    // Rotate K
+            for head in 0..self.num_kv_heads {
+                let k_start = head * dim;
+                for i in 0..dim / 2 {
+                    let freq = inv_freq[i] * global_pos as f32;
+                    let cos = freq.cos();
+                    let sin = freq.sin();
                     let k0_idx = k_start + i;
                     let k1_idx = k0_idx + dim / 2;
                     let k0 = k[k0_idx];

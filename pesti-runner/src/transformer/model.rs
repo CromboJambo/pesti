@@ -14,7 +14,6 @@ use crate::kernel::dispatch::DispatchContext;
 use crate::kernel::kvcache::Kvcache;
 use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
-use crate::transformer::GgufTokenizer;
 use crate::transformer::layer::{Attention, FeedForward, TransformerLayer};
 use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;
@@ -69,12 +68,38 @@ impl LlamaConfig {
             .embedding_length()
             .ok_or_else(|| RunnerError::MissingHeaderField("embedding_length".to_string()))?
             as usize;
-        let num_heads = header.get_kv_u32("attention.head_count").unwrap_or(32) as usize;
+
+        // Key lookup with architecture-prefixed fallback. Standard llama.cpp GGUF
+        // files prefix architecture-specific keys (e.g. `qwen2.attention.head_count`),
+        // while some files use the generic form (`attention.head_count`). Try the
+        // arch-prefixed key first, then the generic, then the legacy `llama.*` form.
+        let kv_u32 = |suffix: &str| -> Option<u32> {
+            let arch_key = format!("{}.{}", arch_str, suffix);
+            header
+                .get_kv_u32(&arch_key)
+                .or_else(|| header.get_kv_u32(suffix))
+                .or_else(|| header.get_kv_u32(&format!("llama.{}", suffix)))
+        };
+        let kv_f32 = |suffix: &str| -> Option<f32> {
+            let arch_key = format!("{}.{}", arch_str, suffix);
+            header
+                .get_kv_f32(&arch_key)
+                .or_else(|| header.get_kv_f32(suffix))
+                .or_else(|| header.get_kv_f32(&format!("llama.{}", suffix)))
+        };
+
+        let num_heads = kv_u32("attention.head_count").unwrap_or(32) as usize;
 
         let num_kv_heads = match arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 => header
-                .get_kv_u32(&format!("{arch_str}.num_key_value_heads"))
-                .unwrap_or(8) as usize,
+            ModelArch::Qwen2 | ModelArch::Qwen3 => {
+                let arch_key = format!("{}.attention.head_count_kv", arch_str);
+                header
+                    .get_kv_u32(&arch_key)
+                    .or_else(|| header.get_kv_u32("attention.head_count_kv"))
+                    .or_else(|| header.get_kv_u32(&format!("{}.num_key_value_heads", arch_str)))
+                    .or_else(|| header.get_kv_u32("num_key_value_heads"))
+                    .unwrap_or(num_heads as u32) as usize
+            }
             _ => header.attention_head_count_kv().unwrap_or(num_heads as u32) as usize,
         };
 
@@ -120,18 +145,18 @@ impl LlamaConfig {
                 .unwrap_or(11008) as usize,
         };
         let max_seq_len = header.context_length().unwrap_or(4096) as usize;
-        let rope_base = 10000.0;
-        let rope_dim = header.rope_dimension_count().unwrap_or(head_dim as i32) as usize;
-        let rms_norm_eps = header.normalization_epsilon().unwrap_or(1e-5);
-
-        let actual_head_dim = if rope_dim > 0 { rope_dim } else { head_dim };
+        let rope_base = kv_f32("rope.freq_base").unwrap_or(10000.0);
+        let rms_norm_eps = kv_f32("attention.layer_norm_rms_epsilon")
+            .or_else(|| kv_f32("attention.layer_norm_epsilon"))
+            .or_else(|| kv_f32("norm_eps"))
+            .unwrap_or(1e-5);
 
         Ok(Self {
             arch,
             num_layers,
             num_heads,
             num_kv_heads,
-            head_dim: actual_head_dim,
+            head_dim,
             embed_dim,
             intermediate_dim,
             max_seq_len,
@@ -330,7 +355,7 @@ pub struct LlamaModel {
     pub final_norm: Option<RmsNorm>,
     pub layers: Vec<TransformerLayer>,
     pub vocab_size: u32,
-    pub tokenizer: Option<GgufTokenizer>,
+    pub tokenizer: Option<crate::transformer::tokenizer::PestiTokenizer>,
     pub tokenizer_config: Option<GgufTokenizerConfig>,
     /// GPU dispatch context (None = CPU-only mode).
     pub dispatch: Option<DispatchContext>,
@@ -351,7 +376,7 @@ impl LlamaModel {
         let mut model = Self::from_gguf_weights(weights)?;
 
         // Load tokenizer from GGUF file
-        if let Ok((tokenizer_config, tokenizer)) = load_tokenizer_from_gguf(path) {
+        if let Ok((tokenizer_config, tokenizer)) = load_tokenizer_from_gguf(path, crate::transformer::TokenizerBackend::MistralRs) {
             model.tokenizer_config = Some(tokenizer_config);
             model.tokenizer = Some(tokenizer);
             debug!(path = %path.display(), "Loaded model with tokenizer");
@@ -638,42 +663,45 @@ impl LlamaModel {
                 }),
         }?;
 
-        // Use tensor shapes for correct in_features/out_features.
-        // GGUF stores weights as [in_features, out_features].
-        // tensor_shape() returns (shape[0], shape[1]) = (in_features, out_features).
-        let wq_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
-            _ => format!("{prefix}attention.wq.weight"),
-        };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // shape-metadata inconsistencies in GGUF K-family quantizations.
+        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let hidden = config.embed_dim;
+                let kv = config.num_kv_heads * config.head_dim;
+                (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
+            } else {
+                let wq_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wq.weight"),
+                };
+                let wk_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wk.weight"),
+                };
+                let wv_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wv.weight"),
+                };
+                let wo_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wo.weight"),
+                };
+                let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+                let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+                let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+                let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+                (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+            };
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
-        let wk_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_k.weight"),
-            _ => format!("{prefix}attention.wk.weight"),
-        };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
-        let wv_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_v.weight"),
-            _ => format!("{prefix}attention.wv.weight"),
-        };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
-        let wo_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_output.weight"),
-            _ => format!("{prefix}attention.wo.weight"),
-        };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
@@ -685,6 +713,7 @@ impl LlamaModel {
             config.head_dim,
             config.num_heads,
             config.num_kv_heads,
+            config.rope_base,
         );
 
         // FFN weights — architecture-dependent naming
@@ -727,28 +756,28 @@ impl LlamaModel {
             }
         };
 
-        // Use tensor shapes for FFN weights
-        let w1_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
-            _ => format!("{prefix}feed_forward.w1.weight"),
-        };
-        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);  // GGUF: [in_features, out_features]
+        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // shape-metadata inconsistencies in GGUF K-family quantizations.
+        let (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out) =
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let hidden = config.embed_dim;
+                let intermediate = config.intermediate_dim;
+                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+            } else {
+                let w1_name = format!("{prefix}feed_forward.w1.weight");
+                let w2_name = format!("{prefix}feed_forward.w2.weight");
+                let w3_name = format!("{prefix}feed_forward.w3.weight");
+                let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
+                let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
+                let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
+                (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out)
+            };
         eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
-        let w2_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
-            _ => format!("{prefix}feed_forward.w2.weight"),
-        };
-        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
-        let w3_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
-            _ => format!("{prefix}feed_forward.w3.weight"),
-        };
-        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
@@ -880,42 +909,45 @@ impl LlamaModel {
                 }),
         }?;
 
-        // Use tensor shapes for correct in_features/out_features.
-        // GGUF stores weights as [in_features, out_features].
-        // tensor_shape() returns (shape[0], shape[1]) = (in_features, out_features).
-        let wq_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_q.weight"),
-            _ => format!("{prefix}attention.wq.weight"),
-        };
-        let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // shape-metadata inconsistencies in GGUF K-family quantizations.
+        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let hidden = config.embed_dim;
+                let kv = config.num_kv_heads * config.head_dim;
+                (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
+            } else {
+                let wq_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wq.weight"),
+                };
+                let wk_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wk.weight"),
+                };
+                let wv_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wv.weight"),
+                };
+                let wo_name = match config.arch {
+                    ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                    _ => format!("{prefix}attention.wo.weight"),
+                };
+                let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+                let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+                let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+                let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+                (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+            };
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
         let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
 
-        let wk_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_k.weight"),
-            _ => format!("{prefix}attention.wk.weight"),
-        };
-        let (wk_out, wk_in) = weights.tensor_shape(&wk_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
         let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
 
-        let wv_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_v.weight"),
-            _ => format!("{prefix}attention.wv.weight"),
-        };
-        let (wv_out, wv_in) = weights.tensor_shape(&wv_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
         let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
 
-        let wo_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_output.weight"),
-            _ => format!("{prefix}attention.wo.weight"),
-        };
-        let (wo_out, wo_in) = weights.tensor_shape(&wo_name);  // Shape is [out_features, in_features]
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
@@ -927,6 +959,7 @@ impl LlamaModel {
             config.head_dim,
             config.num_heads,
             config.num_kv_heads,
+            config.rope_base,
         );
 
         // FFN weights — architecture-dependent naming
@@ -969,28 +1002,28 @@ impl LlamaModel {
             }
         };
 
-        // Use tensor shapes for FFN weights
-        let w1_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_gate.weight"),
-            _ => format!("{prefix}feed_forward.w1.weight"),
-        };
-        let (w1_in, w1_out) = weights.tensor_shape(&w1_name);  // GGUF: [in_features, out_features]
+        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // shape-metadata inconsistencies in GGUF K-family quantizations.
+        let (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out) =
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let hidden = config.embed_dim;
+                let intermediate = config.intermediate_dim;
+                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+            } else {
+                let w1_name = format!("{prefix}feed_forward.w1.weight");
+                let w2_name = format!("{prefix}feed_forward.w2.weight");
+                let w3_name = format!("{prefix}feed_forward.w3.weight");
+                let (w1_in, w1_out) = weights.tensor_shape(&w1_name);
+                let (w2_in, w2_out) = weights.tensor_shape(&w2_name);
+                let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
+                (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out)
+            };
         eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
         let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
-        let w2_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_down.weight"),
-            _ => format!("{prefix}feed_forward.w2.weight"),
-        };
-        let (w2_in, w2_out) = weights.tensor_shape(&w2_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
         let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
 
-        let w3_name = match config.arch {
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}ffn_up.weight"),
-            _ => format!("{prefix}feed_forward.w3.weight"),
-        };
-        let (w3_in, w3_out) = weights.tensor_shape(&w3_name);  // GGUF: [in_features, out_features]
         eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
         let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
 
@@ -1135,18 +1168,19 @@ impl LlamaModel {
             let mut key_caches = Vec::with_capacity(self.config.num_layers);
             let mut value_caches = Vec::with_capacity(self.config.num_layers);
             for _ in 0..self.config.num_layers {
+                // Allocate KV cache with +1 to handle edge case where we generate exactly max_seq_len tokens
                 let key_cache = Kvcache::new(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
-                    self.config.max_seq_len,
+                    self.config.max_seq_len + 1,
                     if ctx.gpu_available() { true } else { false },
                 );
                 let value_cache = Kvcache::new(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
-                    self.config.max_seq_len,
+                    self.config.max_seq_len + 1,
                     if ctx.gpu_available() { true } else { false },
                 );
                 key_caches.push(key_cache);
@@ -1197,6 +1231,7 @@ impl LlamaModel {
                 num_kv_heads: layer.attention.num_kv_heads,
                 head_dim: layer.attention.head_dim,
                 kv_dim: layer.attention.kv_dim,
+                rope_base: layer.attention.rope.base,
             };
 
             let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
@@ -1241,7 +1276,10 @@ impl LlamaModel {
                 ffn_norm,
             };
 
-            let layer_start_pos = start_pos + layer_idx;
+            // RoPE position is a property of the TOKEN, not the layer — every
+            // layer applies RoPE at the same position. (Was `start_pos + layer_idx`,
+            // which shifted RoPE per layer and corrupted attention for layers > 0.)
+            let layer_start_pos = start_pos;
             h = layer_dispatch.forward(
                 ctx,
                 &h,
@@ -1338,27 +1376,35 @@ impl LlamaModel {
     ) -> Result<Vec<u32>> {
         let mut generated = Vec::new();
 
-        // Process prompt: for each token, run forward and update position
-        let mut context = prompt.to_vec();
+        // Prefill: run each prompt token through the model at its position so
+        // the KV cache contains the full prompt context. The logits from the
+        // LAST prompt token seed the first generated token. (Previously only
+        // `context.last()` was ever fed, at pos=0, so the prompt was never seen.)
+        let mut logits: Vec<f32> = Vec::new();
         let mut pos = 0;
+        for (i, &tok) in prompt.iter().enumerate() {
+            let hidden = self.embed(tok, i)?;
+            logits = if self.dispatch.is_some() {
+                // forward_with_dispatch already applies the output head and
+                // returns final logits — do NOT apply it again.
+                self.forward_with_dispatch(&hidden, i)?
+            } else {
+                // CPU-only fallback (no CUDA): returns hidden states, so apply
+                // the output head to get logits.
+                let hidden_out = self.forward_layers(&hidden, i)?;
+                self.apply_output_head(&hidden_out)?
+            };
+            pos = i + 1;
+        }
 
-        // Use the last token for each forward pass (autoregressive)
+        if prompt.is_empty() {
+            return Ok(generated);
+        }
+
+        // Autoregressive decode: sample from the current logits, then run the
+        // sampled token through the model at its position to produce logits for
+        // the next step.
         for _ in 0..max_tokens {
-            let last_token = *context
-                .last()
-                .ok_or_else(|| RunnerError::ModelLoad("empty context".to_string()))?;
-
-            // Get hidden state via embedding (CPU lookup)
-            let hidden = self.embed(last_token, pos)?;
-
-            // Pass through transformer layers
-            // TODO: Future - integrate GPU path via forward_with_dispatch when dispatch is properly initialized
-            let logits_hidden = self.forward_layers(&hidden, pos)?;
-
-            // Apply output head (LM head) to get logits
-            let logits = self.apply_output_head(&logits_hidden)?;
-
-            // Sample next token
             let next_token = if sampling_config.temperature == 0.0 {
                 Self::argmax_from_logits(&logits)
             } else {
@@ -1371,7 +1417,16 @@ impl LlamaModel {
             }
 
             generated.push(next_token);
-            context.push(next_token);
+
+            // Run the sampled token through the model at its position to get
+            // logits for the next step.
+            let hidden = self.embed(next_token, pos)?;
+            logits = if self.dispatch.is_some() {
+                self.forward_with_dispatch(&hidden, pos)?
+            } else {
+                let hidden_out = self.forward_layers(&hidden, pos)?;
+                self.apply_output_head(&hidden_out)?
+            };
             pos += 1;
 
             if pos >= self.config.max_seq_len {

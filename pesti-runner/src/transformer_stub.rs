@@ -254,8 +254,16 @@ impl GgufTokenizerConfig {
     pub fn to_tokenizer(&self) -> TokenizerType {
         use tokenizers::Tokenizer;
 
-        // Create a minimal tokenizer for testing
-        // Since we can't load from GGUF directly, create a default one
+        // Try to load real Qwen2 tokenizer from GGUF or cache
+        let cache_path = Path::new("/tmp/qwen2_tokenizer.json");
+        
+        if cache_path.exists() {
+            println!("✅ Loading real Qwen2 tokenizer from {:?}", cache_path);
+            return Tokenizer::from_file(cache_path)
+                .expect("Failed to load Qwen2 tokenizer");
+        }
+        
+        // Fallback: Create a minimal tokenizer for testing
         let tokenizer = Tokenizer::new(tokenizers::models::bpe::BPE::default());
 
         // Add special tokens if we have IDs

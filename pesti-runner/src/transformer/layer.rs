@@ -60,6 +60,7 @@ impl Attention {
         head_dim: usize,
         num_heads: usize,
         num_kv_heads: usize,
+        rope_base: f32,
     ) -> Self {
         let kv_dim = num_kv_heads * head_dim;
         Self {
@@ -67,7 +68,7 @@ impl Attention {
             wk,
             wv,
             wo,
-            rope: RopeConfig::new(head_dim, 10000.0, 4096),
+            rope: RopeConfig::new(head_dim, rope_base, 4096),
             num_heads,
             num_kv_heads,
             head_dim,
