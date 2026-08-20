@@ -31,6 +31,11 @@ pesti-gguf/src/parser.rs.bak
 pesti-gguf/src/parser.rs.fixed
 pesti-gguf/src/string_case.tmp
 
+# HF reference tokenizers (re-downloadable from HF Hub, or re-derived from
+# the GGUF via pesti-runner --example dump_tokenizer; the runtime builds
+# tokenizers from GGUF-embedded tokenizer.ggml.* arrays instead)
+assets/tokenizers/
+
 # OS/editor junk
 .DS_Store
 *.swp
