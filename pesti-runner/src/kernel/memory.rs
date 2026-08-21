@@ -283,42 +283,55 @@ impl CudaMemoryBackend {
 }
 
 impl MemoryBackend for CudaMemoryBackend {
-    fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
-        if !self.enabled {
-            tracing::info!("CUDA backend disabled, falling back to host allocation");
-            return Err(MemoryError::AllocationFailed {
-                requested: bytes,
-                max: 0,
-            });
-        }
+        // Allocate device memory using sys call and zero-initialize.
+        fn alloc(&self, bytes: usize) -> Result<RawHandle, MemoryError> {
+            if !self.enabled {
+                tracing::info!("CUDA backend disabled, falling back to host allocation");
+                return Err(MemoryError::AllocationFailed {
+                    requested: bytes,
+                    max: 0,
+                });
+            }
 
-        let total_mem = self.device_info.total_memory as usize;
-        if total_mem == 0 {
-            tracing::info!("Device memory unknown, using fallback");
-            return Err(MemoryError::AllocationFailed {
-                requested: bytes,
-                max: 0,
-            });
-        }
+            let total_mem = self.device_info.total_memory as usize;
+            if total_mem == 0 {
+                tracing::info!("Device memory unknown, using fallback");
+                return Err(MemoryError::AllocationFailed {
+                    requested: bytes,
+                    max: 0,
+                });
+            }
 
-        if bytes > total_mem {
-            return Err(MemoryError::AllocationFailed {
-                requested: bytes,
-                max: total_mem,
-            });
-        }
+            if bytes > total_mem {
+                return Err(MemoryError::AllocationFailed {
+                    requested: bytes,
+                    max: total_mem,
+                });
+            }
 
-        // Allocate device memory using sys call
-        let mut dptr: sys::CUdeviceptr = 0;
-        unsafe {
-            sys::cuMemAlloc_v2(&mut dptr, bytes).result().map_err(|e| {
-                tracing::warn!(error = %e, "cuMemAlloc_v2 failed");
-                MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
-            })?;
-        }
+            // Allocate device memory using sys call
+            let mut dptr: sys::CUdeviceptr = 0;
+            unsafe {
+                sys::cuMemAlloc_v2(&mut dptr, bytes).result().map_err(|e| {
+                    tracing::warn!(error = %e, "cuMemAlloc_v2 failed");
+                    MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
+                })?;
+                
+                // Zero-initialize the allocated memory (CUDA cuMemAlloc doesn't zero!)
+                sys::cuMemsetD8_v2(dptr, 0, bytes).result().map_err(|e| {
+                    tracing::warn!(error = %e, "cuMemsetD8_v2 failed");
+                    MemoryError::Cuda(format!("cuMemsetD8_v2: {e:?}"))
+                })?;
+                
+                // Explicit sync to ensure memset completes before kernel reads
+                self.stream.synchronize().map_err(|e| {
+                    tracing::warn!(error = %e, "Stream sync after alloc failed");
+                    MemoryError::Cuda(format!("Stream sync: {e:?}"))
+                })?;
+            }
 
-        Ok(RawHandle(dptr))
-    }
+            Ok(RawHandle(dptr))
+        }
 
     fn free(&self, handle: RawHandle) -> Result<(), MemoryError> {
         let ptr = handle.as_u64();

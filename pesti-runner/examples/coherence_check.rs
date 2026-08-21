@@ -21,6 +21,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t1 = Instant::now();
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
     println!("[build] {:.2}s", t1.elapsed().as_secs_f32());
+    
+    // DEBUG: Check dispatch
+    if model.dispatch.is_some() {
+        println!("[DEBUG] Dispatch context IS initialized");
+        let ctx = model.dispatch.as_ref().unwrap();
+        println!("[DEBUG] GPU available: {}", ctx.gpu_available());
+    } else {
+        println!("[DEBUG] Dispatch context is NONE - CPU only!");
+    }
 
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
     let (_cfg, tokenizer) =
@@ -50,6 +59,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let t3 = Instant::now();
+    
+    // DEBUG: Enable verbose tracing for this run
+    unsafe { std::env::set_var("RUST_LOG", "debug,pesti_runner=trace"); }
+    
     let generated_tokens = model.generate(
         &prompt_tokens,
         max_tokens,

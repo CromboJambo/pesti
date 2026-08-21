@@ -1069,6 +1069,12 @@ impl AttentionDispatch {
             value_cache
                 .write_v_at(global_pos, &v_row)
                 .map_err(|e| DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}")))?;
+            
+            // DEBUG: Log KV writes
+            if start_pos == 0 || pos == seq_len - 1 {
+                println!("[DEBUG] forward_gpu: wrote K/V at global_pos={}, key_cache.seq_len={}", 
+                         global_pos, key_cache.seq_len());
+            }
         }
 
         // Extract K/V from cache for SDPA

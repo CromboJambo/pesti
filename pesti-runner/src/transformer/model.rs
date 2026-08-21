@@ -1182,7 +1182,10 @@ impl LlamaModel {
             .as_ref()
             .ok_or_else(|| RunnerError::Tensor("dispatch context not initialized".into()))?;
 
-        // Initialize KV caches on first call
+        // DEBUG: Log which path we're taking
+        if start_pos == 0 {
+            println!("[DEBUG] forward_with_dispatch called with GPU available: {}", ctx.gpu_available());
+        }
         if self.kv_caches.is_none() {
             let mut key_caches = Vec::with_capacity(self.config.num_layers);
             let mut value_caches = Vec::with_capacity(self.config.num_layers);
@@ -1193,25 +1196,38 @@ impl LlamaModel {
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     self.config.max_seq_len + 1,
-                    if ctx.gpu_available() { true } else { false },
+                    if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
+                        true
+                    } else {
+                        false
+                    },
                 );
                 let value_cache = Kvcache::new(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     self.config.max_seq_len + 1,
-                    if ctx.gpu_available() { true } else { false },
+                    if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
+                        true
+                    } else {
+                        false
+                    },
                 );
                 key_caches.push(key_cache);
                 value_caches.push(value_cache);
             }
             self.kv_caches = Some((key_caches, value_caches));
+            println!("[DEBUG] KV caches initialized: {} layers", self.config.num_layers);
         }
 
         let (key_caches, value_caches) = self
             .kv_caches
             .as_mut()
             .ok_or_else(|| RunnerError::Tensor("kv caches not initialized".into()))?;
+
+        // DEBUG: Log current KV cache state before forward pass
+        println!("[DEBUG] forward_with_dispatch: start_pos={}, seq_len={}", 
+                  start_pos, key_caches[0].seq_len());
 
         let mut h = hidden.to_vec();
 

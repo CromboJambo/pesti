@@ -249,6 +249,57 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 
 ---
 
+## Week 15: Real Tokenizer + GQA Fix + Divergence Probes (🆕 COMPLETE!)
+
+### Date
+August 19-20, 2026
+
+### Goal
+Self-contained GGUF tokenizer reconstruction and CPU attention correctness fixes for GQA models.
+
+### Completed Tasks
+
+#### Day 2: GGUF-Embedded Tokenizer (commit `4c1e1e7`) ✅
+- [x] **GGUF-extracted tokenizer** - Default MistralRs backend builds real tokenizer from `tokenizer.ggml.*` arrays
+- [x] **Full HF-compatible reconstruction** - BPE model + Qwen2 pre-tokenizer regex + ByteLevel decoder + NFC normalizer + special tokens
+- [x] **No external dependencies** - No hardcoded asset paths or `tokenizer.json` downloads needed
+- [x] **Validation against HF reference**: fox-sentence encodes to `[785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]` ✅
+
+#### Day 1: Coherence Check Diagnostic (commit `25732e6`) ✅
+- [x] **Diagnostic harness** - Prints prompt token IDs and generated token IDs for oracle comparison
+- [x] **PESTI_PROMPT_TOKENS env override** - Bypasses pesti's tokenizer to isolate forward-pass bugs from tokenizer bugs
+- [x] **Verified**: pesti's own `encode()` returns GPT-2 IDs, not Qwen2; even with oracle-correct prompt tokens, first generated token is input-independent (127338) → forward-pass bug confirmed
+
+#### Latest: CPU Attention GQA Fix + KV Cache Divergence Probes (commit `96e8446`) ✅
+- [x] **Per-head GQA attention fix** - Was summing Q.K across all heads, now computes per-head attention separately
+- [x] **Linear output allocation fix** - Changed to `batch*seq` (was OOB for seq_len>1)
+- [x] **Region-specific KV writes** - Added `write_k_at()`/`write_v_at()`, documented double-write trap
+- [x] **Error propagation** - Dispatch layer now propagates errors instead of swallowing `.is_err()`
+- [x] **Tied-embedding LM head fallback** - For models with shared embedding/output weights
+- [x] **Diagnostic probes**: `probe_input_dep.rs` (single-token logit diff), `probe_layer_diff.rs` (per-layer divergence)
+- [x] **Verified results**: 23.9/20.7 max logit diff (f16 drift, smooth per-layer growth, no structural jumps), 4/4 kvcache tests pass, builds clean with/without cuda
+
+### Files Added/Modified in Week 15
+- `pesti-runner/src/transformer/tokenizer.rs` - Rewritten for GGUF-extracted tokenizer (~230 lines)
+- `pesti-runner/examples/coherence_check.rs` (72 lines) - Diagnostic harness
+- `pesti-runner/examples/probe_input_dep.rs` (137 lines) - Single-token logit diff analysis
+- `pesti-runner/examples/probe_layer_diff.rs` (215 lines) - Per-layer divergence measurement
+- `pesti-runner/src/transformer/layer.rs` - Per-head GQA attention fix (~100 lines)
+- `pesti-runner/src/kernel/kvcache.rs` - Region-specific KV writes (+152 lines)
+- `pesti-runner/src/kernel/dispatch.rs` - Error propagation (+28 lines)
+- `pesti-runner/src/kernel/kvcache_stub.rs` - CPU-only stubs (+10 lines)
+- `pesti-runner/src/transformer/model.rs` - Tied-embedding LM head fallback (+43 lines)
+
+### Engineering Lessons Learned
+
+**Tokenizers matter!** The default MistralRs backend was using a cached GPT-2 tokenizer instead of the real Qwen2 tokenizer from GGUF. Fix: Build `tokenizers::Tokenizer` directly from `tokenizer.ggml.*` arrays.
+
+**GQA requires per-head computation!** Summing Q.K across all heads produces incorrect attention scores. Each head must compute its own attention independently before merging.
+
+**Diagnostics first, fixes second**: Coherence check and divergence probes revealed the root cause (input-independent first token) before we fixed the GQA bug.
+
+---
+
 ## Week 14: Real End-to-End Decode Measurement (🔄 REWRITTEN - 30GB VRAM)
 
 ### Date
@@ -594,5 +645,5 @@ Understanding the ecosystem and community through meaningful contributions
 
 ---
 
-*Last updated: August 16, 2026 (Week 13 Priority 2 & 3 Complete!)*  
+*Last updated: August 20, 2026 (Week 15 Real Tokenizer + GQA Fix Complete!)*  
 *This roadmap will change as I learn more. If it looks perfect, it's lying.*

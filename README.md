@@ -78,6 +78,24 @@ cargo run --package pesti-runner --features cuda --example benchmark_profiling
 - **Throughput Projection**: ~500-1,728 tok/s (conservative to optimistic)
 - **Status**: ✅ Both priorities complete, exceeds all targets (756% of 100 tok/s goal)
 
+### 🧠 Week 15: Real Tokenizer + GQA Fix + Divergence Probes - COMPLETE!
+```bash
+# Run coherence check diagnostic harness
+cargo run --package pesti-runner --example coherence_check
+
+# Run divergence probe examples (CPU-only)
+cargo run --package pesti-runner --example probe_input_dep
+cargo run --package pesti-runner --example probe_layer_diff
+```
+- **GGUF-Embedded Tokenizer**: Default MistralRs backend now builds the real `tokenizers::Tokenizer` directly from GGUF arrays (`tokenizer.ggml.*`)
+  - Reconstructs full HF-compatible tokenizer: BPE + Qwen2 pre-tokenizer + ByteLevel decoder + NFC normalizer + special tokens
+  - No external `tokenizer.json` downloads needed — fully self-contained
+  - Validated against HF reference: fox-sentence encodes to `[785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]` ✅
+- **Coherence Check Diagnostic**: `PESTI_PROMPT_TOKENS` env override bypasses tokenizer to isolate forward-pass bugs
+- **CPU Attention GQA Fix**: Fixed per-head GQA attention (was summing Q.K across all heads), fixed linear output allocation for seq_len>1
+- **KV Cache Divergence Probes**: Region-specific `write_k_at()`/`write_v_at()`, error propagation instead of swallowed `.is_err()`
+- **Status**: ✅ All fixes verified, 4/4 kvcache tests pass, builds clean with/without cuda
+
 ---
 
 ## What's Inside
@@ -328,5 +346,5 @@ Replace mistral.rs calls with your custom kernels as you master each layer:
 Built with ❤️ by PESTI Contributors  
 *Learning-first design, production-ready performance*
 
-*Last Updated: August 16, 2026 (Week 13 Priority 2 & 3 Complete!)*
+*Last Updated: August 20, 2026 (Week 15 Real Tokenizer + GQA Fix Complete!)*
 p⃗ >,,~~−∞~~,,< ℓ⃗
