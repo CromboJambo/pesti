@@ -413,20 +413,39 @@ impl LlamaModel {
             }
         });
 
-        // Load output (LM head) — architecture-dependent name
+        // Load output (LM head) — architecture-dependent name.
+        // Tied-embedding models (e.g. Qwen2.5-0.5B) have no separate output
+        // tensor: the LM head reuses the embedding weights.
         let output_name = config.output_name();
-        let output = weights.tensors.get(output_name).map(|tensor_data| {
-            // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
-            // Linear layer expects [vocab_size, embed_dim], so we need to transpose
-            // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                let embed_dim = config.embed_dim;
-                let vocab = vocab_size as usize;
-                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
-            } else {
-                Linear::from_f32_weight(tensor_data, None)
+        let output = match weights.tensors.get(output_name) {
+            Some(tensor_data) => {
+                // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
+                // Linear layer expects [vocab_size, embed_dim], so we need to transpose
+                // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    let embed_dim = config.embed_dim;
+                    let vocab = vocab_size as usize;
+                    Some(Linear::from_f32_weight_with_shape(
+                        tensor_data,
+                        None,
+                        embed_dim as usize,
+                        vocab,
+                    ))
+                } else {
+                    Some(Linear::from_f32_weight(tensor_data, None))
+                }
             }
-        });
+            None => weights.tensors.get(embedding_name).map(|tensor_data| {
+                debug!("No {} tensor — using tied embeddings for LM head", output_name);
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    let embed_dim = config.embed_dim;
+                    let vocab = vocab_size as usize;
+                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+                } else {
+                    Linear::from_f32_weight(tensor_data, None)
+                }
+            }),
+        };
 
         // Build transformer layers
         let mut layers = Vec::with_capacity(config.num_layers);

@@ -89,10 +89,17 @@ impl Attention {
     ) -> Vec<f32> {
         let embed_dim = self.num_heads * self.head_dim;
 
-        // Q/K/V projections
-        let q = self.wq.forward(x, batch_size);
-        let k = self.wk.forward(x, batch_size);
-        let v = self.wv.forward(x, batch_size);
+        // Q/K/V projections.
+        // Linear::forward allocates `batch_size * out_features`, and the
+        // attention loop below indexes the result at `(b*seq_len+pos)*dim`,
+        // so the "batch" passed to the linear must be the TOTAL number of
+        // tokens (batch_size * seq_len) — not just batch_size. Passing
+        // batch_size under-allocates the output for seq_len > 1 (out-of-bounds
+        // reads). For the live seq_len == 1 path this is identical.
+        let tokens = batch_size * seq_len;
+        let q = self.wq.forward(x, tokens);
+        let k = self.wk.forward(x, tokens);
+        let v = self.wv.forward(x, tokens);
 
         // Apply RoPE to Q and K separately (different head counts for GQA)
         let mut q_rope = q;
@@ -107,48 +114,50 @@ impl Attention {
 
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
 
+        let heads_per_group = self.num_heads / self.num_kv_heads;
         for b in 0..batch_size {
             for pos in 0..seq_len {
                 let q_idx = (b * seq_len + pos) * embed_dim;
-                let mut attn_weights = vec![0.0f32; seq_len];
+                let mut attn_output = vec![0.0f32; self.num_heads * self.head_dim];
 
-                // Q @ K^T for this position
-                for j in 0..seq_len {
-                    let mut sum = 0.0f32;
-                    for h in 0..self.num_heads {
-                        let q_start = q_idx + h * self.head_dim;
-                        let k_start = (b * seq_len + j) * self.kv_dim
-                            + h / (self.num_heads / self.num_kv_heads) * self.head_dim;
+                // Per-head GQA attention. Each query head h attends over all
+                // positions using its group's KV head (h / heads_per_group),
+                // with its OWN score vector and OWN softmax. (The previous
+                // code summed all heads' Q·K into one scalar per position and
+                // shared a single softmax across heads — that is not attention
+                // and produced garbage logits.)
+                for h in 0..self.num_heads {
+                    let q_start = q_idx + h * self.head_dim;
+                    let group = h / heads_per_group;
+
+                    // scores[j] = scale * dot(q_head_h, k_head_group @ pos j)
+                    let mut scores = vec![0.0f32; seq_len];
+                    for j in 0..seq_len {
+                        let k_start = (b * seq_len + j) * self.kv_dim + group * self.head_dim;
+                        let mut sum = 0.0f32;
                         for d in 0..self.head_dim {
                             sum += q_rope[q_start + d] * k_rope[k_start + d];
                         }
+                        scores[j] = sum * scale;
                     }
-                    attn_weights[j] = sum * scale;
-                }
 
-                // Softmax
-                let max_val = attn_weights
-                    .iter()
-                    .cloned()
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let exps: Vec<f32> = attn_weights.iter().map(|w| (*w - max_val).exp()).collect();
-                let exp_sum: f32 = exps.iter().sum();
-                let softmax_out: Vec<f32> = if exp_sum > 0.0 {
-                    exps.iter().map(|e| e / exp_sum).collect()
-                } else {
-                    vec![1.0 / seq_len as f32; seq_len]
-                };
+                    // Per-head numerically-stable softmax.
+                    let max_val = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = scores.iter().map(|w| (*w - max_val).exp()).collect();
+                    let exp_sum: f32 = exps.iter().sum();
+                    let inv_sum = if exp_sum > 0.0 {
+                        1.0 / exp_sum
+                    } else {
+                        1.0 / seq_len as f32
+                    };
 
-                // softmax_out @ V
-                let mut attn_output = vec![0.0f32; self.num_heads * self.head_dim];
-                for h in 0..self.num_heads {
-                    let group = h / (self.num_heads / self.num_kv_heads);
+                    // V-weighted sum for this head.
                     for d in 0..self.head_dim {
                         let mut sum = 0.0f32;
                         for j in 0..seq_len {
                             let v_start =
                                 (b * seq_len + j) * self.kv_dim + group * self.head_dim + d;
-                            sum += softmax_out[j] * v[v_start];
+                            sum += (exps[j] * inv_sum) * v[v_start];
                         }
                         attn_output[h * self.head_dim + d] = sum;
                     }

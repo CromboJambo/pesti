@@ -28,7 +28,7 @@ description = "Portable Execution Substrate for Transformer Inference"
 
 [workspace.dependencies]
 # GGUF parser
-pesti-gguf = "0.2.2"
+pesti-gguf = "0.2.4"
 # Plugin system (llm-plug-in package)
 pesti-plug-in = { path = "llm-plug-in" }
 # Safetensors support

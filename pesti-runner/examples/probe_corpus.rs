@@ -29,12 +29,12 @@ fn canonical_density(dtype: GgufDtype) -> Option<f64> {
         GgufDtype::Q5_1 => 24.0 / 32.0, // 0.75 (2xf16 + u32 hmask + qs[16])
         GgufDtype::Q8_0 => 34.0 / 32.0, // 1.0625
         GgufDtype::Q8_1 => 36.0 / 32.0, // 1.125
-        GgufDtype::Q2K | GgufDtype::Q2K_S | GgufDtype::Q2K_M => 84.0 / 256.0, // 0.328125
-        GgufDtype::Q3K | GgufDtype::Q3K_S => 110.0 / 256.0, // 0.4296875
-        GgufDtype::Q4K | GgufDtype::Q4K_M | GgufDtype::Q4K_S => 144.0 / 256.0, // 0.5625
-        GgufDtype::Q5K | GgufDtype::Q5K_M | GgufDtype::Q5K_S => 176.0 / 256.0, // 0.6875
-        GgufDtype::Q6K | GgufDtype::Q6K_S => 210.0 / 256.0, // 0.8203125
-        GgufDtype::Q8K | GgufDtype::Q8K_M => 292.0 / 256.0, // 1.140625
+        GgufDtype::Q2_K => 84.0 / 256.0, // 0.328125
+        GgufDtype::Q3_K => 110.0 / 256.0, // 0.4296875
+        GgufDtype::Q4_K => 144.0 / 256.0, // 0.5625
+        GgufDtype::Q5_K => 176.0 / 256.0, // 0.6875
+        GgufDtype::Q6_K => 210.0 / 256.0, // 0.8203125
+        GgufDtype::Q8_K => 292.0 / 256.0, // 1.140625
         _ => return None, // unknown / not in canonical table
     })
 }

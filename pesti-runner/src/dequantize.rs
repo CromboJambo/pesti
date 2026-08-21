@@ -179,16 +179,20 @@ fn f16_to_f32_le(val: u16) -> f32 {
 
 /// Dequantize Q5_0 data.
 ///
-/// Q5_0 format: 32 elements per block, 16 bytes per block.
-/// Layout: f16 scale (2B) + nibble-packed quants (16B = 32 nibbles)
-/// The high bit is implicitly 0 for Q5_0 (values 0-31, not 0-31+16).
+/// Q5_0 format: 32 elements per block, 22 bytes per block.
+/// Layout (llama.cpp `block_q5_0`, `sizeof == ggml_half + uint32_t + QK5_0/2`):
+///   - 2 bytes : f16 scale `d`
+///   - 4 bytes : `qh` — 16 high bits, one per element (bit j = element j's 5th bit)
+///   - 16 bytes: `qs` — 4 low bits per element (nibble-packed)
+/// Dequantized value = d * ((qs_low | qh_bit) - 16).
 pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 32;
     let remaining = element_count % 32;
-    // Q5_0: n/2 + 48 bytes total, which is 16 bytes per block
-    let expected_size = num_full_blocks * 16
+    // Q5_0: 22 bytes per full block (d:2 + qh:4 + qs:16); a partial block still
+    // carries d(2) + qh(4) + qs(ceil(n/2)).
+    let expected_size = num_full_blocks * 22
         + if remaining > 0 {
-            2 + remaining.div_ceil(2)
+            2 + 4 + remaining.div_ceil(2)
         } else {
             0
         };
@@ -204,39 +208,130 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let mut result = Vec::with_capacity(element_count);
 
     for block in 0..num_full_blocks {
-        let base = block * 16;
+        let base = block * 22;
 
         // Parse scale (f16)
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
 
-        // Extract nibbles and dequantize
-        // Q5_0: values are 0-31, stored as nibbles with implicit high bit = 0
-        for i in 0..32usize {
-            if result.len() >= element_count {
-                break;
-            }
-            let nibble = (data[base + 2 + i / 2] >> (4 * (i & 1))) & 0x0F;
-            // Q5_0 values are 0-31, but we need to check if there's a high bit
-            // Based on llama.cpp, Q5_0 uses values 0-31 directly
-            let q = nibble as i32;
+        // 16 high bits, one per element (little-endian u32)
+        let qh = u32::from_le_bytes([
+            data[base + 2],
+            data[base + 3],
+            data[base + 4],
+            data[base + 5],
+        ]);
 
-            // Dequantize: value = scale * q
+        // 32 elements: low 4 bits from qs, high bit from qh, centered at -16
+        for i in 0..32usize {
+            let low = (data[base + 6 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let high = (((qh >> i) & 1) << 4) as u8;
+            let q = ((low | high) as i32) - 16;
             result.push(scale * q as f32);
         }
     }
 
-    // Handle remaining elements
+    // Handle remaining elements (partial block)
     if remaining > 0 {
-        let base = num_full_blocks * 16;
+        let base = num_full_blocks * 22;
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
+        let qh = u32::from_le_bytes([
+            data[base + 2],
+            data[base + 3],
+            data[base + 4],
+            data[base + 5],
+        ]);
 
         let elems_in_block = remaining.min(32);
         for i in 0..elems_in_block {
-            let nibble = (data[base + 2 + i / 2] >> (4 * (i & 1))) & 0x0F;
-            let q = nibble as i32;
+            let low = (data[base + 6 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let high = (((qh >> i) & 1) << 4) as u8;
+            let q = ((low | high) as i32) - 16;
             result.push(scale * q as f32);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Dequantize Q5_1 data.
+///
+/// Q5_1 format: 32 elements per block, 24 bytes per block.
+/// Layout (llama.cpp `block_q5_1`, `sizeof == 2*ggml_half + uint32_t + QK5_1/2`):
+///   - 2 bytes : f16 scale `d`
+///   - 2 bytes : f16 min `m`
+///   - 4 bytes : `qh` — 16 high bits (bit j = element j's 5th bit)
+///   - 16 bytes: `qs` — 4 low bits per element (nibble-packed)
+/// Dequantized value = d * ((qs_low | qh_bit) - 16) + m.
+pub fn dequantize_q5_1(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
+    let num_full_blocks = element_count / 32;
+    let remaining = element_count % 32;
+    // Q5_1: 24 bytes per full block (d:2 + m:2 + qh:4 + qs:16); a partial block
+    // still carries d(2) + m(2) + qh(4) + qs(ceil(n/2)).
+    let expected_size = num_full_blocks * 24
+        + if remaining > 0 {
+            2 + 2 + 4 + remaining.div_ceil(2)
+        } else {
+            0
+        };
+
+    if data.len() < expected_size {
+        return Err(RunnerError::Internal(format!(
+            "Q5_1 data too small: got {} bytes, need {}",
+            data.len(),
+            expected_size
+        )));
+    }
+
+    let mut result = Vec::with_capacity(element_count);
+
+    for block in 0..num_full_blocks {
+        let base = block * 24;
+
+        // Parse scale (f16) and min (f16)
+        let d_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
+        let d = f16_to_f32_le(d_f16);
+        let m_f16 = data[base + 2] as u16 | (data[base + 3] as u16) << 8;
+        let m = f16_to_f32_le(m_f16);
+
+        // 16 high bits, one per element (little-endian u32)
+        let qh = u32::from_le_bytes([
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+        ]);
+
+        // 32 elements: low 4 bits from qs, high bit from qh, centered at -16
+        for i in 0..32usize {
+            let low = (data[base + 8 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let high = (((qh >> i) & 1) << 4) as u8;
+            let q = ((low | high) as i32) - 16;
+            result.push(d * q as f32 + m);
+        }
+    }
+
+    // Handle remaining elements (partial block)
+    if remaining > 0 {
+        let base = num_full_blocks * 24;
+        let d_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
+        let d = f16_to_f32_le(d_f16);
+        let m_f16 = data[base + 2] as u16 | (data[base + 3] as u16) << 8;
+        let m = f16_to_f32_le(m_f16);
+        let qh = u32::from_le_bytes([
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+        ]);
+
+        let elems_in_block = remaining.min(32);
+        for i in 0..elems_in_block {
+            let low = (data[base + 8 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let high = (((qh >> i) & 1) << 4) as u8;
+            let q = ((low | high) as i32) - 16;
+            result.push(d * q as f32 + m);
         }
     }
 

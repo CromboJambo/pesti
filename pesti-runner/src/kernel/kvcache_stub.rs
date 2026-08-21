@@ -73,6 +73,16 @@ impl Kvcache {
         Err(KvError::NotAvailable)
     }
 
+    /// Stub — see [`crate::kernel::kvcache::Kvcache::write_k_at`].
+    pub fn write_k_at(&mut self, _pos: usize, _key: &[f16]) -> Result<(), KvError> {
+        Err(KvError::NotAvailable)
+    }
+
+    /// Stub — see [`crate::kernel::kvcache::Kvcache::write_v_at`].
+    pub fn write_v_at(&mut self, _pos: usize, _value: &[f16]) -> Result<(), KvError> {
+        Err(KvError::NotAvailable)
+    }
+
     pub fn clear(&mut self) {
         // Stub - no-op for CPU-only builds
     }

@@ -207,6 +207,20 @@ impl Kvcache {
     ///
     /// `key` and `value` must each have `num_kv_heads * head_dim` elements.
     /// Only the first `num_kv_heads` head slots are written.
+    ///
+    /// # Cross-contamination warning
+    ///
+    /// This writes **both** the K region and the V region of *this one* cache.
+    /// It is correct when a single `Kvcache` holds both K and V (the intended
+    /// design). But if the caller stores K and V in **separate** caches (one
+    /// `Kvcache` each) and calls this on both, each cache ends up holding a
+    /// copy of the *other* tensor in its unused region: the key cache's V
+    /// region is filled with V and the value cache's K region is filled with K.
+    /// A reader that only touches the correct region (e.g. the CPU fallback)
+    /// is unaffected, but a reader that consumes a whole buffer (e.g. the GPU
+    /// path) silently ingests the contamination. In that two-cache setup use
+    /// [`write_k_at`] for the key cache and [`write_v_at`] for the value cache
+    /// instead.
     pub fn write_kv_at(&mut self, pos: usize, key: &[f16], value: &[f16]) -> Result<(), KvError> {
         if pos >= self.max_seq {
             return Err(KvError::SeqLenExceeded {
@@ -220,6 +234,58 @@ impl Kvcache {
             let v_start = head_stride * self.max_seq + head_stride * pos;
             let kv_len = self.num_kv_heads * self.head_dim;
             slice[k_start..(k_start + kv_len)].copy_from_slice(key);
+            slice[v_start..(v_start + kv_len)].copy_from_slice(value);
+        }
+        if pos + 1 > self.seq_len {
+            self.seq_len = pos + 1;
+        }
+        Ok(())
+    }
+
+    /// Write only the **K** row for `num_kv_heads` heads at position `pos`.
+    ///
+    /// `key` must have `num_kv_heads * head_dim` elements. Only the K region is
+    /// written; the V region is left untouched. Use this (rather than
+    /// [`write_kv_at`]) when K and V live in separate caches, so V is not
+    /// cross-contaminated into the key cache's V region. See
+    /// `kv_write_no_cross_contamination` for the invariant this guards.
+    pub fn write_k_at(&mut self, pos: usize, key: &[f16]) -> Result<(), KvError> {
+        if pos >= self.max_seq {
+            return Err(KvError::SeqLenExceeded {
+                current: pos,
+                max: self.max_seq,
+            });
+        }
+        let head_stride = self.num_heads * self.head_dim;
+        if let Some(slice) = self.buffer.as_mut_slice() {
+            let k_start = head_stride * pos;
+            let kv_len = self.num_kv_heads * self.head_dim;
+            slice[k_start..(k_start + kv_len)].copy_from_slice(key);
+        }
+        if pos + 1 > self.seq_len {
+            self.seq_len = pos + 1;
+        }
+        Ok(())
+    }
+
+    /// Write only the **V** row for `num_kv_heads` heads at position `pos`.
+    ///
+    /// `value` must have `num_kv_heads * head_dim` elements. Only the V region
+    /// is written; the K region is left untouched. Use this (rather than
+    /// [`write_kv_at`]) when K and V live in separate caches, so K is not
+    /// cross-contaminated into the value cache's K region. See
+    /// `kv_write_no_cross_contamination` for the invariant this guards.
+    pub fn write_v_at(&mut self, pos: usize, value: &[f16]) -> Result<(), KvError> {
+        if pos >= self.max_seq {
+            return Err(KvError::SeqLenExceeded {
+                current: pos,
+                max: self.max_seq,
+            });
+        }
+        let head_stride = self.num_heads * self.head_dim;
+        if let Some(slice) = self.buffer.as_mut_slice() {
+            let v_start = head_stride * self.max_seq + head_stride * pos;
+            let kv_len = self.num_kv_heads * self.head_dim;
             slice[v_start..(v_start + kv_len)].copy_from_slice(value);
         }
         if pos + 1 > self.seq_len {
@@ -472,4 +538,90 @@ pub enum KvError {
 
     #[error("resize failed: {reason}")]
     ResizeFailed { reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn halfs(values: &[f32]) -> Vec<f16> {
+        values.iter().map(|&v| f16::from_f32(v)).collect()
+    }
+
+    /// Regression test: the dispatch path stores K and V in **separate**
+    /// `Kvcache`s (one key cache + one value cache per layer) and must write
+    /// each tensor only into its own cache's own region.
+    ///
+    /// The bug this guards against: calling `write_kv_at(pos, &k_row, &v_row)`
+    /// on *both* caches (which writes K and V into *each* buffer) cross-
+    /// contaminates the key cache's V region with V and the value cache's K
+    /// region with K. Region-selective readers (the CPU fallback) never notice,
+    /// but whole-buffer readers (the GPU path) silently ingest the garbage.
+    ///
+    /// Invariant under test: after the dispatch-style write pattern,
+    ///   - key cache:   K region == K,  V region all zeros
+    ///   - value cache: K region all zeros, V region == V
+    #[test]
+    fn kv_write_no_cross_contamination() {
+        // Tiny GQA-shaped cache: 2 heads, 2 KV heads, head_dim 4, max_seq 8.
+        let num_heads = 2;
+        let num_kv_heads = 2;
+        let head_dim = 4;
+        let max_seq = 8;
+        let kv_len = num_kv_heads * head_dim; // 8
+
+        let mut key_cache = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, false);
+        let mut value_cache = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, false);
+
+        // Distinct, non-zero K and V rows so any bleed is detectable.
+        let k_row = halfs(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let v_row = halfs(&[9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
+
+        // The dispatch write pattern: K into the key cache, V into the value
+        // cache, each into its own region only.
+        key_cache.write_k_at(0, &k_row).expect("write_k_at(key)");
+        value_cache.write_v_at(0, &v_row).expect("write_v_at(value)");
+
+        let head_stride = num_heads * head_dim; // 8
+        let v_base = head_stride * max_seq; // 64
+
+        let kbuf = key_cache.buffer().as_slice().expect("host key buffer");
+        let vbuf = value_cache.buffer().as_slice().expect("host value buffer");
+
+        // Key cache: K region holds K.
+        assert!(
+            kbuf[..kv_len] == k_row[..],
+            "key cache K region must hold K"
+        );
+        // Key cache: V region must remain pristine (all zeros).
+        assert!(
+            (v_base..v_base + kv_len)
+                .all(|i| kbuf[i] == f16::from_f32(0.0)),
+            "key cache V region must stay zero — V leaked into the key cache"
+        );
+
+        // Value cache: V region holds V.
+        assert!(
+            vbuf[v_base..v_base + kv_len] == v_row[..],
+            "value cache V region must hold V"
+        );
+        // Value cache: K region must remain pristine (all zeros).
+        assert!(
+            (0..kv_len)
+                .all(|i| vbuf[i] == f16::from_f32(0.0)),
+            "value cache K region must stay zero — K leaked into the value cache"
+        );
+
+        // Sanity: the contaminated pattern (write_kv_at on both caches) must
+        // NOT be what the dispatch path does — document the failure mode.
+        let mut bad_key = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, false);
+        bad_key
+            .write_kv_at(0, &k_row, &v_row)
+            .expect("write_kv_at");
+        let bad_kbuf = bad_key.buffer().as_slice().expect("host buffer");
+        assert!(
+            bad_kbuf[v_base..v_base + kv_len] == v_row[..],
+            "write_kv_at on the key cache DOES contaminate its V region (the bug)"
+        );
+    }
 }

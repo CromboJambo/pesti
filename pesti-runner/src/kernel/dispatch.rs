@@ -771,8 +771,18 @@ impl AttentionDispatch {
                 .iter()
                 .map(|&v| half::f16::from_f32(v))
                 .collect();
-            key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err();
-            if value_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
+            // Write each tensor into its OWN cache's OWN region only.
+            // Do NOT use write_kv_at here: it writes K AND V into one buffer,
+            // and with separate key/value caches that cross-contaminates each
+            // cache's unused region (harmless to region-selective CPU readers,
+            // corrupting to whole-buffer GPU readers). See Kvcache::write_kv_at
+            // docs and the `kv_write_no_cross_contamination` regression test.
+            key_cache
+                .write_k_at(global_pos, &k_row)
+                .map_err(|e| DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}")))?;
+            value_cache
+                .write_v_at(global_pos, &v_row)
+                .map_err(|e| DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}")))?;
         }
 
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
@@ -1047,8 +1057,18 @@ impl AttentionDispatch {
                 .iter()
                 .map(|&val| half::f16::from_f32(val))
                 .collect();
-            key_cache.write_kv_at(global_pos, &k_row, &v_row).is_err();
-            if value_cache.write_kv_at(global_pos, &k_row, &v_row).is_err() {}
+            // Write each tensor into its OWN cache's OWN region only.
+            // Do NOT use write_kv_at here: it writes K AND V into one buffer,
+            // and with separate key/value caches that cross-contaminates each
+            // cache's unused region (harmless to region-selective CPU readers,
+            // corrupting to whole-buffer GPU readers). See Kvcache::write_kv_at
+            // docs and the `kv_write_no_cross_contamination` regression test.
+            key_cache
+                .write_k_at(global_pos, &k_row)
+                .map_err(|e| DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}")))?;
+            value_cache
+                .write_v_at(global_pos, &v_row)
+                .map_err(|e| DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}")))?;
         }
 
         // Extract K/V from cache for SDPA

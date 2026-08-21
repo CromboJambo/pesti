@@ -152,7 +152,7 @@ fn test_real_q4_k_m_from_corpus() {
     let q4k_tensors: Vec<_> = header
         .tensors
         .iter()
-        .filter(|t| t.dtype == GgufDtype::Q4K_M.to_u32())
+        .filter(|t| t.dtype == GgufDtype::Q4_K.to_u32())
         .collect();
 
     assert!(

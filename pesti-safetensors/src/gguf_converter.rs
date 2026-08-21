@@ -611,52 +611,47 @@ fn dequantize_tensor(
             let dequantized = dequantize_q8_0(raw_data, element_count)?;
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
-        GgufDtype::Q2K | GgufDtype::Q3K => {
+        GgufDtype::Q2_K | GgufDtype::Q3_K => {
             // Placeholder - would need full implementation
             Err(GgufConvertError::UnsupportedDtype(tensor.dtype))
         }
-        GgufDtype::Q4K | GgufDtype::Q4K_M | GgufDtype::Q4K_S => {
+        GgufDtype::Q4_K => {
             let dequantized = dequantize_q4_k(raw_data, element_count)?;
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
-        GgufDtype::Q5K | GgufDtype::Q5K_M | GgufDtype::Q5K_S => {
+        GgufDtype::Q5_K => {
             let dequantized = dequantize_q5_k(raw_data, element_count)?;
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
-        GgufDtype::Q6K | GgufDtype::Q6K_S => {
+        GgufDtype::Q6_K => {
             let dequantized = dequantize_q6_k(raw_data, element_count)?;
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
-        GgufDtype::Q8K | GgufDtype::Q8K_M => {
+        GgufDtype::Q8_K => {
             let dequantized = dequantize_q8_k(raw_data, element_count)?;
             Ok(dequantized.iter().flat_map(|v| v.to_le_bytes()).collect())
         }
         // Unsupported variants
         GgufDtype::Q5_0
         | GgufDtype::Q5_1
-        | GgufDtype::Q8_1
-        | GgufDtype::Q1K
-        | GgufDtype::Q2K_S
-        | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
+        | GgufDtype::Q8_1 => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
         // Catch-all for new IQ* quantization types and Unknown variants
         GgufDtype::Unknown(_)
         | GgufDtype::IQ2_XXS
         | GgufDtype::IQ2_XS
         | GgufDtype::IQ3_XXS
         | GgufDtype::IQ1_S
-        | GgufDtype::Q4_0_4_4
-        | GgufDtype::Q4_0_4_8
-        | GgufDtype::Q4_0_8_8
+        | GgufDtype::IQ4_NL
+        | GgufDtype::IQ3_S
+        | GgufDtype::IQ2_S
+        | GgufDtype::IQ4_XS
+        | GgufDtype::IQ1_M
         | GgufDtype::TQ1_0
         | GgufDtype::TQ2_0
-        | GgufDtype::IQ4NL_4_4
-        | GgufDtype::IQ4NL_4_8
-        | GgufDtype::IQ4NL_8_8
         | GgufDtype::MXFP4
         | GgufDtype::NVFP4
         | GgufDtype::Q1_0
-        | GgufDtype::Q2_0
-        | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
+        | GgufDtype::Q2_0 => Err(GgufConvertError::UnsupportedDtype(tensor.dtype)),
     }
 }
 
@@ -675,42 +670,31 @@ fn gguf_dtype_to_safetensors(gguf_dtype: GgufDtype) -> Result<Dtype, GgufConvert
         // Unsupported: K-family types without full dequantization
         GgufDtype::Q5_0
         | GgufDtype::Q5_1
-        | GgufDtype::Q8_1
-        | GgufDtype::Q1K
-        | GgufDtype::Q2K_S
-        | GgufDtype::Q3K_S => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
+        | GgufDtype::Q8_1 => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
         // K-family types with dequantization
-        GgufDtype::Q2K
-        | GgufDtype::Q3K
-        | GgufDtype::Q4K
-        | GgufDtype::Q4K_M
-        | GgufDtype::Q4K_S
-        | GgufDtype::Q5K
-        | GgufDtype::Q5K_M
-        | GgufDtype::Q5K_S
-        | GgufDtype::Q6K
-        | GgufDtype::Q6K_S
-        | GgufDtype::Q8K
-        | GgufDtype::Q8K_M => Ok(Dtype::F32),
+        GgufDtype::Q2_K
+        | GgufDtype::Q3_K
+        | GgufDtype::Q4_K
+        | GgufDtype::Q5_K
+        | GgufDtype::Q6_K
+        | GgufDtype::Q8_K => Ok(Dtype::F32),
         // Catch-all for new IQ* quantization types and Unknown variants
         GgufDtype::Unknown(_)
         | GgufDtype::IQ2_XXS
         | GgufDtype::IQ2_XS
         | GgufDtype::IQ3_XXS
         | GgufDtype::IQ1_S
-        | GgufDtype::Q4_0_4_4
-        | GgufDtype::Q4_0_4_8
-        | GgufDtype::Q4_0_8_8
+        | GgufDtype::IQ4_NL
+        | GgufDtype::IQ3_S
+        | GgufDtype::IQ2_S
+        | GgufDtype::IQ4_XS
+        | GgufDtype::IQ1_M
         | GgufDtype::TQ1_0
         | GgufDtype::TQ2_0
-        | GgufDtype::IQ4NL_4_4
-        | GgufDtype::IQ4NL_4_8
-        | GgufDtype::IQ4NL_8_8
         | GgufDtype::MXFP4
         | GgufDtype::NVFP4
         | GgufDtype::Q1_0
-        | GgufDtype::Q2_0
-        | GgufDtype::Q2K_M => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
+        | GgufDtype::Q2_0 => Err(GgufConvertError::UnsupportedDtype(gguf_dtype.to_u32())),
     }
 }
 
