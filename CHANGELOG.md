@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Date**: 2026-08-20  
 **Status**: ✅ Complete
 
+#### Cleanup Note (Aug 20, 2026)
+**- Removed 27 legacy debug/test artifacts** (debug_*.rs, hermes-*.rs, probe_*.rs)
+**- Kept only Week 15 diagnostic probes** (coherence_check.rs, probe_input_dep.rs, probe_layer_diff.rs)
+**- Reduced examples from 120 → 93 files** (-2,288 lines of code)
+**- Purpose**: Compress and declutter without hiding mistakes — all removed artifacts were obsolete probes
+
 ---
 
 ## [0.1.6] - 2026-08-16 (In Progress)
