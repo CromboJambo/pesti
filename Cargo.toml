@@ -6,7 +6,7 @@ members = [
     "pesti-gguf-cli",
     "crates/qwen2-bpe",
 ]
-exclude = ["test_ggml_quants", "cuda-oxide"]
+exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"
 
 [workspace.lints.rust]
