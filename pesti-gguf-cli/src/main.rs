@@ -19,6 +19,10 @@ struct Args {
     /// Extract a specific tensor as raw bytes (hex dump first 64 bytes)
     #[arg(short, long)]
     extract: Option<String>,
+
+    /// Dump the full parsed header as JSON (for conformance comparison)
+    #[arg(long, default_value_t = false)]
+    json: bool,
 }
 
 fn main() {
@@ -41,6 +45,46 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // JSON dump: full parsed header, for conformance comparison against
+    // independent implementations (python gguf, llama-gguf).
+    // Adds per-tensor stored_size so comparisons can check dtype/block math
+    // per tensor, not just the corpus-wide sum.
+    if args.json {
+        let mut out = serde_json::Map::new();
+        match serde_json::to_value(&header) {
+            Ok(v) => {
+                if let serde_json::Value::Object(map) = v {
+                    out = map;
+                }
+            }
+            Err(e) => {
+                eprintln!("error: failed to serialize header: {e}");
+                std::process::exit(1);
+            }
+        }
+        let stored: Vec<serde_json::Value> = header
+            .tensors
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "stored_size": t.stored_size().map_err(|e| e.to_string()).ok(),
+                })
+            })
+            .collect();
+        out.insert("tensors_stored_size".to_string(), serde_json::Value::Array(stored));
+        match serde_json::to_string_pretty(&out) {
+            Ok(json) => {
+                println!("{json}");
+                return;
+            }
+            Err(e) => {
+                eprintln!("error: failed to serialize header: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     // Print header summary
     println!("GGUF v{}", header.version);
@@ -177,6 +221,7 @@ mod tests {
             gguf_path: PathBuf::from("/tmp/test.gguf"),
             tensors_only: false,
             extract: None,
+            json: false,
         };
         let debug_str = format!("{:?}", args);
         assert!(debug_str.contains("gguf_path"));
@@ -190,11 +235,13 @@ mod tests {
             gguf_path: PathBuf::from("/tmp/test.gguf"),
             tensors_only: true,
             extract: Some("tensor1".to_string()),
+            json: false,
         };
         let cloned = Args {
             gguf_path: args.gguf_path.clone(),
             tensors_only: args.tensors_only,
             extract: args.extract.clone(),
+            json: false,
         };
         assert_eq!(cloned.tensors_only, true);
         assert_eq!(cloned.extract, Some("tensor1".to_string()));
@@ -206,6 +253,7 @@ mod tests {
             gguf_path: PathBuf::from("/nonexistent/path/that/does/not/exist.gguf"),
             tensors_only: false,
             extract: None,
+            json: false,
         };
         assert!(!args.gguf_path.exists());
     }
@@ -216,6 +264,7 @@ mod tests {
             gguf_path: PathBuf::from("/tmp"),
             tensors_only: false,
             extract: None,
+            json: false,
         };
         assert!(args.gguf_path.exists());
     }

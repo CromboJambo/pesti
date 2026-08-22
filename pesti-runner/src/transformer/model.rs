@@ -1324,6 +1324,13 @@ impl LlamaModel {
                 &mut key_caches[layer_idx],
                 &mut value_caches[layer_idx],
             )?;
+
+            // DEBUG: per-layer hidden dump for conformance triage.
+            if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
+                let norm: f32 = h.iter().map(|v| v * v).sum::<f32>().sqrt();
+                let head: Vec<String> = h.iter().take(8).map(|v| format!("{v:.3}")).collect();
+                eprintln!("[HIDDEN] layer={layer_idx} start_pos={start_pos} norm={norm:.4} head=[{}] {}", head.join(","), if start_pos == 0 { "(embed)" } else { "" });
+            }
         }
 
         // Apply final norm for architectures that have it (qwen2/qwen3)
@@ -1331,21 +1338,39 @@ impl LlamaModel {
             h = norm.forward(&h, 1);
         }
 
+        // DEBUG: dump pre-head hidden state when PESTI_DEBUG_HIDDEN is set.
+        if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
+            let norm: f32 = h.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let head: Vec<String> = h.iter().take(8).map(|v| format!("{v:.3}")).collect();
+            eprintln!(
+                "[HIDDEN] start_pos={start_pos} norm={norm:.4} head=[{}]",
+                head.join(",")
+            );
+        }
+
         // Output head projection: hidden → logits via GEMM
         let output = self.output.as_ref().ok_or_else(|| {
-            RunnerError::ModelLoad("missing output layer for GPU forward".to_string())
+            RunnerError::ModelLoad("missing output layer for GPU forward".into())
         })?;
 
-        // Use dispatch's GEMM kernel to compute: logits = h @ output.weight.T
+        // Use dispatch's GEMM kernel to compute: logits = h @ output.weight
         // A: [1, hidden] (single token), B: [hidden, vocab_size], C: [1, vocab_size]
         let alpha = 1.0f32;
         let beta = 0.0f32;
 
-        // Convert weights to f16 for dispatch_gemm_cpu fallback (or GPU if available)
-        let output_f16: Vec<half::f16> = output
-            .weight
-            .iter()
-            .map(|&v| half::f16::from_f32(v))
+        // The output weight is stored [vocab, hidden] row-major (GGUF layout:
+        // token_embd ne=[hidden, vocab], ne[0] fastest). dispatch_gemm_cpu
+        // expects B as [k=hidden, n=vocab], so transpose it: B[k, v] = W[v, k].
+        // (The CPU fallback Linear::forward reads W[v, k] directly and is
+        // correct; this dispatch path previously fed the un-transposed buffer
+        // and computed a scrambled projection.)
+        let vocab = self.vocab_size as usize;
+        let hidden = self.config.embed_dim as usize;
+        let weight = &output.weight;
+        let output_f16: Vec<half::f16> = (0..hidden)
+            .flat_map(|k| {
+                (0..vocab).map(move |v| half::f16::from_f32(weight[v * hidden + k]))
+            })
             .collect();
 
         // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
@@ -1361,6 +1386,18 @@ impl LlamaModel {
             alpha,
             beta,
         )?;
+
+        // DEBUG: dump top-5 logits when PESTI_DEBUG_HIDDEN is set.
+        if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
+            let mut top: Vec<(usize, f32)> = logits_vec.iter().cloned().enumerate().collect();
+            top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let top_str: Vec<String> = top
+                .iter()
+                .take(5)
+                .map(|(i, v)| format!("{i}={v:.2}"))
+                .collect();
+            eprintln!("[LOGITS] start_pos={start_pos} top5=[{}]", top_str.join(" "));
+        }
 
         Ok(logits_vec)
     }

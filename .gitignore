@@ -23,6 +23,9 @@ models
 projects/
 state-docs/
 conformance-corpus/*.gguf
+# Compiled conformance oracles (rebuild with `cc -O2 -o oracle oracle.c`)
+conformance-corpus/oracle
+conformance-corpus/oracle_dbg
 test_models/*.gguf
 pesti-conformance/test-corpus/tiny-model.gguf
 lms-models/
