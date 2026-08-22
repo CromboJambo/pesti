@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt_tokens: Vec<u32> = if let Some(ref tok) = model.tokenizer {
         println!(
             "Loaded real GGUF tokenizer with {} tokens",
-            model.tokenizer_config.as_ref().map(|c| c.base_vocab_size).unwrap_or(0)
+            model.tokenizer_config.as_ref().map(|c| c.vocab_size).unwrap_or(0)
         );
 
         // Tokenize prompt
@@ -113,3 +113,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}

@@ -209,17 +209,34 @@ impl DispatchContext {
     }
 
     /// Create from an existing inference engine.
-    pub fn from_engine(engine: InferenceEngine) -> Self {
+    pub fn from_engine(mut engine: InferenceEngine) -> Self {
         let prefer_gpu = engine.gpu_available();
+        tracing::info!(gpu = %prefer_gpu, "DispatchContext::from_engine initialized");
+
+        // Build a proper memory backend that matches the engine's GPU/CPU state
+        let memory = Self::build_memory_from_engine(&engine);
+
         Self {
             engine,
-            memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
-                1024 * 1024,
-            )),
+            memory,
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
         }
+    }
+
+    /// Build memory manager from an existing engine (mirrors build_memory logic).
+    fn build_memory_from_engine(engine: &InferenceEngine) -> MemoryManager {
+        #[cfg(feature = "cuda")]
+        {
+            if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
+                return MemoryManager::Cuda(crate::kernel::memory::CudaMemoryBackend::with_device_info(
+                    stream.clone(),
+                    info.clone(),
+                ));
+            }
+        }
+        MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024))
     }
 
     /// Whether GPU path is preferred.

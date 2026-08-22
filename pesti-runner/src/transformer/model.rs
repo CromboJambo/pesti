@@ -1359,8 +1359,8 @@ impl LlamaModel {
         let beta = 0.0f32;
 
         // The output weight is stored [vocab, hidden] row-major (GGUF layout:
-        // token_embd ne=[hidden, vocab], ne[0] fastest). dispatch_gemm_cpu
-        // expects B as [k=hidden, n=vocab], so transpose it: B[k, v] = W[v, k].
+        // token_embd ne=[hidden, vocab], ne[0] fastest). dispatch_gemm expects B as
+        // [k=hidden, n=vocab], so transpose it: B[k, v] = W[v, k].
         // (The CPU fallback Linear::forward reads W[v, k] directly and is
         // correct; this dispatch path previously fed the un-transposed buffer
         // and computed a scrambled projection.)
@@ -1374,7 +1374,8 @@ impl LlamaModel {
             .collect();
 
         // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
-        let logits_vec = ctx.dispatch_gemm_cpu(
+        // Use dispatch_gemm (auto-selects GPU when available) instead of dispatch_gemm_cpu
+        let logits_vec = ctx.dispatch_gemm(
             &h.iter()
                 .map(|&v| half::f16::from_f32(v))
                 .collect::<Vec<half::f16>>(),
