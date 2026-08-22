@@ -1,6 +1,6 @@
 //! Debug tokenizer loading and encoding with mistral.rs.
 
-use pesti_runner::transformer::tokenizer::{load_tokenizer_from_gguf, GgufTokenizerConfig};
+use pesti_runner::transformer::tokenizer::{load_tokenizer_from_gguf, GgufTokenizerConfig, TokenizerBackend};
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -8,24 +8,23 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("Loading tokenizer from GGUF...");
     
-    let (config, tokenizer) = load_tokenizer_from_gguf(model_path)?;
+    let (config, tokenizer) = load_tokenizer_from_gguf(model_path, TokenizerBackend::MistralRs)?;
 
     println!("✅ Tokenizer loaded successfully!");
-    println!("Model type: {}", config.tokenizer_model);
-    println!("Base vocab size: {} ✅", config.base_vocab_size);
-    println!("Special tokens: {} ✅", config.num_special_tokens);
+    println!("Vocab size: {} ✅", config.vocab_size);
+    println!("BOS token ID: {:?}", config.bos_token_id);
+    println!("EOS token ID: {:?}", config.eos_token_id);
 
     // Test encoding - use the raw tokenizer directly
     let test_text = "Hello, world!";
-    let encoding = tokenizer.encode(test_text, false)?;
-    let tokens = encoding.get_ids().to_vec();
+    let tokens = tokenizer.encode(test_text)?;
     
     println!("\n⚠️ WARNING: {} tokens for '{}'", tokens.len(), test_text);
     println!("✅ Token count: {} ✅", tokens.len());
     println!("Tokens: {:?}", tokens);
 
     // Test decoding
-    let decoded = tokenizer.decode(&tokens, false)?;
+    let decoded = tokenizer.decode(&tokens)?;
     println!("Decoded: {}", decoded);
 
     Ok(())
