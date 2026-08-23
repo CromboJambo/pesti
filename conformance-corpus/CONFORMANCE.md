@@ -97,6 +97,69 @@ cargo test -p pesti-gguf --lib parser::tests_real_file
 cargo tarpaulin --out Html --package pesti-gguf
 ```
 
+## 24-Layer Forward Conformance (Qwen2.5-0.5B)
+
+pesti's full forward pass (all 24 transformer layers + final norm + output head)
+was verified against an independent pure-numpy float32 reference
+(`ref_forward.py`) on `qwen2.5-0.5b-instruct-q4_k_m.gguf`.
+
+**Tooling** (all in this directory + `pesti-runner/examples/`):
+
+| Tool | Side | Role |
+|------|------|------|
+| `pesti-runner/examples/dump_all_layers.rs` | Rust | Runs pesti's CPU forward path; dumps per-layer hidden states (head-8 + norm) and, with `--dump DIR`, the full 896-dim vectors + full logits as raw f32 |
+| `ref_forward.py` | numpy | Independent Qwen2 forward oracle; prints per-layer norm + head-8, top-8, argmax |
+| `probe_all_layers.py` | numpy | All-layer generalization of `probe_layer0.py`; saves full per-layer vectors + `manifest.json` for full-vector diffing |
+| `compare_all_layers.py` | diff | Parses both text outputs; per-layer norm/head delta + top-8 + argmax verdict |
+| `compare_full_vectors.py` | diff | Compares **all 896 dims** per layer (not just head-8) + full logits |
+
+**Reproduce:**
+```bash
+MODEL=conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf
+
+# 1. numpy reference (head-8 + norm + top-8 + argmax)
+python3 conformance-corpus/ref_forward.py "$MODEL" > /tmp/ref_all_layers.txt
+
+# 2. Rust dumper (same grammar)
+cargo build -p pesti-runner --release --features cuda --example dump_all_layers
+./target/release/examples/dump_all_layers "$MODEL" > /tmp/rust_all_layers.txt
+
+# 3. head-8/norm/top-8/argmax diff
+python3 conformance-corpus/compare_all_layers.py /tmp/rust_all_layers.txt /tmp/ref_all_layers.txt --tol=1e-3
+
+# 4. gold-standard full-vector diff (all 896 dims x 24 layers + full logits)
+python3 conformance-corpus/probe_all_layers.py "$MODEL" --out /tmp/probe_all_layers
+./target/release/examples/dump_all_layers --dump /tmp/rust_probe "$MODEL"
+python3 conformance-corpus/compare_full_vectors.py /tmp/rust_probe /tmp/probe_all_layers --tol=1e-3
+```
+
+**Result (2026-08-22, Q4_K_M, 10-token "fox" prompt, last position):**
+
+| Check | Rust (pesti) | numpy (ref) | Verdict |
+|-------|--------------|-------------|---------|
+| All 24 layer norms | e.g. L0 3.8732 … L23 50.5135 | L0 3.8731 … L23 50.5135 | max Δ 1e-4 ✅ |
+| All 24 layer head-8 | — | — | max Δ 5e-4 ✅ |
+| Pre-head norm | 298.7678 | 298.7678 | Δ 0 ✅ |
+| Top-8 token ids | `[220, 1416, 3555, 2585, 1096, 576, 758, 715]` | identical | ✅ |
+| Argmax | 220 | 220 | ✅ |
+| **Full-vector (896 d × 24 L)** | — | — | max Δ 7.6e-5, corr 1.000000, normratio 1.000000 ✅ |
+| **Full logits (151,936 d)** | — | — | max Δ 7.0e-5, corr 1.000000 ✅ |
+
+**VERDICT: PASS** — pesti's full 24-layer forward pass is numerically
+conformant with the independent numpy reference to within f32 accumulation
+order (per-layer deltas 1e-5…1e-4, correlation 1.000000, norm ratio 1.000000).
+The sub-1e-3 deltas are the expected difference between pesti's Rust Q4_K
+dequant/accumulation order and gguf's numpy dequant/accumulation order.
+
+**Wiring verified correct** (these were the historical bug sites, now
+conformant end-to-end):
+- QKV **bias** applied (`attn_q/k/v.bias`) — `transformer/layer.rs`
+- **SwiGLU** = `silu(gate) * up` (sigmoid-based SiLU, not silu²) — `transformer/layer.rs`
+- **RoPE** at the true token position (half-split, `rope_base=1e6`) — `transformer/layer.rs`
+- **GQA** (`n_head=14`, `n_head_kv=2`) — each q head maps to kv head `h // 7`
+
+---
+
 ## Future Conformance Tests
 
 - [ ] **Llama 3** - Test against Llama 3.1 8B/70B models
