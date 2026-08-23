@@ -619,6 +619,12 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             let ql_base = chunk * 64;
             let qh_base = chunk * 32;
             let sc_base = chunk * 8;
+            let chunk_start = chunk * 128;
+            // ggml writes y[l], y[l+32], y[l+64], y[l+96] per l — i.e. each
+            // 128-elem chunk is laid out as q1[0..32], q2[0..32], q3[0..32],
+            // q4[0..32]. Fill a buffer by index, then emit in order (the old
+            // code pushed q1,q2,q3,q4 per l, scrambling element order).
+            let mut buf = [0.0f32; 128];
             for l in 0..32 {
                 let is = l / 16;
                 let q1 = ((ql[ql_base + l] & 0x0F) | (((qh[qh_base + l] >> 0) & 0x03) << 4)) as i8 - 32;
@@ -629,18 +635,18 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
                 let s2 = scales[sc_base + is + 2] as i8 as f32;
                 let s4 = scales[sc_base + is + 4] as i8 as f32;
                 let s6 = scales[sc_base + is + 6] as i8 as f32;
-                if chunk * 128 + l < limit {
-                    out.push(d * s0 * q1 as f32);
-                }
-                if chunk * 128 + 32 + l < limit {
-                    out.push(d * s2 * q2 as f32);
-                }
-                if chunk * 128 + 64 + l < limit {
-                    out.push(d * s4 * q3 as f32);
-                }
-                if chunk * 128 + 96 + l < limit {
-                    out.push(d * s6 * q4 as f32);
-                }
+                buf[l] = d * s0 * q1 as f32;
+                buf[l + 32] = d * s2 * q2 as f32;
+                buf[l + 64] = d * s4 * q3 as f32;
+                buf[l + 96] = d * s6 * q4 as f32;
+            }
+            let take = if limit > chunk_start {
+                (limit - chunk_start).min(128)
+            } else {
+                0
+            };
+            for v in buf.iter().take(take) {
+                out.push(*v);
             }
         }
     };

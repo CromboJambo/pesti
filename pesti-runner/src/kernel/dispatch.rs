@@ -348,15 +348,22 @@ impl DispatchContext {
         let mut c_host = vec![0.0f32; c_len];
         let c_bytes_out: &mut [u8] =
             unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
-        if let Err(e) = self.memory.d2h(c_handle, c_bytes_out) {
-            warn!(error = %e, "GEMM dispatch: D2H failed, using zero output");
-            return Ok(c_host);
+        let d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
+        if !d2h_ok {
+            warn!("GEMM dispatch: D2H failed, using zero output");
         }
 
         // Sync after async D2H to ensure data is ready
         if let Err(e) = self.memory.sync() {
             warn!(error = %e, "GEMM dispatch: sync failed, returning partial result");
         }
+
+        // Free device buffers. `RawHandle` has no Drop, so every GEMM call
+        // leaked A+B+C (~1 GB for the output head) — the source of the
+        // CUDA_ERROR_OUT_OF_MEMORY during multi-token generation.
+        let _ = self.memory.free(a_handle);
+        let _ = self.memory.free(b_handle);
+        let _ = self.memory.free(c_handle);
 
         Ok(c_host)
     }
@@ -1248,10 +1255,15 @@ impl FeedForwardDispatch {
 fn swiglu_dispatch(x: &[f32], y: &[f32], size: usize) -> Vec<f32> {
     let mut output = vec![0.0f32; size];
     for i in 0..size {
+        // sigmoid(x), numerically stable:
+        //   x >= 0 : 1 / (1 + e^{-x})
+        //   x <  0 : e^{x} / (1 + e^{x})
+        // (The previous else branch computed silu(x) instead of sigmoid(x),
+        // corrupting output[i] = x^2*sigmoid(x)*y for x<0.)
         let sigmoid = if x[i] >= 0.0 {
             1.0 / (1.0 + (-x[i]).exp())
         } else {
-            x[i] / (1.0 + x[i].exp())
+            x[i].exp() / (1.0 + x[i].exp())
         };
         output[i] = sigmoid * x[i] * y[i];
     }

@@ -5,7 +5,7 @@
 //!   x = x + ffn(RMSNorm(x), W1, W2, W3)
 //!
 //! FFN uses SwiGLU: gate = x @ W1^T, up = x @ W3^T,
-//!   output = silu(gate) * (up @ W2^T)
+//!   output = (silu(gate) * up) @ W2^T
 
 use crate::transformer::kv_cache::LayerKvCache;
 use crate::transformer::linear::Linear;
@@ -28,10 +28,15 @@ fn swiglu(x: &[f32], y: &[f32], size: usize) -> Vec<f32> {
     );
     let mut output = vec![0.0f32; size];
     for i in 0..size {
+        // sigmoid(x), numerically stable:
+        //   x >= 0 : 1 / (1 + e^{-x})
+        //   x <  0 : e^{x} / (1 + e^{x})   (== 1/(1+e^{-x}), avoids e^{-x} overflow)
+        // The previous else branch computed x/(1+e^{x}) == silu(x), NOT sigmoid(x);
+        // it was then multiplied by x again, giving x^2*sigmoid(x)*y for x<0.
         let sigmoid = if x[i] >= 0.0 {
             1.0 / (1.0 + (-x[i]).exp())
         } else {
-            x[i] / (1.0 + x[i].exp())
+            x[i].exp() / (1.0 + x[i].exp())
         };
         output[i] = sigmoid * x[i] * y[i];
     }
@@ -279,7 +284,7 @@ impl FeedForward {
         }
     }
 
-    /// Forward pass: silu(x @ W1^T) * (x @ W3^T) @ W2^T
+    /// Forward pass: (silu(x @ W1^T) * (x @ W3^T)) @ W2^T
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let gate = self.w1.forward(x, batch_size);
         let up = self.w3.forward(x, batch_size);

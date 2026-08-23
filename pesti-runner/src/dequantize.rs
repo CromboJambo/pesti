@@ -182,9 +182,14 @@ fn f16_to_f32_le(val: u16) -> f32 {
 /// Q5_0 format: 32 elements per block, 22 bytes per block.
 /// Layout (llama.cpp `block_q5_0`, `sizeof == ggml_half + uint32_t + QK5_0/2`):
 ///   - 2 bytes : f16 scale `d`
-///   - 4 bytes : `qh` — 16 high bits, one per element (bit j = element j's 5th bit)
-///   - 16 bytes: `qs` — 4 low bits per element (nibble-packed)
-/// Dequantized value = d * ((qs_low | qh_bit) - 16).
+///   - 4 bytes : `qh` — 32-bit mask, bit i = element i's 5th bit (in element order)
+///   - 16 bytes: `qs` — low 4 bits, INTERLEAVED: byte j holds element j (low nibble)
+///                and element j+16 (high nibble). NOT sequential nibble packing.
+/// Dequantized value = d * ((nibble | qh_bit) - 16), where for element i:
+///   - i < 16  : nibble = qs[i] & 0x0F
+///   - i >= 16 : nibble = qs[i-16] >> 4
+///   - always  : qh_bit = i
+/// (mirrors ggml `dequantize_row_q5_0`)
 pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 32;
     let remaining = element_count % 32;
@@ -214,7 +219,7 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         let scale_f16 = data[base] as u16 | (data[base + 1] as u16) << 8;
         let scale = f16_to_f32_le(scale_f16);
 
-        // 16 high bits, one per element (little-endian u32)
+        // 16 high bits (bit j = element j, bit j+12 = element j+16), little-endian u32
         let qh = u32::from_le_bytes([
             data[base + 2],
             data[base + 3],
@@ -222,9 +227,18 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             data[base + 5],
         ]);
 
-        // 32 elements: low 4 bits from qs, high bit from qh, centered at -16
+        // 32 elements in OUTPUT order. Interleaved nibble layout: element i<16
+        // comes from the low nibble of qs[i]; element i>=16 from the high nibble
+        // of qs[i-16]. The 5th bit of element i is ALWAYS qh bit i (qh is a
+        // 32-bit mask, one bit per element in order) — mirrors ggml
+        // dequantize_row_q5_0 (xh_0 = (qh>>j)<<4&0x10, xh_1 = (qh>>(j+12))&0x10).
         for i in 0..32usize {
-            let low = (data[base + 6 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let (qs_byte, shift) = if i < 16 {
+                (data[base + 6 + i], 0u8)
+            } else {
+                (data[base + 6 + (i - 16)], 4u8)
+            };
+            let low = (qs_byte >> shift) & 0x0F;
             let high = (((qh >> i) & 1) << 4) as u8;
             let q = ((low | high) as i32) - 16;
             result.push(scale * q as f32);
@@ -243,9 +257,17 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             data[base + 5],
         ]);
 
+        // Interleaved layout: element i < 16 from low nibble of qs[i],
+        // element i >= 16 from high nibble of qs[i-16]. 5th bit of element i
+        // is always qh bit i.
         let elems_in_block = remaining.min(32);
         for i in 0..elems_in_block {
-            let low = (data[base + 6 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let (qs_byte, shift) = if i < 16 {
+                (data[base + 6 + i], 0u8)
+            } else {
+                (data[base + 6 + (i - 16)], 4u8)
+            };
+            let low = (qs_byte >> shift) & 0x0F;
             let high = (((qh >> i) & 1) << 4) as u8;
             let q = ((low | high) as i32) - 16;
             result.push(scale * q as f32);
@@ -261,9 +283,14 @@ pub fn dequantize_q5_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 /// Layout (llama.cpp `block_q5_1`, `sizeof == 2*ggml_half + uint32_t + QK5_1/2`):
 ///   - 2 bytes : f16 scale `d`
 ///   - 2 bytes : f16 min `m`
-///   - 4 bytes : `qh` — 16 high bits (bit j = element j's 5th bit)
-///   - 16 bytes: `qs` — 4 low bits per element (nibble-packed)
-/// Dequantized value = d * ((qs_low | qh_bit) - 16) + m.
+///   - 4 bytes : `qh` — 32-bit mask, bit i = element i's 5th bit (in element order)
+///   - 16 bytes: `qs` — low 4 bits, INTERLEAVED: byte j holds element j (low nibble)
+///                and element j+16 (high nibble). NOT sequential nibble packing.
+/// Dequantized value = d * ((nibble | qh_bit) - 16) + m, where for element i:
+///   - i < 16  : nibble = qs[i] & 0x0F
+///   - i >= 16 : nibble = qs[i-16] >> 4
+///   - always  : qh_bit = i
+/// (mirrors ggml `dequantize_row_q5_1`)
 pub fn dequantize_q5_1(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let num_full_blocks = element_count / 32;
     let remaining = element_count % 32;
@@ -303,9 +330,18 @@ pub fn dequantize_q5_1(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             data[base + 7],
         ]);
 
-        // 32 elements: low 4 bits from qs, high bit from qh, centered at -16
+        // 32 elements in OUTPUT order. Interleaved nibble layout (mirrors ggml
+        // dequantize_row_q5_1, identical to Q5_0 but with an f16 min added):
+        // element i<16 = low nibble of qs[i]; element i>=16 = high nibble of
+        // qs[i-16]. The 5th bit of element i is ALWAYS qh bit i (qh is a
+        // 32-bit mask, one bit per element in order).
         for i in 0..32usize {
-            let low = (data[base + 8 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let (qs_byte, shift) = if i < 16 {
+                (data[base + 8 + i], 0u8)
+            } else {
+                (data[base + 8 + (i - 16)], 4u8)
+            };
+            let low = (qs_byte >> shift) & 0x0F;
             let high = (((qh >> i) & 1) << 4) as u8;
             let q = ((low | high) as i32) - 16;
             result.push(d * q as f32 + m);
@@ -328,7 +364,12 @@ pub fn dequantize_q5_1(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 
         let elems_in_block = remaining.min(32);
         for i in 0..elems_in_block {
-            let low = (data[base + 8 + i / 2] >> (4 * (i & 1))) & 0x0F;
+            let (qs_byte, shift) = if i < 16 {
+                (data[base + 8 + i], 0u8)
+            } else {
+                (data[base + 8 + (i - 16)], 4u8)
+            };
+            let low = (qs_byte >> shift) & 0x0F;
             let high = (((qh >> i) & 1) << 4) as u8;
             let q = ((low | high) as i32) - 16;
             result.push(d * q as f32 + m);
