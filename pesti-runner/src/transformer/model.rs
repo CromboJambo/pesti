@@ -712,14 +712,29 @@ impl LlamaModel {
                 let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
                 (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
             };
+        // Attention biases. Qwen2/Qwen3 carry `attn_q/k/v.bias`; Llama, Gemma and
+        // the llama-style default do not, so the lookups simply return None there.
+        // Linear::forward adds bias[o] to every output row, which is exactly how
+        // the GGUF QKV bias is applied.
+        let parse_bias = |name: String| -> Option<Vec<f32>> {
+            weights.tensors.get(&name).map(|b| {
+                b.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect()
+            })
+        };
+        let q_bias = parse_bias(format!("{prefix}attn_q.bias"));
+        let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
+        let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
+
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
-        let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
+        let wq = Linear::from_f32_weight_with_dims(wq_data, q_bias, wq_in, wq_out);
 
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
-        let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
+        let wk = Linear::from_f32_weight_with_dims(wk_data, k_bias, wk_in, wk_out);
 
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
-        let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
+        let wv = Linear::from_f32_weight_with_dims(wv_data, v_bias, wv_in, wv_out);
 
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
@@ -958,14 +973,29 @@ impl LlamaModel {
                 let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
                 (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
             };
+        // Attention biases. Qwen2/Qwen3 carry `attn_q/k/v.bias`; Llama, Gemma and
+        // the llama-style default do not, so the lookups simply return None there.
+        // Linear::forward adds bias[o] to every output row, which is exactly how
+        // the GGUF QKV bias is applied.
+        let parse_bias = |name: String| -> Option<Vec<f32>> {
+            weights.tensors.get(&name).map(|b| {
+                b.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect()
+            })
+        };
+        let q_bias = parse_bias(format!("{prefix}attn_q.bias"));
+        let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
+        let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
+
         eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
-        let wq = Linear::from_f32_weight_with_dims(wq_data, None, wq_in, wq_out);
+        let wq = Linear::from_f32_weight_with_dims(wq_data, q_bias, wq_in, wq_out);
 
         eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
-        let wk = Linear::from_f32_weight_with_dims(wk_data, None, wk_in, wk_out);
+        let wk = Linear::from_f32_weight_with_dims(wk_data, k_bias, wk_in, wk_out);
 
         eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
-        let wv = Linear::from_f32_weight_with_dims(wv_data, None, wv_in, wv_out);
+        let wv = Linear::from_f32_weight_with_dims(wv_data, v_bias, wv_in, wv_out);
 
         eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
@@ -1186,16 +1216,22 @@ impl LlamaModel {
         if start_pos == 0 {
             println!("[DEBUG] forward_with_dispatch called with GPU available: {}", ctx.gpu_available());
         }
+        // Initialize GPU KV caches on first call.
+        // `PESTI_KV_MAX_SEQ` caps the allocation for testing on shared GPUs.
+        let kv_max_seq = std::env::var("PESTI_KV_MAX_SEQ")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(self.config.max_seq_len)
+            + 1; // +1 to handle edge case where we generate exactly max_seq_len tokens
         if self.kv_caches.is_none() {
             let mut key_caches = Vec::with_capacity(self.config.num_layers);
             let mut value_caches = Vec::with_capacity(self.config.num_layers);
             for _ in 0..self.config.num_layers {
-                // Allocate KV cache with +1 to handle edge case where we generate exactly max_seq_len tokens
                 let key_cache = Kvcache::new(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
-                    self.config.max_seq_len + 1,
+                    kv_max_seq,
                     if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
                         true
                     } else {
@@ -1206,7 +1242,7 @@ impl LlamaModel {
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
-                    self.config.max_seq_len + 1,
+                    kv_max_seq,
                     if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
                         true
                     } else {
@@ -1230,6 +1266,13 @@ impl LlamaModel {
                   start_pos, key_caches[0].seq_len());
 
         let mut h = hidden.to_vec();
+
+        // DEBUG: dump the input (embedding) hidden state for conformance triage.
+        if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
+            let norm: f32 = h.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let head: Vec<String> = h.iter().take(8).map(|v| format!("{v:.3}")).collect();
+            eprintln!("[EMB] start_pos={start_pos} norm={norm:.4} head=[{}]", head.join(","));
+        }
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             // Build LayerDispatch from this layer's weights

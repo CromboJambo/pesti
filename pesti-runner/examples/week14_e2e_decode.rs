@@ -34,10 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tokenizer_config, tokenizer) =
         pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
     println!(
-        "Loaded tokenizer; model_type={}, base_vocab={}, special_tokens={}",
-        tokenizer_config.tokenizer_model,
-        tokenizer_config.base_vocab_size,
-        tokenizer_config.num_special_tokens
+        "Loaded tokenizer; vocab_size={}, bos={:?}, eos={:?}",
+        tokenizer_config.vocab_size,
+        tokenizer_config.bos_token_id,
+        tokenizer_config.eos_token_id
     );
 
     let prompt = "The quick brown fox jumps over the lazy dog.";
