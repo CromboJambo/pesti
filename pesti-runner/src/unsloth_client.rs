@@ -8,8 +8,9 @@
 //! - Recipe workflow graph structures (data-recipe/jobs)
 //! - Blocking HTTP client (sync API)
 //!
-//! Usage:
-//! ```rust,no_run
+//! Usage (illustrative — requires a live Unsloth Studio server; see the
+//! `unsloth_client_example` binary for a runnable version):
+//! ```rust,ignore
 //! let client = UnslothClient::new("http://localhost:8888");
 //!
 //! let config = ModelConfig {

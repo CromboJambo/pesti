@@ -10,9 +10,10 @@
 //! - **State**: Training state management (epochs, steps, metrics)
 //! - **Config**: High-level configuration for training runs
 //!
-//! ## Example Usage
+//! ## Example Usage (illustrative — `model`, `adapter`, and the datasets are
+//! placeholders; see `tests/trl_training_tests.rs` for a runnable version):
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pesti_runner::trl::{Trainer, TrainingConfig, State};
 //! use pesti_runner::peft::{Adapter, LoRAAdapter};
 //!
