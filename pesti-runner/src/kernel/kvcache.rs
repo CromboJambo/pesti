@@ -580,7 +580,9 @@ mod tests {
         // The dispatch write pattern: K into the key cache, V into the value
         // cache, each into its own region only.
         key_cache.write_k_at(0, &k_row).expect("write_k_at(key)");
-        value_cache.write_v_at(0, &v_row).expect("write_v_at(value)");
+        value_cache
+            .write_v_at(0, &v_row)
+            .expect("write_v_at(value)");
 
         let head_stride = num_heads * head_dim; // 8
         let v_base = head_stride * max_seq; // 64
@@ -595,8 +597,7 @@ mod tests {
         );
         // Key cache: V region must remain pristine (all zeros).
         assert!(
-            (v_base..v_base + kv_len)
-                .all(|i| kbuf[i] == f16::from_f32(0.0)),
+            (v_base..v_base + kv_len).all(|i| kbuf[i] == f16::from_f32(0.0)),
             "key cache V region must stay zero — V leaked into the key cache"
         );
 
@@ -607,17 +608,14 @@ mod tests {
         );
         // Value cache: K region must remain pristine (all zeros).
         assert!(
-            (0..kv_len)
-                .all(|i| vbuf[i] == f16::from_f32(0.0)),
+            (0..kv_len).all(|i| vbuf[i] == f16::from_f32(0.0)),
             "value cache K region must stay zero — K leaked into the value cache"
         );
 
         // Sanity: the contaminated pattern (write_kv_at on both caches) must
         // NOT be what the dispatch path does — document the failure mode.
         let mut bad_key = Kvcache::new(num_heads, num_kv_heads, head_dim, max_seq, false);
-        bad_key
-            .write_kv_at(0, &k_row, &v_row)
-            .expect("write_kv_at");
+        bad_key.write_kv_at(0, &k_row, &v_row).expect("write_kv_at");
         let bad_kbuf = bad_key.buffer().as_slice().expect("host buffer");
         assert!(
             bad_kbuf[v_base..v_base + kv_len] == v_row[..],

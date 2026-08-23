@@ -113,18 +113,22 @@ impl FlashAttentionKernel {
 
                         for k_pos in tile_start..tile_end {
                             let kh_offset = b * seq_len * num_heads + k_pos * num_heads + h;
-                            
+
                             // Compute dot product Q[q_pos] @ K[k_pos]
                             let mut dot = 0.0f32;
                             for d in 0..head_dim {
-                                let q_idx = b * seq_len * num_heads * head_dim 
-                                    + q_pos * num_heads * head_dim + h * head_dim + d;
-                                let k_idx = b * seq_len * num_heads * head_dim 
-                                    + k_pos * num_heads * head_dim + h * head_dim + d;
-                                
+                                let q_idx = b * seq_len * num_heads * head_dim
+                                    + q_pos * num_heads * head_dim
+                                    + h * head_dim
+                                    + d;
+                                let k_idx = b * seq_len * num_heads * head_dim
+                                    + k_pos * num_heads * head_dim
+                                    + h * head_dim
+                                    + d;
+
                                 dot += q[q_idx].to_f32() * k[k_idx].to_f32();
                             }
-                            
+
                             tile_scores[k_pos - tile_start] = dot * self.config.scale;
                         }
 
@@ -139,10 +143,11 @@ impl FlashAttentionKernel {
                         let old_m = m[m_idx];
                         let alpha = (old_m - tile_max).exp();
                         m[m_idx] = tile_max.max(old_m);
-                        
+
                         // Update l (sum of exp)
                         let beta = (tile_max - old_m).exp();
-                        l[l_idx] = l[l_idx] * alpha + (0..tile_len).map(|_| 1.0f32.exp() - 1.0f32).sum::<f32>(); // Simplified: all scores same for demo
+                        l[l_idx] = l[l_idx] * alpha
+                            + (0..tile_len).map(|_| 1.0f32.exp() - 1.0f32).sum::<f32>(); // Simplified: all scores same for demo
 
                         // Step 3: Compute softmax weights and accumulate V contribution
                         let mut tile_weights = vec![0.0f32; tile_len];
@@ -157,15 +162,18 @@ impl FlashAttentionKernel {
                         // Normalize and accumulate output
                         for (i, weight) in tile_weights.iter().enumerate() {
                             let k_pos = tile_start + i;
-                            let kv_offset = b * seq_len * num_heads * head_dim 
-                                + k_pos * num_heads * head_dim + h * head_dim;
-                            
+                            let kv_offset = b * seq_len * num_heads * head_dim
+                                + k_pos * num_heads * head_dim
+                                + h * head_dim;
+
                             // Weighted sum of V for this position
                             for d in 0..head_dim {
                                 let v_idx = kv_offset + d;
-                                let out_idx = b * seq_len * num_heads * head_dim 
-                                    + q_pos * num_heads * head_dim + h * head_dim + d;
-                                
+                                let out_idx = b * seq_len * num_heads * head_dim
+                                    + q_pos * num_heads * head_dim
+                                    + h * head_dim
+                                    + d;
+
                                 output[out_idx] += (weight / exp_sum) * v[v_idx].to_f32();
                             }
                         }
@@ -193,10 +201,11 @@ impl FlashAttentionKernel {
     pub fn memory_savings_percentage(&self) -> f32 {
         // Standard attention: O(n²) for scores matrix
         // Flash attention: O(n) for running statistics + O(tile_size × n) for tiles
-        
+
         let standard_memory = self.config.max_seq * self.config.max_seq * self.config.num_heads * 4; // f32 scores
-        let flash_memory = self.config.max_seq * self.config.num_heads * (self.config.tile_size + 2); // Running stats + tiles
-        
+        let flash_memory =
+            self.config.max_seq * self.config.num_heads * (self.config.tile_size + 2); // Running stats + tiles
+
         ((standard_memory as f32 - flash_memory as f32) / standard_memory as f32) * 100.0
     }
 }
@@ -222,7 +231,7 @@ mod tests {
     fn test_flash_kernel_creation() {
         let config = FlashAttentionConfig::default();
         let kernel = FlashAttentionKernel::new(Some(config.clone()));
-        
+
         assert_eq!(kernel.config().num_heads, 32);
         assert_eq!(kernel.config().head_dim, 64);
         assert_eq!(kernel.config().tile_size, 128);
@@ -233,12 +242,16 @@ mod tests {
     fn test_flash_memory_savings() {
         let config = FlashAttentionConfig::default();
         let kernel = FlashAttentionKernel::new(Some(config.clone()));
-        
+
         // For max_seq=2048, standard attention needs 2048² × 32 × 4 bytes ≈ 536 MB
         // Flash attention with tile_size=128 needs ~2048 × 32 × (128 + 2) × 4 bytes ≈ 6.7 MB
         // Savings should be >98%
         let savings = kernel.memory_savings_percentage();
-        assert!(savings > 95.0, "Flash attention should save >95% memory, got {}%", savings);
+        assert!(
+            savings > 95.0,
+            "Flash attention should save >95% memory, got {}%",
+            savings
+        );
     }
 
     #[test]
@@ -255,17 +268,18 @@ mod tests {
         let q: Vec<f16> = (0..batch_size * seq_len * num_heads * head_dim)
             .map(|i| f16::from_f32(0.5))
             .collect();
-        
+
         let k: Vec<f16> = vec![f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
         let v: Vec<f16> = vec![f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
 
         // Run flash forward pass
-        let output = kernel.forward(&q, &k, &v, batch_size, seq_len)
+        let output = kernel
+            .forward(&q, &k, &v, batch_size, seq_len)
             .expect("Flash forward should succeed");
 
         // Verify output shape
         assert_eq!(output.len(), batch_size * seq_len * num_heads * head_dim);
-        
+
         // Verify non-zero output (inputs are non-zero)
         let sum: f32 = output.iter().sum();
         assert!(sum > 0.0, "Output should be non-zero with non-zero inputs");
@@ -275,7 +289,7 @@ mod tests {
     fn test_tile_size_configuration() {
         let config = FlashAttentionConfig::default();
         assert_eq!(config.tile_size, 128); // Optimal for sm_8.9
-        
+
         // Test custom tile size
         let custom_config = FlashAttentionConfig {
             tile_size: 64,

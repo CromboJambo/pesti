@@ -1,5 +1,5 @@
 //! Benchmark suite for PESTI inference performance
-//! 
+//!
 //! Week 11/12: Comprehensive benchmarks vs llama.cpp baselines
 //! - Measures prefill throughput (tokens/sec)
 //! - Measures generation throughput (tokens/sec)
@@ -13,12 +13,13 @@ use pesti_runner::kernel::kvcache::Kvcache;
 use std::path::Path;
 use std::time::Instant;
 
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const MAX_SEQ_LEN: usize = 2048;
 
 // llama.cpp baseline figures (Qwen2.5-0.5B on RTX 4070 Ti SUPER)
 const LLAMA_CPP_PREFILL_BASELINE: f64 = 15000.0; // tokens/sec (seq_len=64)
-const LLAMA_CPP_GEN_BASELINE: f64 = 85.0;        // tokens/sec (autoregressive)
+const LLAMA_CPP_GEN_BASELINE: f64 = 85.0; // tokens/sec (autoregressive)
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== PESTI Benchmark Suite ===");
@@ -83,7 +84,10 @@ fn benchmark_prefill(
 
         println!("  Avg time:     {:.4} ms", avg_ms);
         println!("  Throughput:   {:.2} tok/s", tokens_per_sec);
-        println!("  Baseline:     {:.2} tok/s (llama.cpp)", LLAMA_CPP_PREFILL_BASELINE);
+        println!(
+            "  Baseline:     {:.2} tok/s (llama.cpp)",
+            LLAMA_CPP_PREFILL_BASELINE
+        );
         println!(
             "  Performance:  {:.1}% of baseline",
             (tokens_per_sec / LLAMA_CPP_PREFILL_BASELINE) * 100.0
@@ -118,7 +122,10 @@ fn benchmark_generation(
 
         println!("  Avg time:     {:.4} ms", avg_ms);
         println!("  Throughput:   {:.2} tok/s", tokens_per_sec);
-        println!("  Baseline:     {:.2} tok/s (llama.cpp)", LLAMA_CPP_GEN_BASELINE);
+        println!(
+            "  Baseline:     {:.2} tok/s (llama.cpp)",
+            LLAMA_CPP_GEN_BASELINE
+        );
         println!(
             "  Performance:  {:.1}% of baseline",
             (tokens_per_sec / LLAMA_CPP_GEN_BASELINE) * 100.0
@@ -128,7 +135,11 @@ fn benchmark_generation(
     Ok(())
 }
 
-fn warmup_prefill(seq_len: usize, num_kv_heads: usize, head_dim: usize) -> Result<f64, Box<dyn std::error::Error>> {
+fn warmup_prefill(
+    seq_len: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
     let embed_dim = 512;
     let input: Vec<f32> = (0..(seq_len * embed_dim))
         .map(|i| ((i % seq_len) as f32 - seq_len as f32 / 2.0) * 0.1)
@@ -163,7 +174,11 @@ fn warmup_prefill(seq_len: usize, num_kv_heads: usize, head_dim: usize) -> Resul
     Ok(elapsed)
 }
 
-fn warmup_generation(gen_len: usize, num_kv_heads: usize, head_dim: usize) -> Result<f64, Box<dyn std::error::Error>> {
+fn warmup_generation(
+    gen_len: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
     let _num_kv_heads = num_kv_heads;
     let _head_dim = head_dim;
 

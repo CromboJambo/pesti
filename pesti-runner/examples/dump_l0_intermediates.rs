@@ -9,7 +9,11 @@ fn norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 fn head(v: &[f32]) -> String {
-    v.iter().take(8).map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(",")
+    v.iter()
+        .take(8)
+        .map(|x| format!("{x:.4}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,7 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tok: u32 = 785;
     let emb = model.embed(tok, 0)?;
-    println!("[P] embed       norm={:.4} head=[{}]", norm(&emb), head(&emb));
+    println!(
+        "[P] embed       norm={:.4} head=[{}]",
+        norm(&emb),
+        head(&emb)
+    );
 
     let l0 = &model.layers[0];
     let a = l0.attention_norm.forward(&emb, 1);
@@ -40,7 +48,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // attention.forward ALREADY applies the wo projection (layer.rs), so its
     // output IS attn_proj. Do NOT apply wo again.
     let attn_proj = l0.attention.forward(&a, 1, 1, 0);
-    println!("[P] attn_proj   norm={:.4} head=[{}]", norm(&attn_proj), head(&attn_proj));
+    println!(
+        "[P] attn_proj   norm={:.4} head=[{}]",
+        norm(&attn_proj),
+        head(&attn_proj)
+    );
 
     let h: Vec<f32> = (0..emb.len()).map(|i| emb[i] + attn_proj[i]).collect();
     println!("[P] h(after-attn) norm={:.4} head=[{}]", norm(&h), head(&h));
@@ -50,25 +62,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let gate = l0.feed_forward.w1.forward(&f, 1);
     let up = l0.feed_forward.w3.forward(&f, 1);
-    println!("[P] gate        norm={:.4} head=[{}]", norm(&gate), head(&gate));
+    println!(
+        "[P] gate        norm={:.4} head=[{}]",
+        norm(&gate),
+        head(&gate)
+    );
     println!("[P] up          norm={:.4} head=[{}]", norm(&up), head(&up));
 
-    // silu(gate)*up
+    // silu(gate)*up — must match the FIXED library sigmoid (layer.rs swiglu):
+    //   x >= 0 : 1/(1+e^{-x});  x < 0 : e^{x}/(1+e^{x})
     let swiglu: Vec<f32> = (0..gate.len())
         .map(|i| {
             let s = if gate[i] >= 0.0 {
                 1.0 / (1.0 + (-gate[i]).exp())
             } else {
-                gate[i] / (1.0 + gate[i].exp())
+                gate[i].exp() / (1.0 + gate[i].exp())
             };
             s * gate[i] * up[i]
         })
         .collect();
     let down = l0.feed_forward.w2.forward(&swiglu, 1);
-    println!("[P] down        norm={:.4} head=[{}]", norm(&down), head(&down));
+    println!(
+        "[P] down        norm={:.4} head=[{}]",
+        norm(&down),
+        head(&down)
+    );
 
     let out: Vec<f32> = (0..h.len()).map(|i| h[i] + down[i]).collect();
-    println!("[P] L0 out      norm={:.4} head=[{}]", norm(&out), head(&out));
+    println!(
+        "[P] L0 out      norm={:.4} head=[{}]",
+        norm(&out),
+        head(&out)
+    );
 
     Ok(())
 }

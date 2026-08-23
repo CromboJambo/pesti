@@ -7,11 +7,11 @@ async fn main() -> pesti_runner::error::Result<()> {
     println!("=== Testing Model Discovery ===\n");
 
     let runtime = Runtime::new();
-    
+
     // List available models
     let available = runtime.list_available();
     println!("Discovered {} models:", available.len());
-    
+
     for name in &available {
         println!("  - {}", name);
     }
@@ -19,7 +19,7 @@ async fn main() -> pesti_runner::error::Result<()> {
     // Try to load the qwen2.5-0.5b model
     if available.contains(&"qwen2.5-0.5b-instruct-q4_k_m".to_string()) {
         println!("\n✓ Found qwen2.5-0.5b-instruct-q4_k_m");
-        
+
         println!("Loading model...");
         runtime.load_model("qwen2.5-0.5b-instruct-q4_k_m").await?;
         println!("✅ Model loaded successfully!");

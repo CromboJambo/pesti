@@ -4,8 +4,11 @@
 //! to a trusted CPU reference implementation (llama.cpp-style GEMM).
 
 use pesti_runner::cuda_runtime::CudaRuntime;
-use pesti_runner::kernel::{memory::{CudaMemoryBackend, MemoryBackend}, GemmKernel};
 use pesti_runner::kernel::{CudaGemmKernelBuilder, GemmArch};
+use pesti_runner::kernel::{
+    GemmKernel,
+    memory::{CudaMemoryBackend, MemoryBackend},
+};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -170,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_relative_error, tolerance_rel
             );
         }
-        
+
         // Print sample comparisons even on failure for debugging
         println!("\nSample Output Comparisons (first 5 elements):");
         for i in 0..5 {
@@ -182,7 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (c_cpu[i] - c_gpu[i]).abs()
             );
         }
-        
+
         std::process::exit(1);
     }
 

@@ -81,7 +81,7 @@ impl OneStageAttentionKernel {
 
         // Launch kernel - use include_str! for PTX content
         let ptx_src = include_str!("../../src/kernel/ptx/fused_attention_full_kernel.ptx");
-        
+
         // Get CUDA context from memory backend (using a runtime instance)
         let cuda_rt = crate::cuda_runtime::CudaRuntime::new(0)?;
         let module = crate::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), ptx_src)?;
@@ -97,7 +97,11 @@ impl OneStageAttentionKernel {
         let mut head_dim_v: u32 = head_dim as u32;
 
         // Launch with grid (seq_q, seq_k, num_heads), block (head_dim, 1, 1)
-        let grid = ((batch_size * seq_len) as u32, cache_len as u32, num_heads as u32);
+        let grid = (
+            (batch_size * seq_len) as u32,
+            cache_len as u32,
+            num_heads as u32,
+        );
         let block = (head_dim as u32, 1u32, 1u32);
 
         let mut params: [*mut std::ffi::c_void; 10] = [

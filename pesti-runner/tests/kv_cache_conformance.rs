@@ -1,11 +1,11 @@
 //! KV Cache conformance test for one-stage full fusion attention kernel
-//! 
+//!
 //! Validates that the kernel can use pre-computed K/V tensors (simulating KV cache usage).
 
 #![cfg(feature = "cuda")]
 
-use pesti_runner::cuda_runtime::{allocate_device_memory, copy_host_to_device, CudaRuntime};
-use pesti_runner::cuda_shim::{CudaModule, launch_kernel, cu_stream};
+use pesti_runner::cuda_runtime::{CudaRuntime, allocate_device_memory, copy_host_to_device};
+use pesti_runner::cuda_shim::{CudaModule, cu_stream, launch_kernel};
 
 /// Reference attention (causal) for comparison
 fn reference_attention(
@@ -23,12 +23,12 @@ fn reference_attention(
         for head in 0..num_heads {
             for dim_idx in 0..head_dim {
                 let mut sum = 0.0f32;
-                
+
                 // Compute scores over k positions (causal: only k_pos <= q_pos)
                 let mut scores = vec![f32::NEG_INFINITY; seq_k];
                 for k_pos in 0..=q_pos.min(seq_k - 1) {
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
-                    
+
                     // Dot product over head_dim
                     for d in 0..head_dim {
                         let q_d = q[q_pos * num_heads * head_dim + head * head_dim + d];
@@ -50,7 +50,7 @@ fn reference_attention(
                         }
                     })
                     .sum();
-                
+
                 for k_pos in 0..=q_pos.min(seq_k - 1) {
                     if scores[k_pos].is_finite() && exp_sum > 1e-6 {
                         let softmax_val = (scores[k_pos] - max_score).exp() / exp_sum;
@@ -137,12 +137,12 @@ fn test_attention_with_k_cache() {
     let cuda_rt = CudaRuntime::new(0).unwrap();
 
     // Configuration: decode mode - 1 query token attending to cached positions
-    let seq_q = 1;      // New query (single token)
-    let seq_k = 4;      // Total sequence length (cached positions)
+    let seq_q = 1; // New query (single token)
+    let seq_k = 4; // Total sequence length (cached positions)
     let num_heads = 2;
     let head_dim = 8;
 
-    let q_size = seq_q * num_heads * head_dim * 2;  // f16
+    let q_size = seq_q * num_heads * head_dim * 2; // f16
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
     let output_size = seq_q * num_heads * head_dim * 4;
@@ -158,7 +158,13 @@ fn test_attention_with_k_cache() {
         .map(|i| (i as f32 - (seq_k * num_heads * head_dim) as f32 / 2.0) * 0.2)
         .collect();
 
-    println!("  Array sizes: q={}, k={}, v={}, output={}", q_host.len(), k_host.len(), v_host.len(), output_size);
+    println!(
+        "  Array sizes: q={}, k={}, v={}, output={}",
+        q_host.len(),
+        k_host.len(),
+        v_host.len(),
+        output_size
+    );
 
     // Allocate GPU memory
     let q_ptr = unsafe { allocate_device_memory(q_size).unwrap() };
@@ -182,16 +188,7 @@ fn test_attention_with_k_cache() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 
@@ -204,7 +201,8 @@ fn test_attention_with_k_cache() {
     }
 
     // Compare with CPU reference (causal attention)
-    let cpu_output = reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
+    let cpu_output =
+        reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
 
     // Compute error metrics
     let mut max_abs_err = 0.0f32;
@@ -229,12 +227,12 @@ fn test_attention_with_k_cache() {
 #[test]
 fn test_prefill_with_full_cache() {
     println!("\n=== Prefill with Full Cache Test ===");
-    
+
     let cuda_rt = CudaRuntime::new(0).unwrap();
 
     // Prefill: process multiple tokens at once (seq_q > 1)
-    let seq_k = 8;  // Total sequence length
-    let seq_q = 4;  // Process 4 tokens at once
+    let seq_k = 8; // Total sequence length
+    let seq_q = 4; // Process 4 tokens at once
     let num_heads = 2;
     let head_dim = 8;
 
@@ -273,16 +271,7 @@ fn test_prefill_with_full_cache() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 
@@ -294,7 +283,8 @@ fn test_prefill_with_full_cache() {
     }
 
     // Compare with CPU reference
-    let cpu_output = reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
+    let cpu_output =
+        reference_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
 
     // Compute error metrics
     let mut max_abs_err = 0.0f32;
@@ -304,8 +294,11 @@ fn test_prefill_with_full_cache() {
     }
 
     println!("  Max absolute error: {:.6e}", max_abs_err);
-    println!("  GPU output (first 8 values): {:?}", &gpu_output[0..8.min(gpu_output.len())]);
-    
+    println!(
+        "  GPU output (first 8 values): {:?}",
+        &gpu_output[0..8.min(gpu_output.len())]
+    );
+
     assert!(
         max_abs_err < 1e-3,
         "Prefill attention error {} exceeds threshold",

@@ -1,5 +1,5 @@
 //! Benchmark WGMMA tensor core GEMM vs warp-level GEMM (simplified)
-//! 
+//!
 //! Demonstrates WGMMA configuration and theoretical performance.
 
 #![cfg(feature = "cuda")]
@@ -10,14 +10,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create WGMMA kernel (placeholder - would need real CUDA context)
     let config = pesti_runner::kernel::wgmma_gemm::WGMMAConfig::default();
     let device: usize = 0;
-    let kernel = pesti_runner::kernel::wgmma_gemm::WGMMAKernel::new(&device, config.clone()).unwrap();
-    
+    let kernel =
+        pesti_runner::kernel::wgmma_gemm::WGMMAKernel::new(&device, config.clone()).unwrap();
+
     println!("✓ WGMMA configuration created successfully");
     println!(
         "  Configuration: {}×{}×{}",
         config.m_tile, config.n_tile, config.k_tile
     );
-    println!("  Theoretical speedup vs warp-level GEMM: {:.1}×", kernel.theoretical_speedup());
+    println!(
+        "  Theoretical speedup vs warp-level GEMM: {:.1}×",
+        kernel.theoretical_speedup()
+    );
 
     // Memory requirements
     let (shared_mem, global_mem) = kernel.memory_requirements();

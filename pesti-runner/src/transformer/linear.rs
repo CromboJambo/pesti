@@ -135,7 +135,7 @@ impl Linear {
                 let start_idx = b * k;
                 let end_idx = std::cmp::min((b + 1) * k, x.len());
                 let x_row = &x[start_idx..end_idx];
-                
+
                 for o in 0..n {
                     let w_row = &self.weight[o * k..(o + 1) * k];
                     let mut acc = 0.0f32;

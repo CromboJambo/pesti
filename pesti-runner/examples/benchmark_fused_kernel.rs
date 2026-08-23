@@ -1,10 +1,12 @@
 //! Benchmark fused QKV + attention + output projection kernel
-//! 
+//!
 //! Compares separate vs fused implementations to measure fusion benefits.
 
 #![cfg(feature = "cuda")]
 
-use pesti_runner::kernel::fused_linear_attention::{FusedLinearAttentionConfig, FusedLinearAttentionKernel};
+use pesti_runner::kernel::fused_linear_attention::{
+    FusedLinearAttentionConfig, FusedLinearAttentionKernel,
+};
 
 const BATCH_SIZE: usize = 1;
 const MAX_SEQ_LEN: usize = 64;
@@ -51,11 +53,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Calculate theoretical benefits
     let separate_ops = 5; // Q, K, V projections + attention + output projection
-    let fused_ops = 1;   // All in one kernel
-    
+    let fused_ops = 1; // All in one kernel
+
     println!("\n--- Theoretical Benefits ---");
-    println!("Kernel launches: {} → {} ({}x reduction)", 
-             separate_ops, fused_ops, separate_ops);
+    println!(
+        "Kernel launches: {} → {} ({}x reduction)",
+        separate_ops, fused_ops, separate_ops
+    );
     println!("Memory writes: ~5 intermediate buffers → 0 (fusion benefit)");
     println!("Expected speedup: +20-30% on small sequences");
 

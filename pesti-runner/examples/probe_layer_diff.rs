@@ -83,18 +83,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    let f32_to_f16 = |w: &[f32]| -> Vec<half::f16> {
-        w.iter().map(|&v| half::f16::from_f32(v)).collect()
-    };
+    let f32_to_f16 =
+        |w: &[f32]| -> Vec<half::f16> { w.iter().map(|&v| half::f16::from_f32(v)).collect() };
 
     let mut disp_h = emb.clone();
     println!(
         "\n{:<6} {:>14} {:>14} {:>14} {:>12}",
-        "layer",
-        "max|cpu|",
-        "max|disp|",
-        "max|diff|",
-        "rel_err"
+        "layer", "max|cpu|", "max|disp|", "max|diff|", "rel_err"
     );
     for (layer_idx, layer) in model.layers.iter().enumerate() {
         let attention_dispatch = pesti_runner::kernel::dispatch::AttentionDispatch {
@@ -195,7 +190,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Final norm + output head comparison (both paths apply final_norm).
-    let cpu_final = model.final_norm.as_ref().map(|n| n.forward(&cpu_h, 1)).unwrap_or(cpu_h);
+    let cpu_final = model
+        .final_norm
+        .as_ref()
+        .map(|n| n.forward(&cpu_h, 1))
+        .unwrap_or(cpu_h);
     let disp_final = model
         .final_norm
         .as_ref()

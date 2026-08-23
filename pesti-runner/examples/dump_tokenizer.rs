@@ -9,7 +9,9 @@ fn main() {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string());
-    let out_dir = std::env::args().nth(2).unwrap_or_else(|| "/tmp/qwen2_tok".to_string());
+    let out_dir = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "/tmp/qwen2_tok".to_string());
     std::fs::create_dir_all(&out_dir).unwrap();
 
     let header = parse_gguf(Path::new(&path)).expect("parse failed");
@@ -22,7 +24,12 @@ fn main() {
         }
         match &kv.value {
             GgufKvValue::String(s) => {
-                println!("  {} = {:?} (len {})", kv.key, &s[..s.len().min(60)], s.len());
+                println!(
+                    "  {} = {:?} (len {})",
+                    kv.key,
+                    &s[..s.len().min(60)],
+                    s.len()
+                );
                 out.insert(kv.key.clone(), serde_json::Value::String(s.clone()));
             }
             GgufKvValue::Array(arr) => {
@@ -42,7 +49,11 @@ fn main() {
                         GgufKvValue::Float32(f) => serde_json::Value::from(*f),
                         GgufKvValue::Float64(f) => serde_json::Value::from(*f),
                         other => {
-                            eprintln!("  ! unexpected elem in {}: {:?}", kv.key, other.value_type());
+                            eprintln!(
+                                "  ! unexpected elem in {}: {:?}",
+                                kv.key,
+                                other.value_type()
+                            );
                             serde_json::Value::Null
                         }
                     })

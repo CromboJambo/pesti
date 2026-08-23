@@ -1,5 +1,5 @@
 //! Benchmark flash attention with shared memory tiling
-//! 
+//!
 //! Compares standard attention vs flash attention to measure memory savings.
 
 #![cfg(feature = "cuda")]
@@ -26,25 +26,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Calculate memory requirements
-    let standard_memory_mb = (max_seq as f64 * max_seq as f64 * num_heads as f64 * 4.0) / (1024.0 * 1024.0);
-    let flash_memory_mb = (max_seq as f64 * num_heads as f64 * (tile_size as f64 + 2.0) * 4.0) / (1024.0 * 1024.0);
+    let standard_memory_mb =
+        (max_seq as f64 * max_seq as f64 * num_heads as f64 * 4.0) / (1024.0 * 1024.0);
+    let flash_memory_mb =
+        (max_seq as f64 * num_heads as f64 * (tile_size as f64 + 2.0) * 4.0) / (1024.0 * 1024.0);
 
     println!("Memory Requirements:");
-    println!("  Standard attention: {:.2} MB (O(n²) scores matrix)", standard_memory_mb);
-    println!("  Flash attention: {:.2} MB (O(n) running stats + tiles)", flash_memory_mb);
-    println!("  Memory savings: {:.1}%\n", kernel.memory_savings_percentage());
+    println!(
+        "  Standard attention: {:.2} MB (O(n²) scores matrix)",
+        standard_memory_mb
+    );
+    println!(
+        "  Flash attention: {:.2} MB (O(n) running stats + tiles)",
+        flash_memory_mb
+    );
+    println!(
+        "  Memory savings: {:.1}%\n",
+        kernel.memory_savings_percentage()
+    );
 
     // Create dummy inputs (Q, K, V) for a smaller test case
     let batch_size = 1;
     let seq_len = 64; // Use smaller sequence for benchmark
-    
-    println!("Creating dummy inputs (seq_len={} instead of {})...", seq_len, max_seq);
+
+    println!(
+        "Creating dummy inputs (seq_len={} instead of {})...",
+        seq_len, max_seq
+    );
     let q: Vec<half::f16> = (0..batch_size * seq_len * num_heads * head_dim)
         .map(|i| half::f16::from_f32(0.5))
         .collect();
-    
-    let k: Vec<half::f16> = vec![half::f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
-    let v: Vec<half::f16> = vec![half::f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
+
+    let k: Vec<half::f16> =
+        vec![half::f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
+    let v: Vec<half::f16> =
+        vec![half::f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];
 
     println!("Running flash attention forward pass...");
 
@@ -59,15 +75,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Calculate theoretical benefits for long sequences
     let long_seq = 512;
-    let standard_memory_512_mb = (long_seq as f64 * long_seq as f64 * num_heads as f64 * 4.0) / (1024.0 * 1024.0);
-    let flash_memory_512_mb = (long_seq as f64 * num_heads as f64 * (tile_size as f64 + 2.0) * 4.0) / (1024.0 * 1024.0);
+    let standard_memory_512_mb =
+        (long_seq as f64 * long_seq as f64 * num_heads as f64 * 4.0) / (1024.0 * 1024.0);
+    let flash_memory_512_mb =
+        (long_seq as f64 * num_heads as f64 * (tile_size as f64 + 2.0) * 4.0) / (1024.0 * 1024.0);
 
     println!("\n--- Theoretical Benefits for Long Sequences (seq_len=512) ---");
     println!("Standard attention: {:.2} MB", standard_memory_512_mb);
     println!("Flash attention: {:.2} MB", flash_memory_512_mb);
-    println!("Memory savings: {:.1}% = {:.2} MB saved\n", 
-             ((standard_memory_512_mb - flash_memory_512_mb) / standard_memory_512_mb) * 100.0,
-             standard_memory_512_mb - flash_memory_512_mb);
+    println!(
+        "Memory savings: {:.1}% = {:.2} MB saved\n",
+        ((standard_memory_512_mb - flash_memory_512_mb) / standard_memory_512_mb) * 100.0,
+        standard_memory_512_mb - flash_memory_512_mb
+    );
 
     // Performance projections
     println!("--- Performance Projections ---");

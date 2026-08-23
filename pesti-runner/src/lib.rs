@@ -9,7 +9,6 @@ pub mod cpu_optimized; // Optimized CPU attention with SIMD and parallelism
 pub mod cpu_optimized_ndarray; // ndarray-based implementation for comparison
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
-pub mod memory_pool; // Pre-allocated device memory pool for efficiency
 #[cfg(feature = "cuda")]
 pub mod cuda_shim;
 #[cfg(not(feature = "cuda"))]
@@ -28,6 +27,7 @@ pub mod gguf_weight_loader;
 pub mod inertia; // Computational inertia subsystem
 pub mod inference_engine;
 pub mod kernel;
+pub mod memory_pool; // Pre-allocated device memory pool for efficiency
 pub mod model;
 pub mod model_loader;
 pub mod model_manager;
@@ -64,7 +64,7 @@ pub use cuda_runtime::{
     select_best_device,
 };
 #[cfg(feature = "cuda")]
-pub use cuda_shim::{cu_stream, launch_kernel, CudaModule, CudaFunction};
+pub use cuda_shim::{CudaFunction, CudaModule, cu_stream, launch_kernel};
 #[cfg(feature = "cuda")]
 pub use device::{DeviceBackend, DeviceInfo, DeviceSelection, DeviceSelector, DeviceType};
 #[cfg(feature = "cuda")]

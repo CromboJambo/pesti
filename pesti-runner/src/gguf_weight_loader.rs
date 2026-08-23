@@ -152,7 +152,7 @@ fn dequantize_tensor(tensor: &GgufTensorInfo, raw_data: &[u8]) -> Result<Vec<u8>
 
         let num_blocks = raw_data.len() / block_size;
         let inferred_count = num_blocks * elements_per_block;
-        
+
         // Use inferred count from actual data size for K-family types
         // This handles GGUF files with incorrect tensor shape claims
         tracing::debug!(
@@ -627,10 +627,16 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             let mut buf = [0.0f32; 128];
             for l in 0..32 {
                 let is = l / 16;
-                let q1 = ((ql[ql_base + l] & 0x0F) | (((qh[qh_base + l] >> 0) & 0x03) << 4)) as i8 - 32;
-                let q2 = ((ql[ql_base + l + 32] & 0x0F) | (((qh[qh_base + l] >> 2) & 0x03) << 4)) as i8 - 32;
-                let q3 = ((ql[ql_base + l] >> 4) | (((qh[qh_base + l] >> 4) & 0x03) << 4)) as i8 - 32;
-                let q4 = ((ql[ql_base + l + 32] >> 4) | (((qh[qh_base + l] >> 6) & 0x03) << 4)) as i8 - 32;
+                let q1 =
+                    ((ql[ql_base + l] & 0x0F) | (((qh[qh_base + l] >> 0) & 0x03) << 4)) as i8 - 32;
+                let q2 = ((ql[ql_base + l + 32] & 0x0F) | (((qh[qh_base + l] >> 2) & 0x03) << 4))
+                    as i8
+                    - 32;
+                let q3 =
+                    ((ql[ql_base + l] >> 4) | (((qh[qh_base + l] >> 4) & 0x03) << 4)) as i8 - 32;
+                let q4 = ((ql[ql_base + l + 32] >> 4) | (((qh[qh_base + l] >> 6) & 0x03) << 4))
+                    as i8
+                    - 32;
                 let s0 = scales[sc_base + is] as i8 as f32;
                 let s2 = scales[sc_base + is + 2] as i8 as f32;
                 let s4 = scales[sc_base + is + 4] as i8 as f32;
@@ -682,24 +688,14 @@ fn dequantize_q8_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     let mut result = Vec::with_capacity(element_count);
     for b in 0..num_blocks {
         let base = b * BLOCK;
-        let d = f32::from_le_bytes([
-            data[base],
-            data[base + 1],
-            data[base + 2],
-            data[base + 3],
-        ]);
+        let d = f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
         for j in 0..ELEM {
             result.push(d * data[base + 4 + j] as i8 as f32);
         }
     }
     if remaining > 0 {
         let base = num_blocks * BLOCK;
-        let d = f32::from_le_bytes([
-            data[base],
-            data[base + 1],
-            data[base + 2],
-            data[base + 3],
-        ]);
+        let d = f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
         for j in 0..remaining {
             result.push(d * data[base + 4 + j] as i8 as f32);
         }
@@ -757,7 +753,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     for _ in 0..num_full_blocks {
         // Q4_0 format: 12 bytes per block
         let scale = f16_to_f32(&data[offset..offset + 2]);
-        
+
         // Read 8 bytes of quantized values (16 nibbles)
         let qs = [
             data[offset + 2],
@@ -777,7 +773,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             } else {
                 (qs[i / 2] >> 4) & 0x0F
             };
-            
+
             // Q4_0: values are in range [0,15], centered at 7.5
             let v = scale * ((q as f32) - 7.5);
             result.push(v);
@@ -789,7 +785,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
     // Handle remaining elements (partial block)
     if remaining > 0 {
         let scale = f16_to_f32(&data[offset..offset + 2]);
-        
+
         let mut qs = [0u8; 4]; // Only need bytes for remaining nibbles
         for i in 0..remaining.div_ceil(2) {
             qs[i] = data[offset + 2 + i];
@@ -801,7 +797,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             } else {
                 (qs[i / 2] >> 4) & 0x0F
             };
-            
+
             let v = scale * ((q as f32) - 7.5);
             result.push(v);
         }

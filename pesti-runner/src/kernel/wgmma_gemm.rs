@@ -116,7 +116,7 @@ mod tests {
         let device: usize = 0;
         let config = WGMMAConfig::default();
         let kernel = WGMMAKernel::new(&device, config).unwrap();
-        
+
         assert_eq!(kernel.theoretical_speedup(), 3.0);
     }
 
@@ -125,7 +125,7 @@ mod tests {
         let device: usize = 0;
         let config = WGMMAConfig::default();
         let kernel = WGMMAKernel::new(&device, config).unwrap();
-        
+
         let benefits = kernel.benefits();
         assert_eq!(benefits.len(), 5);
         assert!(benefits[0].contains("3× speedup"));

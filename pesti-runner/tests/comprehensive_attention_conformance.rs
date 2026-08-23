@@ -1,5 +1,5 @@
 //! Comprehensive parameterized attention conformance tests
-//! 
+//!
 //! Validates one-stage full fusion kernel across:
 //! - Various sequence lengths (seq_q, seq_k)
 //! - Different head dimensions (8, 16, 32, 64)
@@ -9,18 +9,18 @@
 //! DEPRECATED: The reference implementation in `reference_llama_attention()` has bugs
 //! in the attention computation logic. Until fixed, these tests are ignored to prevent
 //! false regressions on correct GPU kernels.
-//! 
+//!
 //! See: https://github.com/nousresearch/pesti/issues/XXX
 
 #![cfg(feature = "cuda")]
 
 use pesti_runner::cuda_runtime::{
-    allocate_device_memory, copy_host_to_device, copy_device_to_host, CudaRuntime,
+    CudaRuntime, allocate_device_memory, copy_device_to_host, copy_host_to_device,
 };
-use pesti_runner::cuda_shim::{cu_stream, launch_kernel, CudaModule};
+use pesti_runner::cuda_shim::{CudaModule, cu_stream, launch_kernel};
 
 /// Reference implementation: CPU-side attention (llama.cpp style)
-/// 
+///
 /// DEPRECATED: This implementation has bugs in the attention computation logic.
 /// The GPU kernels are correct - this needs to be fixed to produce valid reference
 /// values for proper conformance testing.
@@ -135,7 +135,7 @@ fn launch_fused_attention_sync(
 // ============================================================================
 // DEPRECATED TESTS
 // ============================================================================
-// 
+//
 // These tests are ignored because the reference implementation has bugs.
 // The GPU kernels are verified correct by the numerical_conformance_test
 // which uses proper GEMM operations. When the reference implementation
@@ -189,16 +189,7 @@ fn test_attention_config_deprecated(seq_q: usize, seq_k: usize, num_heads: usize
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention_sync(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 
@@ -327,16 +318,7 @@ fn test_extreme_values() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention_sync(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 
@@ -405,16 +387,7 @@ fn test_zero_values() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention_sync(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 

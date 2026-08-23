@@ -1,5 +1,5 @@
 //! Comprehensive Week 12 optimization benchmark
-//! 
+//!
 //! Tests all optimization phases:
 //! - Memory bandwidth (FP16 KV cache, paged allocation)
 //! - Kernel fusion (QKV projections, softmax + output)
@@ -32,7 +32,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Summary ===");
     println!("✅ FP16 KV cache: 50% memory reduction");
-    println!("✅ Paged allocation: Non-contiguous pages ({} tokens/page)", 512);
+    println!(
+        "✅ Paged allocation: Non-contiguous pages ({} tokens/page)",
+        512
+    );
     println!("⏳ Pinned memory: Requires cudarc integration (placeholder)");
     println!("⏳ Kernel fusion: QKV projections, softmax + output (placeholder)");
     println!("⏳ Warp-level parallelism: Batch {} sequences", BATCH_SIZE);
@@ -49,10 +52,22 @@ fn benchmark_memory_bandwidth() {
     let fp16_cache = OptimizedKvcache::new(NUM_KV_HEADS, HEAD_DIM, MAX_SEQ_LEN, Some(512));
     let fp16_bytes = fp16_cache.memory_bytes_fp16();
 
-    println!("FP32 cache: {} bytes ({:.2} MiB)", fp32_bytes, fp32_bytes as f64 / 1024.0 / 1024.0);
-    println!("FP16 cache: {} bytes ({:.2} MiB)", fp16_bytes, fp16_bytes as f64 / 1024.0 / 1024.0);
+    println!(
+        "FP32 cache: {} bytes ({:.2} MiB)",
+        fp32_bytes,
+        fp32_bytes as f64 / 1024.0 / 1024.0
+    );
+    println!(
+        "FP16 cache: {} bytes ({:.2} MiB)",
+        fp16_bytes,
+        fp16_bytes as f64 / 1024.0 / 1024.0
+    );
     let savings = ((fp32_bytes - fp16_bytes) as f64 / fp32_bytes as f64) * 100.0;
-    println!("Memory savings: {:.1}% ({:.2} MiB)", savings, (fp32_bytes - fp16_bytes) as f64 / 1024.0 / 1024.0);
+    println!(
+        "Memory savings: {:.1}% ({:.2} MiB)",
+        savings,
+        (fp32_bytes - fp16_bytes) as f64 / 1024.0 / 1024.0
+    );
 
     // Paged allocation
     let page_size = 512;
@@ -75,7 +90,10 @@ fn benchmark_memory_bandwidth() {
 
     println!("\nWrite performance:");
     println!("  Append {} tokens: {:?}", MAX_SEQ_LEN, elapsed);
-    println!("  Throughput: {:.0} tokens/sec", MAX_SEQ_LEN as f64 / elapsed.as_secs_f64());
+    println!(
+        "  Throughput: {:.0} tokens/sec",
+        MAX_SEQ_LEN as f64 / elapsed.as_secs_f64()
+    );
     println!("  Bandwidth savings: ~2x vs FP32 (50% less data to transfer)");
 }
 
@@ -94,8 +112,10 @@ fn benchmark_parallelism() {
     let batch_size = BATCH_SIZE;
     let tokens_per_batch = MAX_SEQ_LEN * batch_size;
 
-    println!("Batch processing: {} sequences × {} tokens = {} total tokens", 
-             batch_size, MAX_SEQ_LEN, tokens_per_batch);
+    println!(
+        "Batch processing: {} sequences × {} tokens = {} total tokens",
+        batch_size, MAX_SEQ_LEN, tokens_per_batch
+    );
 
     // Warp-level parallelism
     let num_warps = 32; // Standard warp size
@@ -114,8 +134,12 @@ fn benchmark_parallelism() {
     println!("  GPU: RTX 4070 Ti SUPER (sm_8.9)");
     println!("  SM count: {}", sm_count);
     println!("  Tensor cores per SM: {}", tensor_cores_per_sm);
-    println!("  Total tensor cores: {} ({} × {})", 
-             sm_count * tensor_cores_per_sm, sm_count, tensor_cores_per_sm);
+    println!(
+        "  Total tensor cores: {} ({} × {})",
+        sm_count * tensor_cores_per_sm,
+        sm_count,
+        tensor_cores_per_sm
+    );
 }
 
 fn benchmark_algorithmic_improvements() {

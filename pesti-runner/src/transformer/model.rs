@@ -376,7 +376,9 @@ impl LlamaModel {
         let mut model = Self::from_gguf_weights(weights)?;
 
         // Load tokenizer from GGUF file
-        if let Ok((tokenizer_config, tokenizer)) = load_tokenizer_from_gguf(path, crate::transformer::TokenizerBackend::MistralRs) {
+        if let Ok((tokenizer_config, tokenizer)) =
+            load_tokenizer_from_gguf(path, crate::transformer::TokenizerBackend::MistralRs)
+        {
             model.tokenizer_config = Some(tokenizer_config);
             model.tokenizer = Some(tokenizer);
             debug!(path = %path.display(), "Loaded model with tokenizer");
@@ -436,7 +438,10 @@ impl LlamaModel {
                 }
             }
             None => weights.tensors.get(embedding_name).map(|tensor_data| {
-                debug!("No {} tensor — using tied embeddings for LM head", output_name);
+                debug!(
+                    "No {} tensor — using tied embeddings for LM head",
+                    output_name
+                );
                 if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                     let embed_dim = config.embed_dim;
                     let vocab = vocab_size as usize;
@@ -571,7 +576,9 @@ impl LlamaModel {
         // RMSNorm weights — architecture-dependent names (with fallbacks)
         let attention_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}input_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => format!("{prefix}attn_norm.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                format!("{prefix}attn_norm.weight")
+            }
             _ => format!("{prefix}attention_norm.weight"),
         };
 
@@ -580,7 +587,10 @@ impl LlamaModel {
             .tensors
             .get(&attention_norm_name)
             .or_else(|| {
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
+                if matches!(
+                    config.arch,
+                    ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama
+                ) {
                     weights.tensors.get(&format!("{prefix}attn_norm.weight"))
                 } else {
                     None
@@ -727,16 +737,28 @@ impl LlamaModel {
         let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
         let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
 
-        eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
+        eprintln!(
+            "DEBUG Llama: attn_q weight - in_features={}, out_features={}",
+            wq_in, wq_out
+        );
         let wq = Linear::from_f32_weight_with_dims(wq_data, q_bias, wq_in, wq_out);
 
-        eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
+        eprintln!(
+            "DEBUG Llama: attn_k weight - in_features={}, out_features={}",
+            wk_in, wk_out
+        );
         let wk = Linear::from_f32_weight_with_dims(wk_data, k_bias, wk_in, wk_out);
 
-        eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
+        eprintln!(
+            "DEBUG Llama: attn_v weight - in_features={}, out_features={}",
+            wv_in, wv_out
+        );
         let wv = Linear::from_f32_weight_with_dims(wv_data, v_bias, wv_in, wv_out);
 
-        eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
+        eprintln!(
+            "DEBUG Llama: attn_output weight - in_features={}, out_features={}",
+            wo_in, wo_out
+        );
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
@@ -796,7 +818,14 @@ impl LlamaModel {
             if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                 let hidden = config.embed_dim;
                 let intermediate = config.intermediate_dim;
-                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+                (
+                    hidden,
+                    intermediate,
+                    intermediate,
+                    hidden,
+                    hidden,
+                    intermediate,
+                )
             } else {
                 let w1_name = format!("{prefix}feed_forward.w1.weight");
                 let w2_name = format!("{prefix}feed_forward.w2.weight");
@@ -988,16 +1017,28 @@ impl LlamaModel {
         let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
         let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
 
-        eprintln!("DEBUG Llama: attn_q weight - in_features={}, out_features={}", wq_in, wq_out);
+        eprintln!(
+            "DEBUG Llama: attn_q weight - in_features={}, out_features={}",
+            wq_in, wq_out
+        );
         let wq = Linear::from_f32_weight_with_dims(wq_data, q_bias, wq_in, wq_out);
 
-        eprintln!("DEBUG Llama: attn_k weight - in_features={}, out_features={}", wk_in, wk_out);
+        eprintln!(
+            "DEBUG Llama: attn_k weight - in_features={}, out_features={}",
+            wk_in, wk_out
+        );
         let wk = Linear::from_f32_weight_with_dims(wk_data, k_bias, wk_in, wk_out);
 
-        eprintln!("DEBUG Llama: attn_v weight - in_features={}, out_features={}", wv_in, wv_out);
+        eprintln!(
+            "DEBUG Llama: attn_v weight - in_features={}, out_features={}",
+            wv_in, wv_out
+        );
         let wv = Linear::from_f32_weight_with_dims(wv_data, v_bias, wv_in, wv_out);
 
-        eprintln!("DEBUG Llama: attn_output weight - in_features={}, out_features={}", wo_in, wo_out);
+        eprintln!(
+            "DEBUG Llama: attn_output weight - in_features={}, out_features={}",
+            wo_in, wo_out
+        );
         let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
@@ -1057,7 +1098,14 @@ impl LlamaModel {
             if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                 let hidden = config.embed_dim;
                 let intermediate = config.intermediate_dim;
-                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+                (
+                    hidden,
+                    intermediate,
+                    intermediate,
+                    hidden,
+                    hidden,
+                    intermediate,
+                )
             } else {
                 let w1_name = format!("{prefix}feed_forward.w1.weight");
                 let w2_name = format!("{prefix}feed_forward.w2.weight");
@@ -1214,7 +1262,10 @@ impl LlamaModel {
 
         // DEBUG: Log which path we're taking
         if start_pos == 0 {
-            println!("[DEBUG] forward_with_dispatch called with GPU available: {}", ctx.gpu_available());
+            println!(
+                "[DEBUG] forward_with_dispatch called with GPU available: {}",
+                ctx.gpu_available()
+            );
         }
         // Initialize GPU KV caches on first call.
         // `PESTI_KV_MAX_SEQ` caps the allocation for testing on shared GPUs.
@@ -1253,7 +1304,10 @@ impl LlamaModel {
                 value_caches.push(value_cache);
             }
             self.kv_caches = Some((key_caches, value_caches));
-            println!("[DEBUG] KV caches initialized: {} layers", self.config.num_layers);
+            println!(
+                "[DEBUG] KV caches initialized: {} layers",
+                self.config.num_layers
+            );
         }
 
         let (key_caches, value_caches) = self
@@ -1262,8 +1316,11 @@ impl LlamaModel {
             .ok_or_else(|| RunnerError::Tensor("kv caches not initialized".into()))?;
 
         // DEBUG: Log current KV cache state before forward pass
-        println!("[DEBUG] forward_with_dispatch: start_pos={}, seq_len={}", 
-                  start_pos, key_caches[0].seq_len());
+        println!(
+            "[DEBUG] forward_with_dispatch: start_pos={}, seq_len={}",
+            start_pos,
+            key_caches[0].seq_len()
+        );
 
         let mut h = hidden.to_vec();
 
@@ -1271,7 +1328,10 @@ impl LlamaModel {
         if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
             let norm: f32 = h.iter().map(|v| v * v).sum::<f32>().sqrt();
             let head: Vec<String> = h.iter().take(8).map(|v| format!("{v:.3}")).collect();
-            eprintln!("[EMB] start_pos={start_pos} norm={norm:.4} head=[{}]", head.join(","));
+            eprintln!(
+                "[EMB] start_pos={start_pos} norm={norm:.4} head=[{}]",
+                head.join(",")
+            );
         }
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1372,7 +1432,11 @@ impl LlamaModel {
             if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
                 let norm: f32 = h.iter().map(|v| v * v).sum::<f32>().sqrt();
                 let head: Vec<String> = h.iter().take(8).map(|v| format!("{v:.3}")).collect();
-                eprintln!("[HIDDEN] layer={layer_idx} start_pos={start_pos} norm={norm:.4} head=[{}] {}", head.join(","), if start_pos == 0 { "(embed)" } else { "" });
+                eprintln!(
+                    "[HIDDEN] layer={layer_idx} start_pos={start_pos} norm={norm:.4} head=[{}] {}",
+                    head.join(","),
+                    if start_pos == 0 { "(embed)" } else { "" }
+                );
             }
         }
 
@@ -1392,9 +1456,10 @@ impl LlamaModel {
         }
 
         // Output head projection: hidden → logits via GEMM
-        let output = self.output.as_ref().ok_or_else(|| {
-            RunnerError::ModelLoad("missing output layer for GPU forward".into())
-        })?;
+        let output = self
+            .output
+            .as_ref()
+            .ok_or_else(|| RunnerError::ModelLoad("missing output layer for GPU forward".into()))?;
 
         // Use dispatch's GEMM kernel to compute: logits = h @ output.weight
         // A: [1, hidden] (single token), B: [hidden, vocab_size], C: [1, vocab_size]
@@ -1411,9 +1476,7 @@ impl LlamaModel {
         let hidden = self.config.embed_dim as usize;
         let weight = &output.weight;
         let output_f16: Vec<half::f16> = (0..hidden)
-            .flat_map(|k| {
-                (0..vocab).map(move |v| half::f16::from_f32(weight[v * hidden + k]))
-            })
+            .flat_map(|k| (0..vocab).map(move |v| half::f16::from_f32(weight[v * hidden + k])))
             .collect();
 
         // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
@@ -1440,7 +1503,10 @@ impl LlamaModel {
                 .take(5)
                 .map(|(i, v)| format!("{i}={v:.2}"))
                 .collect();
-            eprintln!("[LOGITS] start_pos={start_pos} top5=[{}]", top_str.join(" "));
+            eprintln!(
+                "[LOGITS] start_pos={start_pos} top5=[{}]",
+                top_str.join(" ")
+            );
         }
 
         Ok(logits_vec)

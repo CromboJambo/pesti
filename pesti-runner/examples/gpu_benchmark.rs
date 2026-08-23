@@ -5,7 +5,8 @@ use std::path::Path;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path =
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
     println!("=== GPU tok/s Benchmark ===\n");
 
@@ -58,13 +59,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0.0
     };
 
-    println!("Generated {} tokens in {:.3}s", generated.len(), elapsed.as_secs_f32());
+    println!(
+        "Generated {} tokens in {:.3}s",
+        generated.len(),
+        elapsed.as_secs_f32()
+    );
     println!("Throughput: {:.1} tok/s", throughput);
 
     // Decode
     if let Some(ref tok) = model.tokenizer {
         if let Ok(text) = tok.decode(&generated) {
-            println!("\nGenerated text: \"{}\"", text.chars().take(200).collect::<String>());
+            println!(
+                "\nGenerated text: \"{}\"",
+                text.chars().take(200).collect::<String>()
+            );
         }
     }
 

@@ -7,12 +7,13 @@
 //! 4. Generate tokens with `LlamaModel::generate`
 //! 5. Decode and report throughput
 
+use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
-use rand::SeedableRng;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path =
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
     println!("=== Week 14: Real E2E Decode Benchmark ===");
     println!("Model: {}", model_path);
@@ -35,9 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
     println!(
         "Loaded tokenizer; vocab_size={}, bos={:?}, eos={:?}",
-        tokenizer_config.vocab_size,
-        tokenizer_config.bos_token_id,
-        tokenizer_config.eos_token_id
+        tokenizer_config.vocab_size, tokenizer_config.bos_token_id, tokenizer_config.eos_token_id
     );
 
     let prompt = "The quick brown fox jumps over the lazy dog.";
@@ -86,9 +85,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let total_time = t0.elapsed();
     println!("\n=== Timeline ===");
-    println!("Weight/model/tokenizer setup: {:.2}s", total_time.as_secs_f32());
-    println!("Generation:                   {:.3}s", gen_time.as_secs_f32());
-    println!("Total measured wall time:     {:.3}s", total_time.as_secs_f32());
+    println!(
+        "Weight/model/tokenizer setup: {:.2}s",
+        total_time.as_secs_f32()
+    );
+    println!(
+        "Generation:                   {:.3}s",
+        gen_time.as_secs_f32()
+    );
+    println!(
+        "Total measured wall time:     {:.3}s",
+        total_time.as_secs_f32()
+    );
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 //! Benchmark KV cache optimizations: FP16, paged allocation, pinned memory
-//! 
+//!
 //! Compares standard Kvcache vs OptimizedKvcache across multiple dimensions.
 
 #![cfg(feature = "cuda")]
@@ -41,16 +41,22 @@ fn benchmark_memory_usage() {
     let optimized_cache = OptimizedKvcache::new(NUM_KV_HEADS, HEAD_DIM, MAX_SEQ_LEN, Some(512));
     let optimized_bytes = optimized_cache.memory_bytes_fp16();
 
-    println!("Standard cache: {} bytes ({:.2} MiB)", 
-             standard_bytes, 
-             standard_bytes as f64 / (1024.0 * 1024.0));
-    println!("Optimized cache: {} bytes ({:.2} MiB)", 
-             optimized_bytes, 
-             optimized_bytes as f64 / (1024.0 * 1024.0));
+    println!(
+        "Standard cache: {} bytes ({:.2} MiB)",
+        standard_bytes,
+        standard_bytes as f64 / (1024.0 * 1024.0)
+    );
+    println!(
+        "Optimized cache: {} bytes ({:.2} MiB)",
+        optimized_bytes,
+        optimized_bytes as f64 / (1024.0 * 1024.0)
+    );
     let savings = standard_bytes - optimized_bytes;
-    println!("Memory savings: {:.1}% ({:.2} MiB)", 
-             50.0, // FP16 always saves 50% vs FP32
-             (savings as f64 / (1024.0 * 1024.0)));
+    println!(
+        "Memory savings: {:.1}% ({:.2} MiB)",
+        50.0, // FP16 always saves 50% vs FP32
+        (savings as f64 / (1024.0 * 1024.0))
+    );
 }
 
 fn benchmark_write_performance() {
@@ -69,7 +75,10 @@ fn benchmark_write_performance() {
     let append_time = start.elapsed();
 
     println!("Append {} tokens: {:?}", MAX_SEQ_LEN, append_time);
-    println!("Throughput: {:.0} tokens/sec", MAX_SEQ_LEN as f64 / append_time.as_secs_f64());
+    println!(
+        "Throughput: {:.0} tokens/sec",
+        MAX_SEQ_LEN as f64 / append_time.as_secs_f64()
+    );
 }
 
 fn benchmark_paged_allocation() {
@@ -89,12 +98,18 @@ fn benchmark_paged_allocation() {
     // Show memory savings
     let fp32_bytes = NUM_KV_HEADS * HEAD_DIM * MAX_SEQ_LEN * 4 * 2; // FP32 K + V
     let fp16_bytes = cache.memory_bytes_fp16();
-    
+
     println!("\nMemory comparison:");
-    println!("FP32 cache: {} bytes ({:.2} MiB)", 
-             fp32_bytes, fp32_bytes as f64 / (1024.0 * 1024.0));
-    println!("FP16 cache: {} bytes ({:.2} MiB)", 
-             fp16_bytes, fp16_bytes as f64 / (1024.0 * 1024.0));
+    println!(
+        "FP32 cache: {} bytes ({:.2} MiB)",
+        fp32_bytes,
+        fp32_bytes as f64 / (1024.0 * 1024.0)
+    );
+    println!(
+        "FP16 cache: {} bytes ({:.2} MiB)",
+        fp16_bytes,
+        fp16_bytes as f64 / (1024.0 * 1024.0)
+    );
     let savings = ((fp32_bytes - fp16_bytes) as f64 / fp32_bytes as f64) * 100.0;
     let saved_mb = (fp32_bytes - fp16_bytes) as f64 / (1024.0 * 1024.0);
     println!("Savings: {:.1}% = {:.2} MiB", savings, saved_mb);

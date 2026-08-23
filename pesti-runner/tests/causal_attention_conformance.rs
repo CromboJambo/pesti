@@ -1,11 +1,11 @@
 //! Causal masking test for one-stage full fusion attention kernel
-//! 
+//!
 //! Validates that causal masking (only attending to past/current positions) works correctly.
 
 #![cfg(feature = "cuda")]
 
-use pesti_runner::cuda_runtime::{allocate_device_memory, copy_host_to_device, CudaRuntime};
-use pesti_runner::cuda_shim::{cu_stream, launch_kernel, CudaModule};
+use pesti_runner::cuda_runtime::{CudaRuntime, allocate_device_memory, copy_host_to_device};
+use pesti_runner::cuda_shim::{CudaModule, cu_stream, launch_kernel};
 
 /// Reference causal attention implementation (only attends to k_pos <= q_pos)
 fn reference_causal_attention(
@@ -23,13 +23,13 @@ fn reference_causal_attention(
         for head in 0..num_heads {
             for dim_idx in 0..head_dim {
                 let mut sum = 0.0f32;
-                
+
                 // Compute scores over k positions (causal: only k_pos <= q_pos)
                 let mut scores = vec![f32::NEG_INFINITY; seq_k]; // Initialize with -inf for future positions
                 for k_pos in 0..=q_pos {
                     let q_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
-                    
+
                     // Dot product over head_dim
                     for d in 0..head_dim {
                         let q_d = q[q_pos * num_heads * head_dim + head * head_dim + d];
@@ -41,8 +41,17 @@ fn reference_causal_attention(
 
                 // Softmax over sequence dimension (only past positions)
                 let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                let exp_sum: f32 = scores.iter().map(|&s| if s.is_finite() { (s - max_score).exp() } else { 0.0 }).sum();
-                
+                let exp_sum: f32 = scores
+                    .iter()
+                    .map(|&s| {
+                        if s.is_finite() {
+                            (s - max_score).exp()
+                        } else {
+                            0.0
+                        }
+                    })
+                    .sum();
+
                 for k_pos in 0..=q_pos {
                     if scores[k_pos].is_finite() {
                         let softmax_val = (scores[k_pos] - max_score).exp() / exp_sum;
@@ -171,16 +180,7 @@ fn test_causal_attention() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention_sync(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 
@@ -193,7 +193,8 @@ fn test_causal_attention() {
     }
 
     // Compare with CPU reference (causal)
-    let cpu_output = reference_causal_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
+    let cpu_output =
+        reference_causal_attention(&q_host, &k_host, &v_host, seq_q, seq_k, num_heads, head_dim);
 
     // Compute error metrics
     let mut max_abs_err = 0.0f32;
@@ -223,7 +224,7 @@ fn test_causal_vs_noncausal() {
 
     // Configuration where causal and non-causal differ significantly
     let seq_q = 4;
-    let seq_k = 8;  // k > q to see the masking effect
+    let seq_k = 8; // k > q to see the masking effect
     let num_heads = 2;
     let head_dim = 8;
 
@@ -271,16 +272,7 @@ fn test_causal_vs_noncausal() {
     let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     launch_fused_attention_sync(
-        &cuda_rt,
-        &module,
-        q_ptr,
-        k_ptr,
-        v_ptr,
-        out_ptr,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
     )
     .unwrap();
 

@@ -114,7 +114,7 @@ impl InferenceEngine {
 
             // Initialize GEMM kernel first
             let mut gpu_gemm = false;
-            
+
             // Select architecture based on device capabilities:
             // - WGMMA (sm_90a): Hopper/Blackwell datacenter GPUs
             // - Tcgen05 (sm_10.x): Datacenter Blackwell B200/B300
@@ -122,7 +122,7 @@ impl InferenceEngine {
             // - Mma (default): All tensor core GPUs with mma.sync support
             let arch = if let Some(cuda_rt) = &cuda_runtime {
                 let info = cuda_rt.device_info();
-                
+
                 // Check for WGMMA first (Hopper/Blackwell datacenter)
                 if info.supports_wgmma() {
                     tracing::info!("Detected Hopper/Blackwell architecture, using WGMMA");
@@ -135,7 +135,9 @@ impl InferenceEngine {
                 }
                 // Check for Ada Lovelace (RTX 40-series consumer GPUs like your RTX 4070 Ti SUPER)
                 else if info.supports_adalovelace_tensor_cores() {
-                    tracing::info!("Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores");
+                    tracing::info!(
+                        "Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores"
+                    );
                     Some(GemmArch::Mma) // Use mma.sync for Ada Lovelace
                 }
                 // Fallback to mma.sync (classic warp-level GEMM)
@@ -207,8 +209,11 @@ impl InferenceEngine {
                                 // Fall through to GEMM-based attention below
                                 let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
                                     Box::new(crate::kernel::CpuSoftmaxKernel::new());
-                                let attention_kernel =
-                                    GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
+                                let attention_kernel = GemmBasedAttentionKernel::new(
+                                    gemm_kernel,
+                                    backend.clone(),
+                                    softmax_kernel,
+                                );
                                 tracing::info!("Using GEMM-based attention kernel (Option A)");
                                 (Box::new(attention_kernel), Some(backend))
                             }
@@ -220,8 +225,11 @@ impl InferenceEngine {
                         // Default to GEMM-based attention when flash-attention feature is disabled
                         let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
                             Box::new(crate::kernel::CpuSoftmaxKernel::new());
-                        let attention_kernel =
-                            GemmBasedAttentionKernel::new(gemm_kernel, backend.clone(), softmax_kernel);
+                        let attention_kernel = GemmBasedAttentionKernel::new(
+                            gemm_kernel,
+                            backend.clone(),
+                            softmax_kernel,
+                        );
                         tracing::info!("Using GEMM-based attention kernel (Option A)");
                         (Box::new(attention_kernel), Some(backend))
                     }

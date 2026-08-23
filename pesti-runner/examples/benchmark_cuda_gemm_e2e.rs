@@ -38,9 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Benchmark parameters matching Qwen2.5-0.5B attention layer
-    let m = 64usize;   // Batch × seq_len (e.g., batch=4, seq_len=16)
+    let m = 64usize; // Batch × seq_len (e.g., batch=4, seq_len=16)
     let n = 2048usize; // Hidden dimension
-    let k = 512usize;  // Intermediate (Q @ K^T: [m×k] @ [k×n])
+    let k = 512usize; // Intermediate (Q @ K^T: [m×k] @ [k×n])
 
     println!("Benchmark Configuration:");
     println!(
@@ -51,10 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  Input size (FP16): {:.2} MB",
         (m * k + k * n) as f64 * 2.0 / 1e6
     );
-    println!(
-        "  Output size (FP32): {:.2} MB",
-        (m * n) as f64 * 4.0 / 1e6
-    );
+    println!("  Output size (FP32): {:.2} MB", (m * n) as f64 * 4.0 / 1e6);
     println!();
 
     // Generate test data
@@ -115,13 +112,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bandwidth calculation
     let total_bytes = (m * k + k * n) * 2 + (m * n) * 4; // FP16 inputs + FP32 output
-    let bandwidth_gb_s = (total_bytes as f64 / 1e6 * iterations as f64) / elapsed.as_secs_f64() / 1000.0;
+    let bandwidth_gb_s =
+        (total_bytes as f64 / 1e6 * iterations as f64) / elapsed.as_secs_f64() / 1000.0;
 
     println!("\n=== Performance Results ===");
-    println!("  Average execution time:  {:.3} μs per iteration", avg_time_us);
+    println!(
+        "  Average execution time:  {:.3} μs per iteration",
+        avg_time_us
+    );
     println!(
         "  Total time for {} iterations: {:.3} s",
-        iterations, elapsed.as_secs_f64()
+        iterations,
+        elapsed.as_secs_f64()
     );
     println!();
     println!("  Throughput: {:.2} GFLOPS", gflops);
@@ -137,10 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  FP16 tensor cores (mma.sync): ~{:.1} TFLOPS",
         theoretical_fp16_tflops
     );
-    println!(
-        "  Current utilization: {:.1}% of peak",
-        utilization
-    );
+    println!("  Current utilization: {:.1}% of peak", utilization);
     println!();
 
     // Verify numerical correctness - copy result back to host
@@ -173,24 +172,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .fold(0.0f64, |a, b| a.max(b as f64));
 
-    println!("  Max absolute error: {:.6} (target: < 1e-4) {}", max_abs_error, if max_abs_error < 1e-4 { "✅" } else { "⚠️" });
+    println!(
+        "  Max absolute error: {:.6} (target: < 1e-4) {}",
+        max_abs_error,
+        if max_abs_error < 1e-4 {
+            "✅"
+        } else {
+            "⚠️"
+        }
+    );
     println!("  Mean absolute error: {:.8}", mean_abs_error);
     println!(
         "  Max relative error: {:.6} (target: < 1e-3) {}",
         max_rel_error,
-        if max_rel_error < 1e-3 { "✅" } else { "⚠️" }
+        if max_rel_error < 1e-3 {
+            "✅"
+        } else {
+            "⚠️"
+        }
     );
     println!();
 
     // Projection to real inference workload
     let llama_cpp_baseline_tok_s = 72.0; // Qwen2.5-0.5B f16 on RTX 4070 Ti SUPER
-    
+
     // Conservative estimates based on actual measurements
     let gemm_optimization_factor = 3.5; // Tensor cores vs scalar CPU
     let kernel_fusion_factor = 1.8; // Fused QKV attention
     let kv_cache_factor = 2.0; // FP16 KV cache bandwidth savings
-    
-    let total_optimization_factor = gemm_optimization_factor * kernel_fusion_factor * kv_cache_factor;
+
+    let total_optimization_factor =
+        gemm_optimization_factor * kernel_fusion_factor * kv_cache_factor;
     let expected_tok_s = llama_cpp_baseline_tok_s * total_optimization_factor;
 
     println!("Projection to Full Inference (Qwen2.5-0.5B):");
@@ -226,7 +238,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if max_abs_error < 1e-4 && max_rel_error < 1e-3 {
         println!("✅ CUDA GEMM kernel is numerically correct and performing well!");
     } else {
-        println!("⚠️ CUDA GEMM kernel produces acceptable results (small numerical differences expected with FP16)");
+        println!(
+            "⚠️ CUDA GEMM kernel produces acceptable results (small numerical differences expected with FP16)"
+        );
     }
     println!(
         "  Measured: {:.2} GFLOPS at {:.1}% utilization",

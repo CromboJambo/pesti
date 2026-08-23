@@ -1,10 +1,12 @@
 //! Benchmark batched parallel attention with warp-level parallelism
-//! 
+//!
 //! Compares single-sequence vs batched processing to measure parallelism benefits.
 
 #![cfg(feature = "cuda")]
 
-use pesti_runner::kernel::batched_parallel_attention::{BatchedParallelAttentionConfig, BatchedParallelAttentionKernel};
+use pesti_runner::kernel::batched_parallel_attention::{
+    BatchedParallelAttentionConfig, BatchedParallelAttentionKernel,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Batched Parallel Attention Kernel Benchmark ===\n");
@@ -36,7 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let w_q: Vec<half::f16> = vec![half::f16::from_f32(0.5); num_heads * head_dim * in_features];
     let w_k: Vec<half::f16> = vec![half::f16::from_f32(0.5); num_heads * head_dim * in_features];
     let w_v: Vec<half::f16> = vec![half::f16::from_f32(0.5); num_heads * head_dim * in_features];
-    let w_o: Vec<half::f16> = vec![half::f16::from_f32(0.5); num_heads * head_dim * num_heads * head_dim];
+    let w_o: Vec<half::f16> =
+        vec![half::f16::from_f32(0.5); num_heads * head_dim * num_heads * head_dim];
 
     println!("Running batched parallel forward pass...");
 
@@ -52,11 +55,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Calculate theoretical benefits
     let single_seq_ops = 1; // Single sequence
     let batched_seq_ops = batch_size as f64; // Batch of sequences
-    
+
     println!("\n--- Theoretical Benefits ---");
     println!("Single-sequence ops: {}", single_seq_ops);
-    println!("Batched parallel ops: {} ({}x more work in parallel)", 
-             batched_seq_ops, batch_size);
+    println!(
+        "Batched parallel ops: {} ({}x more work in parallel)",
+        batched_seq_ops, batch_size
+    );
     println!("Expected speedup: +2-3x on batched inference");
 
     // Performance projections

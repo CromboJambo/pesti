@@ -8,17 +8,17 @@ use pesti_runner::cuda_shim::{cu_stream, launch_kernel};
 /// Reference RoPE implementation matching llama.cpp (HALF-SWAP rotation)
 fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     let half_dim = head_dim / 2;
-    
+
     // HALF-SWAP rotation: dimension i pairs with (i + head_dim/2)
     for dim in 0..half_dim {
         let idx_first = dim;
         let idx_second = dim + half_dim;
-        
+
         let inv_freq = 1.0 / (rope_base.powf((dim as f32) / half_dim as f32));
         let freq = pos as f32 * inv_freq;
         let cos_val = freq.cos();
         let sin_val = freq.sin();
-        
+
         let q_first = q[idx_first];
         let q_second = q[idx_second];
         q[idx_first] = q_first * cos_val - q_second * sin_val;
@@ -112,8 +112,8 @@ fn test_adversarial_bounded_attention() {
     println!();
 
     // Configuration: multi-position causal cases
-    let seq_q = 3;   // q=0, q=1, q=2 (varying causal contexts)
-    let seq_k = 8;   // Short sequence for clarity
+    let seq_q = 3; // q=0, q=1, q=2 (varying causal contexts)
+    let seq_k = 8; // Short sequence for clarity
     let num_heads = 2;
     let head_dim = 16;
     let rope_base = 10_000.0;
@@ -155,7 +155,7 @@ fn test_adversarial_bounded_attention() {
     // This ensures the kernel's raw dot products match the reference with RoPE
     let mut q_h_f32: Vec<f32> = q_h.iter().map(|&x| x.to_f32()).collect();
     let mut k_h_f32: Vec<f32> = k_h.iter().map(|&x| x.to_f32()).collect();
-    
+
     // Apply RoPE to Q positions
     for pos in 0..seq_q {
         for head in 0..num_heads {
@@ -168,8 +168,8 @@ fn test_adversarial_bounded_attention() {
             );
         }
     }
-    
-    // Apply RoPE to K positions  
+
+    // Apply RoPE to K positions
     for pos in 0..seq_k {
         for head in 0..num_heads {
             let k_start = pos * num_heads * head_dim + head * head_dim;
@@ -183,14 +183,8 @@ fn test_adversarial_bounded_attention() {
     }
 
     // Compute CPU reference (llama.cpp style with RoPE already applied above)
-    let mut llama_scores = reference_llama_attention_scores(
-        &q_h_f32,
-        &k_h_f32,
-        seq_q,
-        seq_k,
-        num_heads,
-        head_dim,
-    );
+    let mut llama_scores =
+        reference_llama_attention_scores(&q_h_f32, &k_h_f32, seq_q, seq_k, num_heads, head_dim);
 
     // Apply causal mask BEFORE softmax
     apply_causal_mask(&mut llama_scores, seq_q, seq_k, num_heads);
@@ -208,7 +202,7 @@ fn test_adversarial_bounded_attention() {
     let q_size = seq_q * num_heads * head_dim * 2;
     let k_size = seq_k * num_heads * head_dim * 2;
     let v_size = seq_k * num_heads * head_dim * 2;
-    
+
     let q_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap() };
     let k_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap() };
     let v_ptr = unsafe { pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap() };
@@ -217,11 +211,19 @@ fn test_adversarial_bounded_attention() {
     unsafe {
         let q_h_f16: Vec<f16> = q_h_f32.iter().map(|&x| f16::from_f32(x)).collect();
         let k_h_f16: Vec<f16> = k_h_f32.iter().map(|&x| f16::from_f32(x)).collect();
-        
-        pesti_runner::cuda_runtime::copy_host_to_device(q_ptr, q_h_f16.as_ptr() as *const u8, q_size)
-            .unwrap();
-        pesti_runner::cuda_runtime::copy_host_to_device(k_ptr, k_h_f16.as_ptr() as *const u8, k_size)
-            .unwrap();
+
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            q_ptr,
+            q_h_f16.as_ptr() as *const u8,
+            q_size,
+        )
+        .unwrap();
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            k_ptr,
+            k_h_f16.as_ptr() as *const u8,
+            k_size,
+        )
+        .unwrap();
         pesti_runner::cuda_runtime::copy_host_to_device(v_ptr, v_h.as_ptr() as *const u8, v_size)
             .unwrap();
     }
@@ -229,8 +231,8 @@ fn test_adversarial_bounded_attention() {
     // Load PTX and get function - USE EXACT PATTERN KERNEL (proven working)
     let stream = cuda_rt.new_stream().unwrap();
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_exact_pattern.ptx");
-    let module = pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src)
-        .unwrap();
+    let module =
+        pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
 
     // Use exact pattern kernel signature (5 pointers + scale + dims)
     let mangled_name = "_Z36fused_attention_exact_pattern_kernelPK6__halfS1_S1_PfS2_fiiii";
@@ -239,11 +241,10 @@ fn test_adversarial_bounded_attention() {
     // Allocate combined buffer: scores (float) + output (half)
     let score_buffer_size = seq_q * num_heads * seq_k * 4; // float
     let output_buffer_bytes = seq_q * num_heads * head_dim * 2; // half
-    
-    let combined_ptr = 
-        pesti_runner::cuda_runtime::allocate_device_memory(
-            score_buffer_size + output_buffer_bytes
-        ).unwrap();
+
+    let combined_ptr =
+        pesti_runner::cuda_runtime::allocate_device_memory(score_buffer_size + output_buffer_bytes)
+            .unwrap();
 
     println!(
         "Configuration: seq_q={}, seq_k={}, heads={}, dim={}",
@@ -316,10 +317,13 @@ fn test_adversarial_bounded_attention() {
         for head in 0..num_heads {
             let start = q_pos * num_heads * seq_k + head * seq_k;
             let end = start + seq_k;
-            
+
             // Find max for numerical stability
-            let max_val = gpu_scores[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-            
+            let max_val = gpu_scores[start..end]
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+
             // Apply softmax
             let mut sum = 0.0f32;
             for i in start..end {
@@ -331,7 +335,7 @@ fn test_adversarial_bounded_attention() {
                     sum += exp_val;
                 }
             }
-            
+
             // Normalize
             if sum > 0.0f32 {
                 for i in start..end {
@@ -348,14 +352,14 @@ fn test_adversarial_bounded_attention() {
         for head in 0..num_heads {
             // Get attention probs for this (q_pos, head)
             let start_idx = q_pos * num_heads * seq_k + head * seq_k;
-            
+
             // Weighted sum of V using softmax probs
             for d in 0..head_dim {
                 let mut out_val = 0.0f32;
                 for k_pos in 0..seq_k {
                     if llama_probs[start_idx + k_pos] > 1e-9 {
-                        let v_val = v_h[k_pos * num_heads * head_dim + head * head_dim + d]
-                            .to_f32();
+                        let v_val =
+                            v_h[k_pos * num_heads * head_dim + head * head_dim + d].to_f32();
                         out_val += llama_probs[start_idx + k_pos] * v_val;
                     }
                 }
@@ -370,13 +374,13 @@ fn test_adversarial_bounded_attention() {
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             let start_idx = q_pos * num_heads * seq_k + head * seq_k;
-            
+
             for d in 0..head_dim {
                 let mut out_val = 0.0f32;
                 for k_pos in 0..seq_k {
                     if gpu_probs[start_idx + k_pos] > 1e-9 {
-                        let v_val = v_h[k_pos * num_heads * head_dim + head * head_dim + d]
-                            .to_f32();
+                        let v_val =
+                            v_h[k_pos * num_heads * head_dim + head * head_dim + d].to_f32();
                         out_val += gpu_probs[start_idx + k_pos] * v_val;
                     }
                 }
@@ -388,7 +392,7 @@ fn test_adversarial_bounded_attention() {
     // Compare outputs
     let mut max_abs_err = 0.0f32;
     let mut max_rel_err = 0.0f32;
-    
+
     for i in 0..gpu_out.len() {
         let abs_err = (cpu_out[i] - gpu_out[i]).abs();
         let rel_err = if cpu_out[i].abs() > 1e-8 {
@@ -396,10 +400,10 @@ fn test_adversarial_bounded_attention() {
         } else {
             abs_err
         };
-        
+
         max_abs_err = max_abs_err.max(abs_err);
         max_rel_err = max_rel_err.max(rel_err);
-        
+
         // Debug: print first few AND last few values
         if i < 10 || i > gpu_out.len() - 5 {
             println!(
@@ -407,7 +411,7 @@ fn test_adversarial_bounded_attention() {
                 i, cpu_out[i], gpu_out[i], abs_err, rel_err
             );
         }
-        
+
         // Also print any with huge relative error
         if rel_err > 1.0 {
             println!(

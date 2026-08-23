@@ -1,5 +1,5 @@
 //! Minimal attention benchmark with target parameters (seq_k=512, heads=32)
-//! 
+//!
 //! This example benchmarks the one-stage full fusion attention kernel at the
 //! target configuration: Qwen2 variant with 32 query heads, 8 KV heads,
 //! embed_dim=128, head_dim=28.
@@ -8,7 +8,7 @@
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
-use pesti_runner::cuda_shim::{launch_kernel, CudaModule};
+use pesti_runner::cuda_shim::{CudaModule, launch_kernel};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -127,10 +127,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut times = Vec::with_capacity(num_runs);
 
     println!("\nRunning benchmark ({} iterations)...", num_runs);
-    
+
     for _ in 0..num_runs {
         let start = Instant::now();
-        
+
         unsafe {
             launch_kernel(
                 function.cu_function(),
@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut params,
             )?;
         }
-        
+
         cuda.synchronize()?;
         times.push(start.elapsed());
     }
@@ -159,9 +159,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Calculate throughput (tokens per second)
     let tokens_per_forward = SEQ_Q as f64 * NUM_HEADS as f64;
     let tokens_per_second = tokens_per_forward / avg_time.as_secs_f64();
-    
+
     println!("\nThroughput: {:.2} tokens/sec", tokens_per_second);
-    println!("Latency per forward pass: {:.4} ms", avg_time.as_secs_f64() * 1000.0);
+    println!(
+        "Latency per forward pass: {:.4} ms",
+        avg_time.as_secs_f64() * 1000.0
+    );
 
     Ok(())
 }

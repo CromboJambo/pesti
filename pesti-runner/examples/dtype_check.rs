@@ -1,6 +1,6 @@
 //! Print dtype + shape for named tensors using pesti's own parser.
-use std::path::Path;
 use pesti_gguf::parser::parse_gguf;
+use std::path::Path;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

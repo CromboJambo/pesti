@@ -106,7 +106,10 @@ impl BatchedParallelAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             q_val += x[pos_start + i] * w_q[w_idx].to_f32();
                         }
-                        q_proj[b * seq_len * num_heads * head_dim + pos * num_heads * head_dim + h_offset + d] = q_val;
+                        q_proj[b * seq_len * num_heads * head_dim
+                            + pos * num_heads * head_dim
+                            + h_offset
+                            + d] = q_val;
 
                         // K projection (parallel across heads)
                         let mut k_val = 0.0f32;
@@ -114,7 +117,10 @@ impl BatchedParallelAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             k_val += x[pos_start + i] * w_k[w_idx].to_f32();
                         }
-                        k_proj[b * seq_len * num_heads * head_dim + pos * num_heads * head_dim + h_offset + d] = k_val;
+                        k_proj[b * seq_len * num_heads * head_dim
+                            + pos * num_heads * head_dim
+                            + h_offset
+                            + d] = k_val;
 
                         // V projection (parallel across heads)
                         let mut v_val = 0.0f32;
@@ -122,7 +128,10 @@ impl BatchedParallelAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             v_val += x[pos_start + i] * w_v[w_idx].to_f32();
                         }
-                        v_proj[b * seq_len * num_heads * head_dim + pos * num_heads * head_dim + h_offset + d] = v_val;
+                        v_proj[b * seq_len * num_heads * head_dim
+                            + pos * num_heads * head_dim
+                            + h_offset
+                            + d] = v_val;
                     }
                 }
             }
@@ -130,43 +139,45 @@ impl BatchedParallelAttentionKernel {
 
         // Step 2: Compute attention scores with warp-level parallelism
         let mut scores = vec![0.0f32; batch_size * seq_len * seq_len * num_heads];
-        
+
         // Warp-level parallelism: each warp handles one head across all positions
         for b in 0..batch_size {
             for h in 0..num_heads {
                 let h_offset = h * head_dim;
-                
+
                 // Each thread computes dot product for one position pair
                 for pos_q in 0..seq_len {
                     for pos_k in 0..seq_len {
                         let mut dot = 0.0f32;
-                        
+
                         // Parallel reduction across dimensions (simulating warp reduction)
                         let chunk_size = head_dim / 4; // Each thread handles 4 dims
                         for c in 0..chunk_size {
                             let d1 = pos_q * head_dim + h_offset + c * 4 + 0;
                             let d2 = pos_k * head_dim + h_offset + c * 4 + 0;
-                            dot += q_proj[b * seq_len * num_heads * head_dim + d1] 
-                                 * k_proj[b * seq_len * num_heads * head_dim + d2];
-                            
+                            dot += q_proj[b * seq_len * num_heads * head_dim + d1]
+                                * k_proj[b * seq_len * num_heads * head_dim + d2];
+
                             let d3 = pos_q * head_dim + h_offset + c * 4 + 1;
                             let d4 = pos_k * head_dim + h_offset + c * 4 + 1;
-                            dot += q_proj[b * seq_len * num_heads * head_dim + d3] 
-                                 * k_proj[b * seq_len * num_heads * head_dim + d4];
+                            dot += q_proj[b * seq_len * num_heads * head_dim + d3]
+                                * k_proj[b * seq_len * num_heads * head_dim + d4];
 
                             let d5 = pos_q * head_dim + h_offset + c * 4 + 2;
                             let d6 = pos_k * head_dim + h_offset + c * 4 + 2;
-                            dot += q_proj[b * seq_len * num_heads * head_dim + d5] 
-                                 * k_proj[b * seq_len * num_heads * head_dim + d6];
+                            dot += q_proj[b * seq_len * num_heads * head_dim + d5]
+                                * k_proj[b * seq_len * num_heads * head_dim + d6];
 
                             let d7 = pos_q * head_dim + h_offset + c * 4 + 3;
                             let d8 = pos_k * head_dim + h_offset + c * 4 + 3;
-                            dot += q_proj[b * seq_len * num_heads * head_dim + d7] 
-                                 * k_proj[b * seq_len * num_heads * head_dim + d8];
+                            dot += q_proj[b * seq_len * num_heads * head_dim + d7]
+                                * k_proj[b * seq_len * num_heads * head_dim + d8];
                         }
-                        
-                        scores[b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads + pos_k * num_heads + h] = 
-                            dot * self.config.scale;
+
+                        scores[b * seq_len * seq_len * num_heads
+                            + pos_q * seq_len * num_heads
+                            + pos_k * num_heads
+                            + h] = dot * self.config.scale;
                     }
                 }
             }
@@ -178,9 +189,10 @@ impl BatchedParallelAttentionKernel {
             for h in 0..num_heads {
                 for pos_q in 0..seq_len {
                     // Find max score for numerical stability
-                    let scores_start = b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads;
+                    let scores_start =
+                        b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads;
                     let mut max_score = f32::NEG_INFINITY;
-                    
+
                     for pos_k in 0..seq_len {
                         let idx = scores_start + pos_k * num_heads + h;
                         if scores[idx] > max_score {
@@ -212,44 +224,70 @@ impl BatchedParallelAttentionKernel {
             for h in 0..num_heads {
                 for pos_q in 0..seq_len {
                     let mut out_val = 0.0f32;
-                    
+
                     // Parallel reduction across sequence positions
                     let chunk_size = seq_len / 4;
                     for c in 0..chunk_size {
                         let pos_k = c * 4 + 0;
-                        let softmax_idx = b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads + pos_k * num_heads + h;
-                        
+                        let softmax_idx = b * seq_len * seq_len * num_heads
+                            + pos_q * seq_len * num_heads
+                            + pos_k * num_heads
+                            + h;
+
                         for d in 0..head_dim {
-                            let v_idx = b * seq_len * num_heads * head_dim + pos_k * num_heads * head_dim + h * head_dim + d;
+                            let v_idx = b * seq_len * num_heads * head_dim
+                                + pos_k * num_heads * head_dim
+                                + h * head_dim
+                                + d;
                             out_val += softmax_scores[softmax_idx] * v_proj[v_idx];
                         }
 
                         let pos_k2 = c * 4 + 1;
-                        let softmax_idx2 = b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads + pos_k2 * num_heads + h;
-                        
+                        let softmax_idx2 = b * seq_len * seq_len * num_heads
+                            + pos_q * seq_len * num_heads
+                            + pos_k2 * num_heads
+                            + h;
+
                         for d in 0..head_dim {
-                            let v_idx2 = b * seq_len * num_heads * head_dim + pos_k2 * num_heads * head_dim + h * head_dim + d;
+                            let v_idx2 = b * seq_len * num_heads * head_dim
+                                + pos_k2 * num_heads * head_dim
+                                + h * head_dim
+                                + d;
                             out_val += softmax_scores[softmax_idx2] * v_proj[v_idx2];
                         }
 
                         let pos_k3 = c * 4 + 2;
-                        let softmax_idx3 = b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads + pos_k3 * num_heads + h;
-                        
+                        let softmax_idx3 = b * seq_len * seq_len * num_heads
+                            + pos_q * seq_len * num_heads
+                            + pos_k3 * num_heads
+                            + h;
+
                         for d in 0..head_dim {
-                            let v_idx3 = b * seq_len * num_heads * head_dim + pos_k3 * num_heads * head_dim + h * head_dim + d;
+                            let v_idx3 = b * seq_len * num_heads * head_dim
+                                + pos_k3 * num_heads * head_dim
+                                + h * head_dim
+                                + d;
                             out_val += softmax_scores[softmax_idx3] * v_proj[v_idx3];
                         }
 
                         let pos_k4 = c * 4 + 3;
-                        let softmax_idx4 = b * seq_len * seq_len * num_heads + pos_q * seq_len * num_heads + pos_k4 * num_heads + h;
-                        
+                        let softmax_idx4 = b * seq_len * seq_len * num_heads
+                            + pos_q * seq_len * num_heads
+                            + pos_k4 * num_heads
+                            + h;
+
                         for d in 0..head_dim {
-                            let v_idx4 = b * seq_len * num_heads * head_dim + pos_k4 * num_heads * head_dim + h * head_dim + d;
+                            let v_idx4 = b * seq_len * num_heads * head_dim
+                                + pos_k4 * num_heads * head_dim
+                                + h * head_dim
+                                + d;
                             out_val += softmax_scores[softmax_idx4] * v_proj[v_idx4];
                         }
                     }
 
-                    attention_output[b * seq_len * num_heads * head_dim + pos_q * num_heads * head_dim + h * head_dim] = out_val;
+                    attention_output[b * seq_len * num_heads * head_dim
+                        + pos_q * num_heads * head_dim
+                        + h * head_dim] = out_val;
                 }
             }
         }
@@ -260,18 +298,23 @@ impl BatchedParallelAttentionKernel {
             for pos_q in 0..seq_len {
                 for h in 0..num_heads {
                     let h_offset = h * head_dim;
-                    
+
                     // Use last sequence position for output (simplified)
                     let last_pos = seq_len - 1;
-                    let att_start = b * seq_len * num_heads * head_dim + last_pos * num_heads * head_dim + h_offset;
-                    
+                    let att_start = b * seq_len * num_heads * head_dim
+                        + last_pos * num_heads * head_dim
+                        + h_offset;
+
                     for d in 0..head_dim {
                         let mut sum = 0.0f32;
                         for i in 0..head_dim {
                             let w_idx = (h * head_dim + d) * head_dim + i;
                             sum += attention_output[att_start + i] * w_o[w_idx].to_f32();
                         }
-                        output[b * seq_len * num_heads * head_dim + pos_q * num_heads * head_dim + h_offset + d] = sum;
+                        output[b * seq_len * num_heads * head_dim
+                            + pos_q * num_heads * head_dim
+                            + h_offset
+                            + d] = sum;
                     }
                 }
             }
@@ -312,7 +355,7 @@ mod tests {
     fn test_batched_kernel_creation() {
         let config = BatchedParallelAttentionConfig::default();
         let kernel = BatchedParallelAttentionKernel::new(Some(config.clone()));
-        
+
         assert_eq!(kernel.config().batch_size, 4);
         assert_eq!(kernel.config().seq_len, 64);
         assert_eq!(kernel.config().num_heads, 32);
@@ -341,12 +384,13 @@ mod tests {
         let w_o: Vec<f16> = vec![f16::from_f32(0.5); num_heads * head_dim * num_heads * head_dim];
 
         // Run batched forward pass
-        let output = kernel.forward(&x, &w_q, &w_k, &w_v, &w_o)
+        let output = kernel
+            .forward(&x, &w_q, &w_k, &w_v, &w_o)
             .expect("Batched forward should succeed");
 
         // Verify output shape
         assert_eq!(output.len(), batch_size * seq_len * num_heads * head_dim);
-        
+
         // Verify non-zero output (weights are non-zero)
         let sum: f32 = output.iter().sum();
         assert!(sum > 0.0, "Output should be non-zero with non-zero weights");

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "cuda")]
-use crate::cuda_runtime::{allocate_device_memory, free_device_memory, CudaError};
+use crate::cuda_runtime::{CudaError, allocate_device_memory, free_device_memory};
 
 /// A reusable GPU memory buffer within the pool.
 pub struct PooledBuffer {
@@ -27,10 +27,10 @@ impl Drop for PooledBuffer {
 /// Configuration for the memory pool.
 #[derive(Debug, Clone)]
 pub struct MemoryPoolConfig {
-/// Initial number of allocations per size class (default: 3 to save memory).
-pub initial_allocations: usize,
-/// Maximum total allocations across all size classes (default: 50).
-pub max_allocations: usize,
+    /// Initial number of allocations per size class (default: 3 to save memory).
+    pub initial_allocations: usize,
+    /// Maximum total allocations across all size classes (default: 50).
+    pub max_allocations: usize,
     /// Size classes to pre-allocate (in bytes).
     pub size_classes: Vec<usize>,
 }
@@ -42,10 +42,10 @@ impl Default for MemoryPoolConfig {
             max_allocations: 100,
             /// Common sizes from benchmark analysis
             size_classes: vec![
-                32 * 1024,       // 32 KB (small tensors)
-                128 * 1024,      // 128 KB (medium tensors)
-                512 * 1024,      // 512 KB (large tensors)
-                4 * 1024 * 1024, // 4 MB (very large tensors - 256x256x8x64x4)
+                32 * 1024,        // 32 KB (small tensors)
+                128 * 1024,       // 128 KB (medium tensors)
+                512 * 1024,       // 512 KB (large tensors)
+                4 * 1024 * 1024,  // 4 MB (very large tensors - 256x256x8x64x4)
                 16 * 1024 * 1024, // 16 MB (huge tensors - 512x512x16x128x4)
             ],
         }
@@ -89,13 +89,13 @@ impl MemoryPool {
 
         for &size in &config.size_classes {
             let pool: Mutex<VecDeque<PooledBuffer>> = Mutex::new(VecDeque::new());
-            
+
             // Pre-allocate initial buffers
             for _ in 0..config.initial_allocations {
                 let ptr = allocate_device_memory(size)?;
                 (*pool.lock().unwrap()).push_back(PooledBuffer { ptr, size });
             }
-            
+
             pools.push(pool);
             size_classes.push(size);
         }
@@ -111,10 +111,7 @@ impl MemoryPool {
     /// Allocate a buffer of at least `size` bytes from the pool.
     pub fn allocate(&self, size: usize) -> Result<PooledBuffer, CudaError> {
         // Find appropriate size class (smallest that fits)
-        let class_idx = self
-            .size_classes
-            .iter()
-            .position(|&s| s >= size);
+        let class_idx = self.size_classes.iter().position(|&s| s >= size);
 
         // If no size class fits, fall back to direct allocation
         let class_idx = match class_idx {
@@ -189,13 +186,13 @@ impl MemoryPool {
                     free_device_memory(buffer.ptr)?;
                 }
             }
-            
+
             // Replenish to initial count
             for _ in 0..self.config.initial_allocations {
                 let ptr = allocate_device_memory(self.size_classes[class_idx])?;
-                pool.push_back(PooledBuffer { 
-                    ptr, 
-                    size: self.size_classes[class_idx] 
+                pool.push_back(PooledBuffer {
+                    ptr,
+                    size: self.size_classes[class_idx],
                 });
             }
         }
@@ -291,11 +288,11 @@ mod tests {
     #[test]
     fn test_execution_batch() {
         let mut batch = ExecutionBatch::new(128);
-        
+
         // Small sequences should batch immediately
         batch.add_sequence(64, 64, 4, 64);
         assert!(batch.is_ready());
-        
+
         // Add more
         batch.add_sequence(128, 128, 8, 64);
         assert_eq!(batch.batch_size, 2);

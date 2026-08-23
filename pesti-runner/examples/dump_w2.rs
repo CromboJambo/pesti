@@ -23,11 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         w2.out_features,
         w2.weight.len()
     );
-    let bytes: Vec<u8> = w2
-        .weight
-        .iter()
-        .flat_map(|x| x.to_le_bytes())
-        .collect();
+    let bytes: Vec<u8> = w2.weight.iter().flat_map(|x| x.to_le_bytes()).collect();
     std::fs::write(format!("{out_prefix}.f32"), &bytes)?;
     println!("{}", w2.weight.len());
     Ok(())

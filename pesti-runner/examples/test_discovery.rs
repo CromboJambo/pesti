@@ -7,11 +7,11 @@ async fn main() -> pesti_runner::error::Result<()> {
     println!("=== Testing Model Discovery ===\n");
 
     let runtime = Runtime::new();
-    
+
     // List available models from discovery paths
     let available = runtime.list_available();
     println!("Available models: {} total", available.len());
-    
+
     if available.is_empty() {
         println!("\nℹ️  No models found in discovery paths");
         println!("   Set CRABJAR_MODEL_PATHS environment variable and copy GGUF files there");

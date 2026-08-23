@@ -31,7 +31,7 @@ impl Default for FusedLinearAttentionConfig {
         Self {
             num_heads,
             head_dim,
-            in_features: 512, // Qwen2.5-0.5B hidden size
+            in_features: 512,                       // Qwen2.5-0.5B hidden size
             qkv_features: num_heads * head_dim * 3, // Q, K, V
             scale: 1.0 / (head_dim as f32).sqrt(),
         }
@@ -99,7 +99,10 @@ impl FusedLinearAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             q_val += x[x_start + i] * w_q[w_idx].to_f32();
                         }
-                        q_proj[b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim + d] = q_val;
+                        q_proj[b * num_heads * max_seq * head_dim
+                            + h * max_seq * head_dim
+                            + q_pos * head_dim
+                            + d] = q_val;
 
                         // K projection
                         let mut k_val = 0.0f32;
@@ -107,7 +110,10 @@ impl FusedLinearAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             k_val += x[x_start + i] * w_k[w_idx].to_f32();
                         }
-                        k_proj[b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim + d] = k_val;
+                        k_proj[b * num_heads * max_seq * head_dim
+                            + h * max_seq * head_dim
+                            + q_pos * head_dim
+                            + d] = k_val;
 
                         // V projection
                         let mut v_val = 0.0f32;
@@ -115,7 +121,10 @@ impl FusedLinearAttentionKernel {
                             let w_idx = (h * head_dim + d) * in_features + i;
                             v_val += x[x_start + i] * w_v[w_idx].to_f32();
                         }
-                        v_proj[b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim + d] = v_val;
+                        v_proj[b * num_heads * max_seq * head_dim
+                            + h * max_seq * head_dim
+                            + q_pos * head_dim
+                            + d] = v_val;
                     }
                 }
             }
@@ -129,12 +138,20 @@ impl FusedLinearAttentionKernel {
                     for k_pos in 0..max_seq {
                         let mut dot = 0.0f32;
                         for d in 0..head_dim {
-                            let q_idx = b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim + d;
-                            let k_idx = b * num_heads * max_seq * head_dim + h * max_seq * head_dim + k_pos * head_dim + d;
+                            let q_idx = b * num_heads * max_seq * head_dim
+                                + h * max_seq * head_dim
+                                + q_pos * head_dim
+                                + d;
+                            let k_idx = b * num_heads * max_seq * head_dim
+                                + h * max_seq * head_dim
+                                + k_pos * head_dim
+                                + d;
                             dot += q_proj[q_idx] * k_proj[k_idx];
                         }
-                        scores[b * num_heads * max_seq * max_seq + h * max_seq * max_seq + q_pos * max_seq + k_pos] = 
-                            dot * self.config.scale;
+                        scores[b * num_heads * max_seq * max_seq
+                            + h * max_seq * max_seq
+                            + q_pos * max_seq
+                            + k_pos] = dot * self.config.scale;
                     }
                 }
             }
@@ -180,14 +197,21 @@ impl FusedLinearAttentionKernel {
                 for q_pos in 0..max_seq {
                     let mut out_val = 0.0f32;
                     for k_pos in 0..max_seq {
-                        let softmax_idx = 
-                            b * num_heads * max_seq * max_seq + h * max_seq * max_seq + q_pos * max_seq + k_pos;
+                        let softmax_idx = b * num_heads * max_seq * max_seq
+                            + h * max_seq * max_seq
+                            + q_pos * max_seq
+                            + k_pos;
                         for d in 0..head_dim {
-                            let v_idx = b * num_heads * max_seq * head_dim + h * max_seq * head_dim + k_pos * head_dim + d;
+                            let v_idx = b * num_heads * max_seq * head_dim
+                                + h * max_seq * head_dim
+                                + k_pos * head_dim
+                                + d;
                             out_val += softmax_scores[softmax_idx] * v_proj[v_idx];
                         }
                     }
-                    attention_output[b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim] = out_val;
+                    attention_output[b * num_heads * max_seq * head_dim
+                        + h * max_seq * head_dim
+                        + q_pos * head_dim] = out_val;
                 }
             }
         }
@@ -201,7 +225,10 @@ impl FusedLinearAttentionKernel {
                     // Use last sequence position (q_pos = max_seq - 1)
                     let q_pos = max_seq - 1;
                     let h = o / head_dim; // Approximate head index
-                    let att_idx = b * num_heads * max_seq * head_dim + h * max_seq * head_dim + q_pos * head_dim + (o % head_dim);
+                    let att_idx = b * num_heads * max_seq * head_dim
+                        + h * max_seq * head_dim
+                        + q_pos * head_dim
+                        + (o % head_dim);
                     let w_idx = o * out_features + i;
                     sum += attention_output[att_idx] * w_o[w_idx].to_f32();
                 }
@@ -244,7 +271,7 @@ mod tests {
     fn test_fused_kernel_creation() {
         let config = FusedLinearAttentionConfig::default();
         let kernel = FusedLinearAttentionKernel::new(Some(config.clone()));
-        
+
         assert_eq!(kernel.config().num_heads, 32);
         assert_eq!(kernel.config().head_dim, 64);
         assert!(kernel.is_ready());
@@ -271,12 +298,13 @@ mod tests {
         let w_o: Vec<f16> = vec![f16::from_f32(0.5); out_features * out_features];
 
         // Run fused forward pass
-        let output = kernel.forward(&x, &w_q, &w_k, &w_v, &w_o, batch_size, max_seq)
+        let output = kernel
+            .forward(&x, &w_q, &w_k, &w_v, &w_o, batch_size, max_seq)
             .expect("Fused forward should succeed");
 
         // Verify output shape
         assert_eq!(output.len(), batch_size * out_features);
-        
+
         // Verify non-zero output (weights are non-zero)
         let sum: f32 = output.iter().sum();
         assert!(sum > 0.0, "Output should be non-zero with non-zero weights");

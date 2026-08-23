@@ -67,9 +67,9 @@ impl PestiTokenizer {
     /// Create a new tokenizer from GGUF metadata using the selected backend.
     pub fn from_gguf(header: &GgufHeader, backend: TokenizerBackend) -> Result<Self, RunnerError> {
         match backend {
-            TokenizerBackend::MistralRs => Ok(Self::MistralRs(
-                Self::load_mistralrs_tokenizer(header)?,
-            )),
+            TokenizerBackend::MistralRs => {
+                Ok(Self::MistralRs(Self::load_mistralrs_tokenizer(header)?))
+            }
 
             #[cfg(feature = "rust-tokenizer")]
             TokenizerBackend::Qwen2Bpe => {
@@ -79,7 +79,9 @@ impl PestiTokenizer {
 
             #[cfg(not(feature = "rust-tokenizer"))]
             TokenizerBackend::Qwen2Bpe => {
-                warn!("rust-tokenizer feature not enabled, falling back to GGUF-extracted tokenizer");
+                warn!(
+                    "rust-tokenizer feature not enabled, falling back to GGUF-extracted tokenizer"
+                );
                 Ok(Self::MistralRs(Self::load_mistralrs_tokenizer(header)?))
             }
         }
@@ -87,19 +89,21 @@ impl PestiTokenizer {
 
     /// Build the real tokenizer from the GGUF-embedded `tokenizer.ggml.*` arrays.
     fn load_mistralrs_tokenizer(header: &GgufHeader) -> Result<tokenizers::Tokenizer, RunnerError> {
+        use tokenizers::AddedToken;
         use tokenizers::models::bpe::{BPE, Vocab};
         use tokenizers::normalizers::NFC;
         use tokenizers::pre_tokenizers::byte_level::ByteLevel;
         use tokenizers::pre_tokenizers::sequence::Sequence;
         use tokenizers::pre_tokenizers::split::Split;
         use tokenizers::tokenizer::normalizer::SplitDelimiterBehavior;
-        use tokenizers::AddedToken;
 
         // 1. Extract vocab (token -> id) and merges from the GGUF arrays.
-        let tokens = Self::string_array(header, "tokenizer.ggml.tokens")
-            .ok_or_else(|| RunnerError::Tokenizer("missing tokenizer.ggml.tokens array in GGUF".into()))?;
-        let merge_strs = Self::string_array(header, "tokenizer.ggml.merges")
-            .ok_or_else(|| RunnerError::Tokenizer("missing tokenizer.ggml.merges array in GGUF".into()))?;
+        let tokens = Self::string_array(header, "tokenizer.ggml.tokens").ok_or_else(|| {
+            RunnerError::Tokenizer("missing tokenizer.ggml.tokens array in GGUF".into())
+        })?;
+        let merge_strs = Self::string_array(header, "tokenizer.ggml.merges").ok_or_else(|| {
+            RunnerError::Tokenizer("missing tokenizer.ggml.merges array in GGUF".into())
+        })?;
 
         let vocab: Vocab = tokens
             .into_iter()
@@ -131,8 +135,12 @@ impl PestiTokenizer {
             .map_err(|e| RunnerError::Tokenizer(format!("BPE build failed: {e}")))?;
 
         // 3. Qwen2 pre-tokenizer: Sequence[Split(Regex, Isolated), ByteLevel].
-        let split = Split::new(QWEN2_PRETOKENIZE_REGEX, SplitDelimiterBehavior::Isolated, false)
-            .map_err(|e| RunnerError::Tokenizer(format!("pre-tokenizer regex failed: {e}")))?;
+        let split = Split::new(
+            QWEN2_PRETOKENIZE_REGEX,
+            SplitDelimiterBehavior::Isolated,
+            false,
+        )
+        .map_err(|e| RunnerError::Tokenizer(format!("pre-tokenizer regex failed: {e}")))?;
         let byte_level = ByteLevel::new(false, false, false);
         let pre_tokenizer = Sequence::new(vec![split.into(), byte_level.into()]);
 
@@ -180,12 +188,13 @@ impl PestiTokenizer {
         use pesti_gguf::parser::parse_gguf;
 
         // Extract model path from GGUF header (assuming it's stored in metadata)
-        let model_path = header.get_kv_str("tokenizer.model")
+        let model_path = header
+            .get_kv_str("tokenizer.model")
             .ok_or_else(|| RunnerError::Tokenizer("Missing tokenizer.model in GGUF".into()))?;
 
         // Parse GGUF to get vocabulary and merge pairs
-        let header = parse_gguf(Path::new(model_path))
-            .map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
+        let header =
+            parse_gguf(Path::new(model_path)).map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
 
         // For now, use hardcoded paths (can be improved later)
         let vocab_path = "/tmp/qwen2_vocab_dump.json";
@@ -201,16 +210,17 @@ impl PestiTokenizer {
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, RunnerError> {
         match self {
             Self::MistralRs(inner) => {
-                let encoding = inner.encode(text, false)
+                let encoding = inner
+                    .encode(text, false)
                     .map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
 
                 Ok(encoding.get_ids().to_vec())
             }
 
             #[cfg(feature = "rust-tokenizer")]
-            Self::Qwen2Bpe(inner) => {
-                inner.encode(text).map_err(|e| RunnerError::Tokenizer(e.to_string()))
-            }
+            Self::Qwen2Bpe(inner) => inner
+                .encode(text)
+                .map_err(|e| RunnerError::Tokenizer(e.to_string())),
         }
     }
 
@@ -218,16 +228,17 @@ impl PestiTokenizer {
     pub fn decode(&self, tokens: &[u32]) -> Result<String, RunnerError> {
         match self {
             Self::MistralRs(inner) => {
-                let result = inner.decode(tokens, false)
+                let result = inner
+                    .decode(tokens, false)
                     .map_err(|e| RunnerError::Tokenizer(e.to_string()))?;
 
                 Ok(result)
             }
 
             #[cfg(feature = "rust-tokenizer")]
-            Self::Qwen2Bpe(inner) => {
-                inner.decode(tokens).map_err(|e| RunnerError::Tokenizer(e.to_string()))
-            }
+            Self::Qwen2Bpe(inner) => inner
+                .decode(tokens)
+                .map_err(|e| RunnerError::Tokenizer(e.to_string())),
         }
     }
 
@@ -259,7 +270,11 @@ impl GgufTokenizerConfig {
         // Vocab size = length of the tokens array (falls back to a scalar key).
         let vocab_size = PestiTokenizer::string_array(header, "tokenizer.ggml.tokens")
             .map(|t| t.len())
-            .or_else(|| header.get_kv_u32("tokenizer.ggml.vocab_size").map(|v| v as usize))
+            .or_else(|| {
+                header
+                    .get_kv_u32("tokenizer.ggml.vocab_size")
+                    .map(|v| v as usize)
+            })
             .unwrap_or(0);
 
         let bos_token_id = header.get_kv_u32("tokenizer.ggml.bos_token_id");

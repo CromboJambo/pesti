@@ -6,8 +6,8 @@
 //! - Profile performance bottlenecks
 //! - Optimize attention kernels for sm_8.9 architecture
 
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::path::Path;
 use std::time::Instant;
 
@@ -51,7 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt_tokens: Vec<u32> = if let Some(ref tok) = model.tokenizer {
         println!(
             "Loaded real GGUF tokenizer with {} tokens",
-            model.tokenizer_config.as_ref().map(|c| c.vocab_size).unwrap_or(0)
+            model
+                .tokenizer_config
+                .as_ref()
+                .map(|c| c.vocab_size)
+                .unwrap_or(0)
         );
 
         // Tokenize prompt
@@ -90,7 +94,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let t3 = Instant::now();
     let mut rng = StdRng::seed_from_u64(42);
-    let generated_tokens = model.generate(&prompt_tokens, max_tokens, &sampling_config, &mut rng, &[0])?;
+    let generated_tokens =
+        model.generate(&prompt_tokens, max_tokens, &sampling_config, &mut rng, &[0])?;
     let gen_time = t3.elapsed();
 
     println!("\n=== Results ===");

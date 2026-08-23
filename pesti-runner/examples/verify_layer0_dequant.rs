@@ -14,7 +14,11 @@ fn norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 fn head(v: &[f32]) -> String {
-    v.iter().take(8).map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(",")
+    v.iter()
+        .take(8)
+        .map(|x| format!("{x:.4}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,16 +33,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tok: u32 = 785; // "The"
     let emb = model.embed(tok, 0)?;
-    println!("[PESTI] tok={tok} embed norm={:.4} head=[{}]", norm(&emb), head(&emb));
+    println!(
+        "[PESTI] tok={tok} embed norm={:.4} head=[{}]",
+        norm(&emb),
+        head(&emb)
+    );
 
     // CPU path, single token, pos 0. RoPE is identity at pos 0; attention over
     // one position gives attn_out = v, so this matches the numpy reference.
     let l0 = model.layers[0].forward(&emb, 1, 1, 0);
-    println!("[PESTI] L0 after-ffn norm={:.4} head=[{}]", norm(&l0), head(&l0));
+    println!(
+        "[PESTI] L0 after-ffn norm={:.4} head=[{}]",
+        norm(&l0),
+        head(&l0)
+    );
 
     // Ratio vs reference after-ffn (7.9472). The old bug was ~8x.
     let ref_after_ffn = 7.9472f32;
-    println!("[PESTI] L0 norm ratio vs ref = {:.4}  (old bug was ~8.0)", norm(&l0) / ref_after_ffn);
+    println!(
+        "[PESTI] L0 norm ratio vs ref = {:.4}  (old bug was ~8.0)",
+        norm(&l0) / ref_after_ffn
+    );
 
     Ok(())
 }

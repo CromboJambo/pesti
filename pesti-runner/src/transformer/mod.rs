@@ -29,4 +29,4 @@ pub mod tokenizer;
 pub use kv_cache::LayerKvCache;
 pub use model::{LlamaConfig, LlamaModel, ModelArch};
 pub use sampling::{SamplingConfig, argmax, sample};
-pub use tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf, TokenizerBackend};
+pub use tokenizer::{GgufTokenizerConfig, TokenizerBackend, load_tokenizer_from_gguf};

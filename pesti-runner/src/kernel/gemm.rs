@@ -288,8 +288,8 @@ impl CudaGemmKernelBuilder {
 
         // Select PTX based on architecture
         let ptx_src = match self.arch {
-            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_sm90.ptx"),  // Hopper (sm_9.0)
-            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_sm89.ptx"),  // Ada Lovelace (sm_8.9)
+            GemmArch::Wgmma => include_str!("ptx/gemm_wgmma_sm90.ptx"), // Hopper (sm_9.0)
+            GemmArch::Tcgen05 => include_str!("ptx/gemm_tcgen05_sm89.ptx"), // Ada Lovelace (sm_8.9)
             GemmArch::Mma => include_str!("ptx/gemm_mma_sync.ptx"),
         };
 
@@ -347,7 +347,7 @@ impl CudaGemmKernel {
         // - WGMMA (sm_90a/sm_120): gemm_wgmma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
         // - tcgen05: gemm_tcgen05_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
         // - mma.sync: gemm_mma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
-        
+
         let mut a_v: u64 = a.device_ptr();
         let mut b_v: u64 = b.device_ptr();
         let mut c_v: u64 = c.device_ptr();
@@ -356,7 +356,7 @@ impl CudaGemmKernel {
         let mut m_v: u32 = m as u32;
         let mut n_v: u32 = n as u32;
         let mut k_v: u32 = k as u32;
-        
+
         let mut params: [*mut std::ffi::c_void; 8] = [
             &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
             &mut a_v as *mut u64 as *mut std::ffi::c_void,

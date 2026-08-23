@@ -33,7 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let prompt = "The quick brown fox jumps over the lazy dog.";
     let prompt_tokens = tokenizer.encode(prompt)?;
-    println!("Prompt tokens ({}): {:?}", prompt_tokens.len(), prompt_tokens);
+    println!(
+        "Prompt tokens ({}): {:?}",
+        prompt_tokens.len(),
+        prompt_tokens
+    );
 
     let mut logits = Vec::new();
     for (i, &tok) in prompt_tokens.iter().enumerate() {
@@ -45,8 +49,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ranked: Vec<(usize, f32)> = logits.iter().enumerate().map(|(i, &v)| (i, v)).collect();
     ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
     let top8: Vec<(usize, f32)> = ranked.into_iter().take(8).collect();
-    println!("[PROBE] top-8 tokens: {:?}", top8.iter().map(|(i, _)| i).collect::<Vec<_>>());
-    println!("[PROBE] top-8 logits: {:?}", top8.iter().map(|(_, v)| v).collect::<Vec<_>>());
+    println!(
+        "[PROBE] top-8 tokens: {:?}",
+        top8.iter().map(|(i, _)| i).collect::<Vec<_>>()
+    );
+    println!(
+        "[PROBE] top-8 logits: {:?}",
+        top8.iter().map(|(_, v)| v).collect::<Vec<_>>()
+    );
     println!("[PROBE] argmax: {}", top8[0].0);
 
     Ok(())

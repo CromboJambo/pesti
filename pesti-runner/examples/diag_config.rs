@@ -3,7 +3,9 @@
 use pesti_runner::model_loader::GgufHeaderExt;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::path::Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let path = std::path::Path::new(
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    );
     let header = pesti_gguf::parser::parse_gguf(path)?;
 
     println!("arch: {:?}", header.architecture());
@@ -11,16 +13,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("block_count: {:?}", header.block_count());
     println!("context_length: {:?}", header.context_length());
     println!("vocab_size: {:?}", header.vocab_size());
-    println!("rope.dimension_count: {:?}", header.get_kv_u32("rope.dimension_count"));
-    println!("attention.head_count: {:?}", header.get_kv_u32("attention.head_count"));
-    println!("qwen2.attention.head_count: {:?}", header.get_kv_u32("qwen2.attention.head_count"));
-    println!("qwen2.attention.head_count_kv: {:?}", header.get_kv_u32("qwen2.attention.head_count_kv"));
-    println!("qwen2.attention.head_count: {:?}", header.get_kv_u32("qwen2.attention.head_count"));
-    println!("qwen2.num_key_value_heads: {:?}", header.get_kv_u32("qwen2.num_key_value_heads"));
-    println!("qwen2.feed_forward_length: {:?}", header.get_kv_u32("qwen2.feed_forward_length"));
-    println!("qwen2.context_length: {:?}", header.get_kv_u32("qwen2.context_length"));
-    println!("qwen2.attention.layer_norm_eps: {:?}", header.get_kv_f32("qwen2.attention.layer_norm_eps"));
-    println!("qwen2.attention.rope.freq_base: {:?}", header.get_kv_f32("qwen2.attention.rope.freq_base"));
+    println!(
+        "rope.dimension_count: {:?}",
+        header.get_kv_u32("rope.dimension_count")
+    );
+    println!(
+        "attention.head_count: {:?}",
+        header.get_kv_u32("attention.head_count")
+    );
+    println!(
+        "qwen2.attention.head_count: {:?}",
+        header.get_kv_u32("qwen2.attention.head_count")
+    );
+    println!(
+        "qwen2.attention.head_count_kv: {:?}",
+        header.get_kv_u32("qwen2.attention.head_count_kv")
+    );
+    println!(
+        "qwen2.attention.head_count: {:?}",
+        header.get_kv_u32("qwen2.attention.head_count")
+    );
+    println!(
+        "qwen2.num_key_value_heads: {:?}",
+        header.get_kv_u32("qwen2.num_key_value_heads")
+    );
+    println!(
+        "qwen2.feed_forward_length: {:?}",
+        header.get_kv_u32("qwen2.feed_forward_length")
+    );
+    println!(
+        "qwen2.context_length: {:?}",
+        header.get_kv_u32("qwen2.context_length")
+    );
+    println!(
+        "qwen2.attention.layer_norm_eps: {:?}",
+        header.get_kv_f32("qwen2.attention.layer_norm_eps")
+    );
+    println!(
+        "qwen2.attention.rope.freq_base: {:?}",
+        header.get_kv_f32("qwen2.attention.rope.freq_base")
+    );
 
     // All KV keys for visibility
     println!("\nAll architecture KV keys:");
@@ -42,15 +74,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("intermediate_dim: {}", config.intermediate_dim);
     println!("max_seq_len: {}", config.max_seq_len);
     println!("rope_base: {}", config.rope_base);
-    println!("num_heads * head_dim = {}", config.num_heads * config.head_dim);
-    println!("num_kv_heads * head_dim = {}", config.num_kv_heads * config.head_dim);
+    println!(
+        "num_heads * head_dim = {}",
+        config.num_heads * config.head_dim
+    );
+    println!(
+        "num_kv_heads * head_dim = {}",
+        config.num_kv_heads * config.head_dim
+    );
 
     // Check tensor shapes in header
-    let k = header.tensors.iter().find(|t| t.name == "blk.0.attn_k.weight");
+    let k = header
+        .tensors
+        .iter()
+        .find(|t| t.name == "blk.0.attn_k.weight");
     if let Some(t) = k {
         println!("\nblk.0.attn_k.weight shape: {:?}", t.shape);
     }
-    let q = header.tensors.iter().find(|t| t.name == "blk.0.attn_q.weight");
+    let q = header
+        .tensors
+        .iter()
+        .find(|t| t.name == "blk.0.attn_q.weight");
     if let Some(t) = q {
         println!("blk.0.attn_q.weight shape: {:?}", t.shape);
     }

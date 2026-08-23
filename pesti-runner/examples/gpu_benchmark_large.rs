@@ -25,7 +25,10 @@ impl BenchmarkConfig {
     }
 }
 
-fn run_benchmark(config: &BenchmarkConfig, pool: &MemoryPool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_benchmark(
+    config: &BenchmarkConfig,
+    pool: &MemoryPool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let rope_base = 10_000.0;
     let scale = 1.0 / (config.head_dim as f32).sqrt();
 
@@ -61,14 +64,19 @@ fn run_benchmark(config: &BenchmarkConfig, pool: &MemoryPool) -> Result<(), Box<
     println!("Test 1: CPU Ndarray Reference");
     let start = Instant::now();
     let result_cpu = reference_with_ndarray(
-        &q_h, &k_h, &v_h, config.seq_q, config.seq_k, config.num_heads, config.head_dim, rope_base, scale,
+        &q_h,
+        &k_h,
+        &v_h,
+        config.seq_q,
+        config.seq_k,
+        config.num_heads,
+        config.head_dim,
+        rope_base,
+        scale,
     );
     let duration_cpu = start.elapsed();
 
-    println!(
-        "  Time: {:.3}ms",
-        duration_cpu.as_secs_f64() * 1000.0
-    );
+    println!("  Time: {:.3}ms", duration_cpu.as_secs_f64() * 1000.0);
     println!(
         "  Output sample (first 5): [{:.4}, {:.4}, {:.4}, {:.4}, {:.4}]",
         result_cpu[0], result_cpu[1], result_cpu[2], result_cpu[3], result_cpu[4]
@@ -102,8 +110,10 @@ fn run_benchmark(config: &BenchmarkConfig, pool: &MemoryPool) -> Result<(), Box<
         let q_size = config.seq_q * config.num_heads * config.head_dim * std::mem::size_of::<f16>();
         let k_size = config.seq_k * config.num_heads * config.head_dim * std::mem::size_of::<f16>();
         let v_size = config.seq_k * config.num_heads * config.head_dim * std::mem::size_of::<f16>();
-        let score_size = config.seq_q * config.num_heads * config.seq_k * std::mem::size_of::<f32>();
-        let output_size = score_size + config.seq_q * config.num_heads * config.head_dim * std::mem::size_of::<f32>();
+        let score_size =
+            config.seq_q * config.num_heads * config.seq_k * std::mem::size_of::<f32>();
+        let output_size = score_size
+            + config.seq_q * config.num_heads * config.head_dim * std::mem::size_of::<f32>();
 
         // Allocate pooled buffers and store them to prevent drop
         let q_buffer = pool.allocate(q_size)?;
@@ -151,7 +161,8 @@ fn run_benchmark(config: &BenchmarkConfig, pool: &MemoryPool) -> Result<(), Box<
         // Copy result back to CPU (output portion only, skip scores)
         let output_elements = config.seq_q * config.num_heads * config.head_dim;
         let mut result_gpu_h: Vec<f32> = vec![0.0; output_elements];
-        let output_offset = config.seq_q * config.num_heads * config.seq_k * std::mem::size_of::<f32>();
+        let output_offset =
+            config.seq_q * config.num_heads * config.seq_k * std::mem::size_of::<f32>();
         unsafe {
             pesti_runner::cuda_runtime::copy_device_to_host(
                 result_gpu_h.as_mut_ptr() as *mut u8,
@@ -240,11 +251,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Initialize CUDA runtime first to ensure driver is ready
         let _cuda_rt = pesti_runner::CudaRuntime::new(0)?;
         let pool = MemoryPool::new()?;
-        
+
         // Run benchmarks with the pool
         run_benchmarks(&pool)?;
     }
-    
+
     #[cfg(not(feature = "cuda"))]
     {
         eprintln!("Warning: CUDA not available");
@@ -257,11 +268,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_benchmarks(pool: &MemoryPool) -> Result<(), Box<dyn std::error::Error>> {
     // Test configurations (sequence length, key sequence, num heads, head dim)
     let configs = vec![
-        BenchmarkConfig { seq_q: 128, seq_k: 128, num_heads: 4, head_dim: 64 },
-        BenchmarkConfig { seq_q: 256, seq_k: 256, num_heads: 8, head_dim: 64 },
-        BenchmarkConfig { seq_q: 512, seq_k: 512, num_heads: 8, head_dim: 128 },
-        BenchmarkConfig { seq_q: 1024, seq_k: 1024, num_heads: 16, head_dim: 128 },
-        BenchmarkConfig { seq_q: 2048, seq_k: 2048, num_heads: 16, head_dim: 128 },
+        BenchmarkConfig {
+            seq_q: 128,
+            seq_k: 128,
+            num_heads: 4,
+            head_dim: 64,
+        },
+        BenchmarkConfig {
+            seq_q: 256,
+            seq_k: 256,
+            num_heads: 8,
+            head_dim: 64,
+        },
+        BenchmarkConfig {
+            seq_q: 512,
+            seq_k: 512,
+            num_heads: 8,
+            head_dim: 128,
+        },
+        BenchmarkConfig {
+            seq_q: 1024,
+            seq_k: 1024,
+            num_heads: 16,
+            head_dim: 128,
+        },
+        BenchmarkConfig {
+            seq_q: 2048,
+            seq_k: 2048,
+            num_heads: 16,
+            head_dim: 128,
+        },
     ];
 
     for config in configs {

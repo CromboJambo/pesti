@@ -183,10 +183,12 @@ impl DispatchContext {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
-                return MemoryManager::Cuda(crate::kernel::memory::CudaMemoryBackend::with_device_info(
-                    stream.clone(),
-                    info.clone(),
-                ));
+                return MemoryManager::Cuda(
+                    crate::kernel::memory::CudaMemoryBackend::with_device_info(
+                        stream.clone(),
+                        info.clone(),
+                    ),
+                );
             }
         }
         MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024))
@@ -230,10 +232,12 @@ impl DispatchContext {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
-                return MemoryManager::Cuda(crate::kernel::memory::CudaMemoryBackend::with_device_info(
-                    stream.clone(),
-                    info.clone(),
-                ));
+                return MemoryManager::Cuda(
+                    crate::kernel::memory::CudaMemoryBackend::with_device_info(
+                        stream.clone(),
+                        info.clone(),
+                    ),
+                );
             }
         }
         MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(1024 * 1024))
@@ -801,12 +805,12 @@ impl AttentionDispatch {
             // cache's unused region (harmless to region-selective CPU readers,
             // corrupting to whole-buffer GPU readers). See Kvcache::write_kv_at
             // docs and the `kv_write_no_cross_contamination` regression test.
-            key_cache
-                .write_k_at(global_pos, &k_row)
-                .map_err(|e| DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}")))?;
-            value_cache
-                .write_v_at(global_pos, &v_row)
-                .map_err(|e| DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}")))?;
+            key_cache.write_k_at(global_pos, &k_row).map_err(|e| {
+                DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}"))
+            })?;
+            value_cache.write_v_at(global_pos, &v_row).map_err(|e| {
+                DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}"))
+            })?;
         }
 
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
@@ -1087,17 +1091,20 @@ impl AttentionDispatch {
             // cache's unused region (harmless to region-selective CPU readers,
             // corrupting to whole-buffer GPU readers). See Kvcache::write_kv_at
             // docs and the `kv_write_no_cross_contamination` regression test.
-            key_cache
-                .write_k_at(global_pos, &k_row)
-                .map_err(|e| DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}")))?;
-            value_cache
-                .write_v_at(global_pos, &v_row)
-                .map_err(|e| DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}")))?;
-            
+            key_cache.write_k_at(global_pos, &k_row).map_err(|e| {
+                DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}"))
+            })?;
+            value_cache.write_v_at(global_pos, &v_row).map_err(|e| {
+                DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}"))
+            })?;
+
             // DEBUG: Log KV writes
             if start_pos == 0 || pos == seq_len - 1 {
-                println!("[DEBUG] forward_gpu: wrote K/V at global_pos={}, key_cache.seq_len={}", 
-                         global_pos, key_cache.seq_len());
+                println!(
+                    "[DEBUG] forward_gpu: wrote K/V at global_pos={}, key_cache.seq_len={}",
+                    global_pos,
+                    key_cache.seq_len()
+                );
             }
         }
 

@@ -6,18 +6,18 @@ use pesti_runner::cuda_runtime::CudaRuntime;
 /// Reference RoPE implementation matching llama.cpp (HALF-SWAP rotation)
 fn apply_rope_cpu(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
     let half_dim = head_dim / 2;
-    
+
     // HALF-SWAP rotation: dimension i pairs with (i + head_dim/2)
     for dim in 0..half_dim {
         let idx_first = dim; // First half: dimensions 0..dim/2-1
         let idx_second = dim + half_dim; // Second half: dimensions dim/2..dim-1
-        
+
         // Compute cos/sin for this position and dimension
         let inv_freq = 1.0 / (rope_base.powf((dim as f32) / half_dim as f32));
         let freq = pos as f32 * inv_freq;
         let cos_val = freq.cos();
         let sin_val = freq.sin();
-        
+
         // Half-swap rotation: [first, second] -> [first*cos - second*sin, first*sin + second*cos]
         let q_first = q[idx_first];
         let q_second = q[idx_second];
@@ -40,12 +40,12 @@ fn reference_attention_with_rope(
     for (i, &val) in q.iter().enumerate() {
         q_rope[i] = val;
     }
-    
+
     let mut k_rope = vec![0.0f32; seq_k * num_heads * head_dim];
     for (i, &val) in k.iter().enumerate() {
         k_rope[i] = val;
     }
-    
+
     // Apply RoPE to each position - PER HEAD
     for pos in 0..seq_q {
         for head in 0..num_heads {
@@ -58,7 +58,7 @@ fn reference_attention_with_rope(
             );
         }
     }
-    
+
     for pos in 0..seq_k {
         for head in 0..num_heads {
             let k_start = pos * num_heads * head_dim + head * head_dim;
@@ -70,7 +70,7 @@ fn reference_attention_with_rope(
             );
         }
     }
-    
+
     // Compute attention scores (scaled by 1/sqrt(head_dim)) - PER HEAD
     let mut scores = vec![0.0f32; seq_q * num_heads * seq_k];
     for q_pos in 0..seq_q {
@@ -79,7 +79,7 @@ fn reference_attention_with_rope(
                 // Dot product across dimensions for THIS HEAD only
                 let q_offset = q_pos * num_heads * head_dim + head * head_dim;
                 let k_offset = k_pos * num_heads * head_dim + head * head_dim;
-                
+
                 let mut score: f32 = 0.0;
                 for d in 0..head_dim {
                     score += q_rope[q_offset + d] * k_rope[k_offset + d];
@@ -88,7 +88,7 @@ fn reference_attention_with_rope(
             }
         }
     }
-    
+
     // Apply causal mask BEFORE softmax - PER HEAD (mask future tokens)
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
@@ -98,72 +98,72 @@ fn reference_attention_with_rope(
             }
         }
     }
-    
+
     // Apply softmax per query row, per head
     let mut probs = vec![0.0f32; seq_q * num_heads * seq_k];
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             let start = q_pos * num_heads * seq_k + head * seq_k;
             let end = start + seq_k;
-            
+
             // Numerically stable softmax (max-subtract trick)
             let max_val = scores[start..end]
                 .iter()
                 .cloned()
                 .fold(f32::NEG_INFINITY, f32::max);
-            
+
             let exps: Vec<f32> = scores[start..end]
                 .iter()
                 .map(|&x| (x - max_val).exp())
                 .collect();
-            
+
             let sum: f32 = exps.iter().sum();
             for i in 0..seq_k {
                 probs[start + i] = exps[i] / sum;
             }
         }
     }
-    
+
     probs
 }
 
 #[test]
 fn test_single_kernel_numerical_conformance_with_rope() {
     let cuda_rt = CudaRuntime::new(0).unwrap();
-    
+
     if !cuda_rt.is_valid() {
         eprintln!("CUDA not initialized, skipping RoPE conformance test");
         return;
     }
-    
+
     println!("=== Single-Kernel Numerical Conformance with RoPE ===");
     println!("GPU: {}", cuda_rt.device_info().name);
     println!();
-    
+
     // Configuration (small for quick testing)
     let seq_q = 2;
     let seq_k = 32;
     let num_heads = 4;
     let head_dim = 16;
     let rope_base = 10_000.0;
-    
+
     // Create deterministic Q, K (f16) matching llama.cpp test patterns
     let q_h: Vec<f16> = (0..seq_q * num_heads * head_dim)
         .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
         .collect();
-    
+
     let k_h: Vec<f16> = (0..seq_k * num_heads * head_dim)
         .map(|i| f16::from_f32((i as f32 - 50.0) / 10.0))
         .collect();
-    
+
     // Create V (same as K for this test)
     let v_h: Vec<f16> = k_h.clone();
-    
+
     println!(
         "Configuration: seq_q={}, seq_k={}, heads={}, dim={}",
         seq_q, seq_k, num_heads, head_dim
     );
-    
+
     // Compute reference (CPU with RoPE + causal mask)
     let llama_probs = reference_attention_with_rope(
         &q_h.iter().map(|&x| x.to_f32()).collect::<Vec<f32>>(),
@@ -174,7 +174,7 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         head_dim,
         rope_base,
     );
-    
+
     println!(
         "Reference softmax sum (first query): {:.6}",
         llama_probs[0..seq_k].iter().sum::<f32>()
@@ -185,41 +185,43 @@ fn test_single_kernel_numerical_conformance_with_rope() {
             .iter()
             .fold(f32::NEG_INFINITY, |max_val, &x| f32::max(max_val, x))
     );
-    
+
     // Allocate SEPARATE buffers for Q, K, V (like exact_pattern expects)
     let q_size = seq_q * num_heads * head_dim * 2; // half
     let k_size = seq_k * num_heads * head_dim * 2; // half
     let v_size = seq_k * num_heads * head_dim * 2; // half
-    
+
     // Allocate ONE buffer containing both scores AND output (like two-kernel)
     let score_buffer_size = seq_q * num_heads * seq_k * 4; // float
     let output_buffer_bytes = seq_q * num_heads * head_dim * 2; // half
-    let combined_ptr = 
-        pesti_runner::cuda_runtime::allocate_device_memory(
-            score_buffer_size + output_buffer_bytes
-        ).unwrap();
-    
+    let combined_ptr =
+        pesti_runner::cuda_runtime::allocate_device_memory(score_buffer_size + output_buffer_bytes)
+            .unwrap();
+
     let q_ptr = pesti_runner::cuda_runtime::allocate_device_memory(q_size).unwrap();
     let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap();
     let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap();
-    
+
     println!("✅ Allocated separate buffers:");
     println!("   Q: {} bytes", q_size);
     println!("   K: {} bytes", k_size);
     println!("   V: {} bytes", v_size);
-    println!("   Scores+Output: {} bytes", score_buffer_size + output_buffer_bytes);
-    
+    println!(
+        "   Scores+Output: {} bytes",
+        score_buffer_size + output_buffer_bytes
+    );
+
     // Load exact pattern kernel (stable with separate allocations)
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_exact_pattern.ptx");
     let module =
         pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
-    
+
     // Check mangled name (from earlier debugging)
     let mangled_name = "_Z36fused_attention_exact_pattern_kernelPK6__halfS1_S1_PfS2_fiiii";
     let function = module.load_function(mangled_name).unwrap();
-    
+
     println!("✅ Loaded exact pattern kernel");
-    
+
     // Parameters: q_ptr, k_ptr, v_ptr (separate), s_ptr (scores), out_ptr, scale, seq_q, seq_k, num_heads, head_dim
     let mut scale_v: f32 = 1.0 / (head_dim as f32).sqrt();
     let mut q_ptr_v: u64 = q_ptr as u64; // Separate allocation for Q!
@@ -227,19 +229,22 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     let mut v_ptr_v: u64 = v_ptr as u64; // Separate allocation for V!
     let mut s_ptr_v: u64 = combined_ptr as u64; // scores start at offset 0 in combined buffer
     let mut out_ptr_v: u64 = (combined_ptr as u64) + score_buffer_size as u64; // output starts after scores
-    
+
     let mut seq_q_v: u32 = seq_q as u32;
     let mut seq_k_v: u32 = seq_k as u32;
     let mut num_heads_v: u32 = num_heads as u32;
     let mut head_dim_v: u32 = head_dim as u32;
-    
+
     let stream = cuda_rt.new_stream().unwrap();
     // Kernel expects: grid.x = seq_q, grid.y = seq_k, grid.z = num_heads (from PTX param analysis)
     let grid = (seq_q as u32, seq_k as u32, num_heads as u32);
     let block = (head_dim as u32, 1u32, 1u32);
-    
-    println!("🚀 Launching with flattened heads grid={:?}, block={:?}", grid, block);
-    
+
+    println!(
+        "🚀 Launching with flattened heads grid={:?}, block={:?}",
+        grid, block
+    );
+
     let mut params = [std::ptr::null_mut(); 10];
     params[0] = &mut q_ptr_v as *mut u64 as *mut std::ffi::c_void;
     params[1] = &mut k_ptr_v as *mut u64 as *mut std::ffi::c_void;
@@ -251,26 +256,14 @@ fn test_single_kernel_numerical_conformance_with_rope() {
     params[7] = &mut seq_k_v as *mut u32 as *mut std::ffi::c_void;
     params[8] = &mut num_heads_v as *mut u32 as *mut std::ffi::c_void;
     params[9] = &mut head_dim_v as *mut u32 as *mut std::ffi::c_void;
-    
+
     // Write Q, K, V data to device at offsets within combined_ptr (async - synchronize after)
     unsafe {
-        let _ = cudarc::driver::result::memcpy_htod_async(
-            q_ptr_v as u64,
-            &q_h,
-            stream.cu_stream(),
-        );
-        let _ = cudarc::driver::result::memcpy_htod_async(
-            k_ptr_v as u64,
-            &k_h,
-            stream.cu_stream(),
-        );
-        let _ = cudarc::driver::result::memcpy_htod_async(
-            v_ptr_v as u64,
-            &v_h,
-            stream.cu_stream(),
-        );
+        let _ = cudarc::driver::result::memcpy_htod_async(q_ptr_v as u64, &q_h, stream.cu_stream());
+        let _ = cudarc::driver::result::memcpy_htod_async(k_ptr_v as u64, &k_h, stream.cu_stream());
+        let _ = cudarc::driver::result::memcpy_htod_async(v_ptr_v as u64, &v_h, stream.cu_stream());
     }
-    
+
     unsafe {
         pesti_runner::cuda_shim::launch_kernel(
             function.cu_function(),
@@ -282,56 +275,62 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         )
         .unwrap();
     }
-    
+
     println!("✅ Kernel launched");
-    
+
     cuda_rt.synchronize().unwrap();
     println!("✅ Single-kernel execution completed!");
-    
+
     // Read back scores (kernel writes f32 to scores buffer, not output buffer!)
     let mut scores_host_f32: Vec<f32> = vec![0.0; seq_q * num_heads * seq_k];
-    
+
     unsafe {
-        let scores_device_ptr_u64 = combined_ptr as u64;  // Scores start at offset 0!
+        let scores_device_ptr_u64 = combined_ptr as u64; // Scores start at offset 0!
         let _ = cudarc::driver::result::memcpy_dtoh_async(
             &mut scores_host_f32,
             scores_device_ptr_u64,
             stream.cu_stream(),
         );
     }
-    
+
     // Wait for read-back to complete
     cuda_rt.synchronize().unwrap();
-    
+
     println!(
         "✅ Read back {} f32 values from SCORES buffer (kernel writes to scores, not output!)",
         scores_host_f32.len()
     );
-    
+
     // Print first few values for debugging - these are attention scores BEFORE softmax
     println!("First 4 score values (f32):");
     for i in 0..4.min(scores_host_f32.len()) {
         println!("  [{}] = {:.6}", i, scores_host_f32[i]);
     }
-    
+
     // Add function to compute pre-softmax scores from softmax probabilities (inverse softmax)
     fn log_softmax(probs: &[f32]) -> Vec<f32> {
-        probs.iter().map(|&p| if p > 0.0 { p.ln() } else { f32::NEG_INFINITY }).collect()
+        probs
+            .iter()
+            .map(|&p| if p > 0.0 { p.ln() } else { f32::NEG_INFINITY })
+            .collect()
     }
-    
+
     // Compute numerical conformance vs reference (compare post-softmax probabilities)
     let mut max_rel_error: f32 = 0.0;
-    
+
     // Apply softmax to kernel logits across seq_k dimension for each (q_pos, head) pair
     let mut kernel_probs: Vec<f32> = vec![0.0; scores_host_f32.len()];
     for q_pos in 0..seq_q {
         for head in 0..num_heads {
             let start = q_pos * num_heads * seq_k + head * seq_k;
             let end = start + seq_k;
-            
+
             // Find max for numerical stability
-            let max_val = scores_host_f32[start..end].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-            
+            let max_val = scores_host_f32[start..end]
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
+
             // Apply softmax
             let mut sum = 0.0;
             for i in start..end {
@@ -343,7 +342,7 @@ fn test_single_kernel_numerical_conformance_with_rope() {
                     sum += exp_val;
                 }
             }
-            
+
             // Normalize
             for i in start..end {
                 if sum > 0.0 {
@@ -352,11 +351,11 @@ fn test_single_kernel_numerical_conformance_with_rope() {
             }
         }
     }
-    
+
     // Compare with reference
     for (i, &kernel_prob) in kernel_probs.iter().enumerate() {
         let ref_prob = llama_probs[i];
-        
+
         let abs_error = (kernel_prob - ref_prob).abs();
         let rel_error = if ref_prob > 1e-6 {
             abs_error / ref_prob
@@ -365,18 +364,20 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         };
         max_rel_error = max_rel_error.max(rel_error);
     }
-    
+
     println!("\n=== Numerical Conformance Results ===");
     println!("Max relative error: {:.2e}", max_rel_error);
-    
+
     // Check if we got any non-zero, non-negative-infinity values
-    let has_valid_scores = scores_host_f32.iter().any(|&x| x > f32::NEG_INFINITY && x != 0.0);
+    let has_valid_scores = scores_host_f32
+        .iter()
+        .any(|&x| x > f32::NEG_INFINITY && x != 0.0);
     if has_valid_scores {
         println!("✅ Kernel produces valid attention scores (not all zeros/-inf)");
     } else {
         println!("⚠️  WARNING: All kernel outputs are zero or -inf");
     }
-    
+
     // Cleanup - free Q, K, V and combined buffer
     unsafe {
         pesti_runner::cuda_runtime::free_device_memory(q_ptr).unwrap();
@@ -384,6 +385,6 @@ fn test_single_kernel_numerical_conformance_with_rope() {
         pesti_runner::cuda_runtime::free_device_memory(v_ptr).unwrap();
         pesti_runner::cuda_runtime::free_device_memory(combined_ptr).unwrap();
     }
-    
+
     println!("\n=== Single-Kernel with RoPE Test PASSED ===");
 }

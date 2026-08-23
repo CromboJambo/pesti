@@ -1,13 +1,15 @@
 //! Full inference test with real GGUF tokenizer
 
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::path::Path;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_path = Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let model_path = Path::new(
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    );
 
     println!("=== Week 16 Full Inference Test ===\n");
 
@@ -24,7 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check tokenizer
     if let Some(ref tok) = model.tokenizer {
-        println!("✅ Real GGUF tokenizer loaded with {} tokens", tok.vocab_size());
+        println!(
+            "✅ Real GGUF tokenizer loaded with {} tokens",
+            tok.vocab_size()
+        );
     } else {
         println!("⚠️ No tokenizer found");
     }
@@ -38,7 +43,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match tok.encode(prompt) {
             Ok(tokens) => {
                 let encode_time = t2.elapsed();
-                println!("Encoded {} tokens in {:.3}ms", tokens.len(), encode_time.as_secs_f32() * 1000.0);
+                println!(
+                    "Encoded {} tokens in {:.3}ms",
+                    tokens.len(),
+                    encode_time.as_secs_f32() * 1000.0
+                );
                 tokens
             }
             Err(e) => {
@@ -62,7 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let t3 = Instant::now();
     let mut rng = StdRng::seed_from_u64(42);
-    let generated_tokens = model.generate(&prompt_tokens, max_tokens, &sampling_config, &mut rng, &[0])?;
+    let generated_tokens =
+        model.generate(&prompt_tokens, max_tokens, &sampling_config, &mut rng, &[0])?;
     let gen_time = t3.elapsed();
 
     println!("\n=== Results ===");

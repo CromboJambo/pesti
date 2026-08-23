@@ -4,7 +4,7 @@
 //! being called during inference, not just CPU fallback.
 
 use pesti_runner::cuda_runtime::CudaRuntime;
-use pesti_runner::kernel::{MemoryBackend, GemmKernel};
+use pesti_runner::kernel::{GemmKernel, MemoryBackend};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,8 +16,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream: Arc<cudarc::driver::safe::CudaStream> = runtime.new_stream()?;
 
     println!("Device: {}", device_info.name);
-    println!("Compute Capability: {}.{}\n", 
-             device_info.compute_capability.0, device_info.compute_capability.1);
+    println!(
+        "Compute Capability: {}.{}\n",
+        device_info.compute_capability.0, device_info.compute_capability.1
+    );
 
     // Create CUDA memory backend
     let mut backend = pesti_runner::kernel::memory::CudaMemoryBackend::new(stream.clone());
@@ -25,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build GEMM kernel (this is what inference_engine uses)
     println!("Building CUDA GEMM kernel...");
-    
+
     // Check what architecture will be selected
     let arch = if device_info.supports_wgmma() {
         pesti_runner::kernel::GemmArch::Wgmma
@@ -55,12 +57,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let k = 64usize; // hidden dimension (Q/K projection)
 
     println!("Test GEMM dimensions: {} × {} × {}", m, k, n);
-    
+
     // Generate random input
     let a_host: Vec<half::f16> = (0..m * k)
         .map(|_| half::f16::from_f32((rng_seed(42) % 1000) as f32 / 1000.0))
         .collect();
-    
+
     let b_host: Vec<half::f16> = (0..k * n)
         .map(|_| half::f16::from_f32((rng_seed(123) % 1000) as f32 / 1000.0))
         .collect();
@@ -83,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify results are not zeros (proves kernel ran)
     let nonzero_count = c_host.iter().filter(|&&x| x != 0.0).count();
-    
+
     println!("\n=== Results ===");
     println!("Output elements: {}", m * n);
     println!("Non-zero values: {} / {}", nonzero_count, m * n);
@@ -95,11 +97,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if nonzero_count == m * n {
         println!("\n✅ SUCCESS: CUDA GEMM kernel is working!");
         println!("   All outputs are non-zero → kernel was actually invoked");
-        
+
         // Check if results look reasonable (not NaN/Inf)
         let nan_count = c_host.iter().filter(|&&x| x.is_nan()).count();
         let inf_count = c_host.iter().filter(|&&x| x.is_infinite()).count();
-        
+
         if nan_count == 0 && inf_count == 0 {
             println!("   No NaN/Inf values detected → numerically stable");
         } else {

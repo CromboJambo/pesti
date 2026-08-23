@@ -1,9 +1,9 @@
 //! Parametric coherence check: load a GGUF, generate, print text.
 //! Usage: cargo run -p pesti-runner --release --features cuda --example coherence_check -- <path> [max_tokens]
 
+use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
-use rand::SeedableRng;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -16,12 +16,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let t0 = Instant::now();
     let weights = pesti_runner::load_gguf_weights(Path::new(&model_path))?;
-    println!("[load] {:.2}s tensors={}", t0.elapsed().as_secs_f32(), weights.tensors.len());
+    println!(
+        "[load] {:.2}s tensors={}",
+        t0.elapsed().as_secs_f32(),
+        weights.tensors.len()
+    );
 
     let t1 = Instant::now();
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
     println!("[build] {:.2}s", t1.elapsed().as_secs_f32());
-    
+
     // DEBUG: Check dispatch
     if model.dispatch.is_some() {
         println!("[DEBUG] Dispatch context IS initialized");
@@ -42,7 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .split(',')
             .map(|s| s.trim().parse().expect("bad token id"))
             .collect();
-        println!("[prompt from PESTI_PROMPT_TOKENS] {} tokens: {:?}", parsed.len(), parsed);
+        println!(
+            "[prompt from PESTI_PROMPT_TOKENS] {} tokens: {:?}",
+            parsed.len(),
+            parsed
+        );
         parsed
     } else {
         let enc = tokenizer.encode(prompt)?;
@@ -59,10 +67,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let t3 = Instant::now();
-    
+
     // DEBUG: Enable verbose tracing for this run
-    unsafe { std::env::set_var("RUST_LOG", "debug,pesti_runner=trace"); }
-    
+    unsafe {
+        std::env::set_var("RUST_LOG", "debug,pesti_runner=trace");
+    }
+
     let generated_tokens = model.generate(
         &prompt_tokens,
         max_tokens,

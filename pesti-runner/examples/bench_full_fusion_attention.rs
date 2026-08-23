@@ -1,12 +1,12 @@
 //! Performance benchmark for one-stage full fusion attention kernel
-//! 
+//!
 //! Compares GPU vs CPU performance across various sequence lengths and configurations.
 //! Measures: tokens/sec, memory bandwidth, speedup factor.
 
 #![cfg(feature = "cuda")]
 
-use pesti_runner::cuda_runtime::{allocate_device_memory, copy_host_to_device, CudaRuntime};
-use pesti_runner::cuda_shim::{cu_stream, launch_kernel, CudaModule};
+use pesti_runner::cuda_runtime::{CudaRuntime, allocate_device_memory, copy_host_to_device};
+use pesti_runner::cuda_shim::{CudaModule, cu_stream, launch_kernel};
 use std::time::Instant;
 
 /// Reference CPU attention implementation for comparison
@@ -25,13 +25,13 @@ fn cpu_attention(
         for head in 0..num_heads {
             for dim_idx in 0..head_dim {
                 let mut sum = 0.0f32;
-                
+
                 // Compute scores over k positions
                 let mut scores = vec![0.0f32; seq_k];
                 for k_pos in 0..seq_k {
                     let q_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
                     let k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
-                    
+
                     // Dot product over head_dim
                     for d in 0..head_dim {
                         let q_d = q[q_pos * num_heads * head_dim + head * head_dim + d];
@@ -44,7 +44,7 @@ fn cpu_attention(
                 // Softmax over sequence dimension
                 let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                 let exp_sum: f32 = scores.iter().map(|&s| (s - max_score).exp()).sum();
-                
+
                 for k_pos in 0..seq_k {
                     let softmax_val = (scores[k_pos] - max_score).exp() / exp_sum;
                     let v_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
@@ -123,11 +123,13 @@ fn launch_fused_attention_sync(
 
 /// Benchmark a single configuration
 fn benchmark_config(seq_q: usize, seq_k: usize, num_heads: usize, head_dim: usize) {
-    println!("\n=== Configuration: seq_q={}, seq_k={}, heads={}, dim={} ===", 
-             seq_q, seq_k, num_heads, head_dim);
+    println!(
+        "\n=== Configuration: seq_q={}, seq_k={}, heads={}, dim={} ===",
+        seq_q, seq_k, num_heads, head_dim
+    );
 
     let cuda_rt = CudaRuntime::new(0).unwrap();
-    
+
     // Allocate buffers
     let q_size = seq_q * num_heads * head_dim * 2; // f16
     let k_size = seq_k * num_heads * head_dim * 2;
@@ -168,19 +170,19 @@ fn benchmark_config(seq_q: usize, seq_k: usize, num_heads: usize, head_dim: usiz
 
     // Warmup run
     launch_fused_attention_sync(
-        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr,
-        seq_q, seq_k, num_heads, head_dim
-    ).unwrap();
+        &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
+    )
+    .unwrap();
     cuda_rt.synchronize().unwrap();
 
     // Benchmark GPU (10 iterations)
     let mut gpu_times: Vec<f64> = Vec::with_capacity(10);
     for _ in 0..10 {
         launch_fused_attention_sync(
-            &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr,
-            seq_q, seq_k, num_heads, head_dim
-        ).unwrap();
-        
+            &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
+        )
+        .unwrap();
+
         let start = Instant::now();
         cuda_rt.synchronize().unwrap();
         gpu_times.push(start.elapsed().as_secs_f64());
@@ -205,8 +207,12 @@ fn benchmark_config(seq_q: usize, seq_k: usize, num_heads: usize, head_dim: usiz
     let total_bytes = (q_size + k_size + v_size + output_size) as f64;
     let gpu_bandwidth = total_bytes / avg_gpu_time / 1e9; // GB/s
 
-    println!("  GPU:   {} ms (avg), {} ms (min), {} ms (max)", 
-             avg_gpu_time * 1000.0, min_gpu_time * 1000.0, max_gpu_time * 1000.0);
+    println!(
+        "  GPU:   {} ms (avg), {} ms (min), {} ms (max)",
+        avg_gpu_time * 1000.0,
+        min_gpu_time * 1000.0,
+        max_gpu_time * 1000.0
+    );
     println!("  CPU:   {:.3} s", cpu_time);
     println!("  Speedup: {:.2}x", speedup);
     println!("  GPU TFLOPS: {:.3}", gpu_tflops);
@@ -219,11 +225,11 @@ fn main() {
     println!();
 
     // Test configurations
-    benchmark_config(2, 4, 2, 8);      // Original small config
-    benchmark_config(4, 8, 2, 8);      // Medium sequences
-    benchmark_config(8, 16, 2, 8);     // Larger sequences
-    benchmark_config(4, 8, 4, 8);      // Multiple heads
-    benchmark_config(4, 8, 2, 16);     // Larger head dim
+    benchmark_config(2, 4, 2, 8); // Original small config
+    benchmark_config(4, 8, 2, 8); // Medium sequences
+    benchmark_config(8, 16, 2, 8); // Larger sequences
+    benchmark_config(4, 8, 4, 8); // Multiple heads
+    benchmark_config(4, 8, 2, 16); // Larger head dim
 
     println!("\n=== Benchmark Complete ===");
 }

@@ -73,12 +73,20 @@ pub mod attention_stub;
 pub mod fused_attention_conformant;
 // Removed: fused_attention_wrapper_conformant (placeholder)
 #[cfg(feature = "cuda")]
+pub mod batched_parallel_attention; // Batch processing + warp-level parallelism (Phase 3)
+#[cfg(feature = "cuda")]
 pub mod builder;
 #[cfg(not(feature = "cuda"))]
 pub mod builder_stub;
+#[cfg(feature = "cuda")]
+pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
 pub mod candle_bridge;
 pub mod device_buf;
 pub mod dispatch;
+#[cfg(feature = "cuda")]
+pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
+#[cfg(feature = "cuda")]
+pub mod fused_linear_attention; // QKV + attention + output fusion (Phase 2)
 #[cfg(feature = "cuda")]
 pub mod gemm;
 #[cfg(feature = "cuda")]
@@ -96,26 +104,18 @@ pub mod memory_stub;
 #[cfg(feature = "cuda")]
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
-pub mod rope;
-#[cfg(feature = "cuda")]
 pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 #[cfg(feature = "cuda")]
 pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
+#[cfg(feature = "cuda")]
+pub mod rope;
 pub mod softmax;
-#[cfg(feature = "cuda")]
-pub mod fused_linear_attention; // QKV + attention + output fusion (Phase 2)
-#[cfg(feature = "cuda")]
-pub mod batched_parallel_attention; // Batch processing + warp-level parallelism (Phase 3)
-#[cfg(feature = "cuda")]
-pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
-#[cfg(feature = "cuda")]
-pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
-#[cfg(feature = "cuda")]
-pub mod wgmma_gemm; // WGMMA tensor core GEMM integration (Phase 4.3)
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
 #[cfg(feature = "cuda")]
 pub mod tma_descriptor;
+#[cfg(feature = "cuda")]
+pub mod wgmma_gemm; // WGMMA tensor core GEMM integration (Phase 4.3)
 
 #[cfg(feature = "cuda")]
 pub use attention::{

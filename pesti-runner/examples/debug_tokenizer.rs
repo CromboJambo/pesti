@@ -1,13 +1,17 @@
 //! Debug tokenizer loading and encoding with mistral.rs.
 
-use pesti_runner::transformer::tokenizer::{load_tokenizer_from_gguf, GgufTokenizerConfig, TokenizerBackend};
+use pesti_runner::transformer::tokenizer::{
+    GgufTokenizerConfig, TokenizerBackend, load_tokenizer_from_gguf,
+};
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let model_path = Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    let model_path = Path::new(
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    );
 
     println!("Loading tokenizer from GGUF...");
-    
+
     let (config, tokenizer) = load_tokenizer_from_gguf(model_path, TokenizerBackend::MistralRs)?;
 
     println!("✅ Tokenizer loaded successfully!");
@@ -18,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Test encoding - use the raw tokenizer directly
     let test_text = "Hello, world!";
     let tokens = tokenizer.encode(test_text)?;
-    
+
     println!("\n⚠️ WARNING: {} tokens for '{}'", tokens.len(), test_text);
     println!("✅ Token count: {} ✅", tokens.len());
     println!("Tokens: {:?}", tokens);

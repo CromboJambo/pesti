@@ -1,5 +1,5 @@
 //! Full end-to-end inference with GGUF weight loading and GPU kernels
-//! 
+//!
 //! Week 11/12: Complete inference integration
 //! - Loads Qwen2.5-0.5B from GGUF file
 //! - Runs autoregressive generation with KV cache
@@ -12,7 +12,8 @@ use pesti_runner::gguf_weight_loader::{load_gguf_weights, transpose_weight};
 use pesti_runner::kernel::kvcache::Kvcache;
 use std::path::Path;
 
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const MAX_SEQ_LEN: usize = 2048;
 const BATCH_SIZE: usize = 1;
 
@@ -48,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Initialize KV caches
     println!("Step 3: Initializing KV caches...");
-    
+
     // For Qwen2.5-0.5B: 32 attention heads, 8 KV heads, head_dim=64
     let num_kv_heads = 8;
     let head_dim = 64;
@@ -91,8 +92,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    println!("  Input embedding size: {} elements ({} tokens × {} dims)", 
-             seq_len * embed_dim, seq_len, embed_dim);
+    println!(
+        "  Input embedding size: {} elements ({} tokens × {} dims)",
+        seq_len * embed_dim,
+        seq_len,
+        embed_dim
+    );
 
     // Simulate attention computation over the batch
     let cache_len = seq_len;
@@ -126,7 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         elapsed_prefill,
         elapsed_prefill.as_secs_f64() * 1000.0
     );
-    println!("     Throughput: {:.2} tokens/sec", (seq_len as f64) / elapsed_prefill.as_secs_f64());
+    println!(
+        "     Throughput: {:.2} tokens/sec",
+        (seq_len as f64) / elapsed_prefill.as_secs_f64()
+    );
     println!();
 
     // Step 5: Autoregressive generation loop (after prefill)
@@ -169,8 +177,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  Sequence length: {} (prefill) + {} (generation) = {}",
         seq_len, num_tokens_to_generate, total_tokens as usize
     );
-    println!("  Prefill time: {:.4} ms", elapsed_prefill.as_secs_f64() * 1000.0);
-    println!("  Generation time: {:.4} ms", total_gen_time.as_secs_f64() * 1000.0);
+    println!(
+        "  Prefill time: {:.4} ms",
+        elapsed_prefill.as_secs_f64() * 1000.0
+    );
+    println!(
+        "  Generation time: {:.4} ms",
+        total_gen_time.as_secs_f64() * 1000.0
+    );
     println!("  Total time: {:.4} s", total_time.as_secs_f64());
     println!("  Overall throughput: {:.2} tokens/sec", tokens_per_second);
     println!();

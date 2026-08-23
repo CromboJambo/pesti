@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create CUDA memory backend with proper device info initialization
     let mut backend = CudaMemoryBackend::new(stream.clone());
     backend.try_init_device_info();
-    
+
     println!("Backend initialized with device info:");
     println!(
         "  Total memory: {:.2} GB",
@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Warmup run
     println!("Warming up CUDA...");
     backend.sync()?;
-    
+
     // Benchmark GEMM
     let iterations = 100;
     let start = std::time::Instant::now();
@@ -92,11 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Performance Results ===");
     println!("  Average execution time: {:.3} ms", avg_time * 1000.0);
-    let flops = (m as f64 * n as f64 * k as f64 * 2.0 * iterations as f64) / (elapsed.as_secs_f64() * 1e6);
+    let flops =
+        (m as f64 * n as f64 * k as f64 * 2.0 * iterations as f64) / (elapsed.as_secs_f64() * 1e6);
     println!("  Throughput: {:.2} MFLOPS", flops);
-    println!(
-        "  Peak theoretical (sm_8.9): ~50 TFLOPS FP16, ~100 TFLOPS tensor cores"
-    );
+    println!("  Peak theoretical (sm_8.9): ~50 TFLOPS FP16, ~100 TFLOPS tensor cores");
     println!();
 
     // Theoretical speedup projection (adjusted for Ada Lovelace mma.sync)
@@ -138,10 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  Expected (PESTI with all optimizations): ~{:.0} tok/s",
         expected_throughput_tok_s
     );
-    println!(
-        "  Speedup: ~{:.1}× vs baseline",
-        total_theoretical
-    );
+    println!("  Speedup: ~{:.1}× vs baseline", total_theoretical);
 
     Ok(())
 }

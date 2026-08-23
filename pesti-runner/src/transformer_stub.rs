@@ -200,8 +200,7 @@ impl GgufTokenizerConfig {
 
         if cache_path.exists() {
             println!("✅ Loading real Qwen2 tokenizer from {:?}", cache_path);
-            return Tokenizer::from_file(cache_path)
-                .expect("Failed to load Qwen2 tokenizer");
+            return Tokenizer::from_file(cache_path).expect("Failed to load Qwen2 tokenizer");
         }
 
         // Fallback: Create a minimal tokenizer for testing
@@ -226,7 +225,8 @@ pub fn load_tokenizer_from_gguf(
     use pesti_gguf::parser::parse_gguf;
 
     // Parse GGUF header to get tokenizer config
-    let header = parse_gguf(path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
+    let header =
+        parse_gguf(path).map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
     let config = GgufTokenizerConfig::from_gguf_header(&header);
 
     // Create a simple tokenizer with the config
@@ -304,43 +304,50 @@ impl LlamaModel {
         let header = weights.header.clone();
 
         // Extract model dimensions from GGUF header
-        let hidden_size = header.get_kv_u32("qwen2.embedding_length")
+        let hidden_size = header
+            .get_kv_u32("qwen2.embedding_length")
             .or_else(|| header.get_kv_u32("llama.embedding_length"))
             .unwrap_or(896) as usize;
         let embed_dim = hidden_size;
 
         let num_layers = header.block_count().unwrap_or(24) as usize;
-        
+
         let vocab_size = header
             .get_kv_u32("tokenizer.ggml.vocab_size")
             .or_else(|| header.get_kv_u32("qwen2.vocab_size"))
             .unwrap_or(32000);
 
-        let num_heads = header.get_kv_u32("qwen2.attention.head_count")
+        let num_heads = header
+            .get_kv_u32("qwen2.attention.head_count")
             .or_else(|| header.get_kv_u32("llama.attention.head_count"))
             .unwrap_or(8) as usize;
-        
-        let num_kv_heads = header.get_kv_u32("qwen2.attention.head_count_kv")
+
+        let num_kv_heads = header
+            .get_kv_u32("qwen2.attention.head_count_kv")
             .or_else(|| header.get_kv_u32("llama.attention.head_count_kv"))
             .unwrap_or(num_heads as u32) as usize;
 
-        let head_dim = header.get_kv_u32("qwen2.attention.head_size")
+        let head_dim = header
+            .get_kv_u32("qwen2.attention.head_size")
             .or_else(|| header.get_kv_u32("llama.attention.head_size"))
             .unwrap_or(64) as usize;
 
-        let rope_base = header.kv_pairs.iter()
+        let rope_base = header
+            .kv_pairs
+            .iter()
             .find(|kv| kv.key == "qwen2.rope.freq_base" || kv.key == "llama.rope_freq_base")
             .and_then(|kv| kv.value.as_f32())
             .unwrap_or(10000.0);
 
-        let max_seq_len = header.get_kv_u32("qwen2.context_length")
+        let max_seq_len = header
+            .get_kv_u32("qwen2.context_length")
             .or_else(|| header.get_kv_u32("llama.context_length"))
             .unwrap_or(2048) as usize;
 
         // For now, load layers with identity weights (stub behavior)
         // TODO: Add real weight loading once dequantization is working
         let mut layers = Vec::with_capacity(num_layers);
-        
+
         for _ in 0..num_layers {
             let layer = TransformerLayerStub {
                 attention_q: Linear::new(

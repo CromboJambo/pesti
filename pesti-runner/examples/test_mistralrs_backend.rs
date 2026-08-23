@@ -21,11 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try to build mistral.rs GEMM kernel
     println!("Testing mistral.rs backend...");
-    
+
     #[cfg(feature = "mistralrs")]
     {
-        use pesti_runner::kernel::mistralrs_backend::{MistralRsBackend, MistralRsGemmKernel};
         use pesti_runner::kernel::GemmArch;
+        use pesti_runner::kernel::mistralrs_backend::{MistralRsBackend, MistralRsGemmKernel};
         use pesti_runner::{AttentionKernel, GemmKernel};
 
         match MistralRsGemmKernel::try_new(GemmArch::Wgmma) {
@@ -33,13 +33,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("✅ MISTRAL.RS GEMM KERNEL AVAILABLE");
                 println!("  - Architecture: {:?}", kernel.arch());
                 println!("  - Available: {}", kernel.is_available());
-                
+
                 let device_info = cuda_rt.device_info();
                 println!("  - Target GPU: {}", device_info.name);
-                
+
                 println!();
                 println!("Expected performance: ~72 tok/s on Llama 3.1 8B Q4_K_M");
-                println!("This is our production fallback if flash attention doesn't reach parity.");
+                println!(
+                    "This is our production fallback if flash attention doesn't reach parity."
+                );
             }
             None => {
                 println!("⚠️  MISTRAL.RS GEMM KERNEL NOT AVAILABLE");
@@ -67,7 +69,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let backend = MistralRsBackend::default();
         println!();
         println!("Backend selected: {}", backend.description());
-        
     }
 
     #[cfg(not(feature = "mistralrs"))]

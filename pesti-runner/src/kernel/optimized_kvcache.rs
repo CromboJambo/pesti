@@ -91,7 +91,7 @@ impl OptimizedKvcache {
         }
 
         let head_stride = self.num_kv_heads * self.head_dim;
-        
+
         // Simple contiguous layout (paged allocation logic can be added later)
         if let Some(slice) = self.k_buffer.as_mut_slice() {
             let k_start = head_stride * pos;
@@ -176,16 +176,19 @@ mod tests {
     #[test]
     fn test_fp16_memory_savings() {
         let cache = OptimizedKvcache::new(8, 64, 2048, Some(512));
-        
+
         assert_eq!(cache.memory_bytes_fp16(), 8 * 64 * 2048 * 2 * 2); // K + V
-        assert_eq!(cache.memory_bytes_fp32_comparison(), cache.memory_bytes_fp16() * 2);
+        assert_eq!(
+            cache.memory_bytes_fp32_comparison(),
+            cache.memory_bytes_fp16() * 2
+        );
         assert!((cache.memory_savings_percentage() - 50.0).abs() < 0.1);
     }
 
     #[test]
     fn test_paged_allocation() {
         let cache = OptimizedKvcache::new(8, 64, 2048, Some(512));
-        
+
         assert_eq!(cache.page_size(), 512);
         assert_eq!(cache.num_pages(), 4); // 2048 / 512 = 4 pages
     }
@@ -193,13 +196,13 @@ mod tests {
     #[test]
     fn test_write_and_append() {
         let mut cache = OptimizedKvcache::new(8, 64, 2048, Some(512));
-        
+
         let key = vec![f16::from_f32(1.0); 8 * 64];
         let value = vec![f16::from_f32(2.0); 8 * 64];
-        
+
         cache.append(&key, &value).unwrap();
         assert_eq!(cache.seq_len(), 1);
-        
+
         cache.append(&key, &value).unwrap();
         assert_eq!(cache.seq_len(), 2);
     }

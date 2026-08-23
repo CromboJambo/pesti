@@ -1,12 +1,13 @@
 //! Measure token generation throughput and timing breakdown
 
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::time::Instant;
 
 fn main() {
-    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path =
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
     let prompt_text = "Once upon a time in the land of Rust,";
     let target_tokens = 100;
 
