@@ -249,6 +249,65 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 
 ---
 
+## Week 16: Forward-Pass Correctness (✅ COMPLETE - 0.9992 norm ratio) 🆕🆕🆕
+
+### Date
+August 22, 2026
+
+### Goal
+Make the CPU forward pass numerically correct. The layer-0 after-FFN hidden-state norm was
+~8.0× too large vs a numpy reference. Localize the explosion, fix each root cause, and verify
+against the reference to ≤ 1.01× norm ratio.
+
+### Completed Tasks
+
+#### 1. **Dequantization Layout Fixes** ✅
+- [x] **Q5_0 / Q5_1** (`dequantize.rs`) - ggml interleaves the two nibble streams within each 32-element sub-block; pesti read them sequentially
+- [x] **Q6_K** (`gguf_weight_loader.rs`) - missing buffer-based reorder; now `buf[l]=q1, buf[l+32]=q2, buf[l+64]=q3, buf[l+96]=q4`
+- [x] **Verification**: all three stored weights now byte-exact vs reference (maxdiff 0.0)
+
+#### 2. **SwiGLU Sigmoid Fix** ✅
+- [x] **Root cause** - the `x < 0` branch computed `x/(1+e^x)` = silu(x), not sigmoid(x); the value was then multiplied by `x` *again* → `x²·sigmoid(x)·y`
+- [x] **Fixed in both paths** - `transformer/layer.rs` (library) and `kernel/dispatch.rs` (dispatch) — the same bug existed in both
+- [x] **Verification**: swiglu tensor maxdiff 8.21 → 8.6e-06; down tensor maxdiff 10.56 → 3.3e-06
+
+#### 3. **QKV Attention Bias + Tokenizer Fields** ✅
+- [x] **QKV bias** (`transformer/model.rs`) - Qwen/Qwen3 `attn_qkv` bias tensor was dropped; now loaded and added to the QKV projection
+- [x] **Tokenizer field fix** (`transformer/tokenizer.rs`)
+
+#### 4. **Verification Tooling** ✅
+- [x] `dump_l0_intermediates.rs` / `dump_ffn_tensors.rs` / `dump_w2.rs` - tensor dumpers
+- [x] `cpu_e2e_generate.rs` - CPU-only greedy generation (bypasses GPU OOM)
+- [x] `cmp_ffn_tensors.py` / `diag_w2_layout.py` - tensor comparison + layout hypothesis tester
+- [x] `probe_layer0.py` **GQA fix** - block-wise expansion via `np.repeat` (llama.cpp `h / n_rep`)
+
+### Key Achievements
+
+✅ **8× explosion resolved**: layer-0 after-FFN norm ratio ~8.0 → **0.9992** (vs numpy ref)
+✅ **Coherent end-to-end text** (CPU path): `The capital of France is` → `Paris. It is the largest city in Europe...`
+✅ **Three independent bugs isolated and fixed** (2 dequant + 1 activation), activation fixed in both library and dispatch paths
+✅ **62/62 lib unit tests pass**
+
+### Known Engineering Gaps (frontier, not debt)
+- ⚠️ Full `cargo test` has **pre-existing** compile errors in unrelated test targets (missing `gemm` crate, `get_vocab`). Lib's 62 unit tests pass.
+- ⚠️ **GPU e2e path OOMs** when both GPUs are occupied by other processes (env resource issue, not a code regression). The CPU path is fully verified.
+- ⚠️ 7 `comprehensive_attention_conformance` tests are `ignored` (deprecated, itself-buggy attention reference).
+
+### Engineering Lessons Learned
+
+**Fix the CPU path before the GPU path.** The GPU dispatch routes through the same CPU dequant +
+activation code. A forward pass that is numerically wrong on CPU cannot be made right on GPU.
+
+**The same bug lives in sibling call paths.** The SwiGLU sigmoid bug existed in *both*
+`layer.rs` and `dispatch.rs`. Fixing one and not the other would have left the dispatch path
+corrupted. When you find a bug, grep for the pattern across the codebase.
+
+**Tensor-by-tensor comparison localizes divergence.** Comparing each FFN sub-op (gate, up,
+swiglu, down) against a numpy reference isolated the 8× explosion to the swiglu step
+(corr 0.07) — proving the GEMM and weights were fine and the activation was the culprit.
+
+---
+
 ## Week 15: Real Tokenizer + GQA Fix + Divergence Probes (🆕 COMPLETE!)
 
 ### Date
@@ -645,5 +704,5 @@ Understanding the ecosystem and community through meaningful contributions
 
 ---
 
-*Last updated: August 20, 2026 (Week 15 Real Tokenizer + GQA Fix Complete!)*  
+*Last updated: August 22, 2026 (Week 16 Forward-Pass Correctness Complete!)*  
 *This roadmap will change as I learn more. If it looks perfect, it's lying.*

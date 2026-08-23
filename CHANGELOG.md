@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.8] - 2026-08-22 (In Progress)
+
+### Week 16: Forward-Pass Correctness — Dequant Layout + SwiGLU + QKV Bias 🆕🆕🆕
+
+**New capability**: The CPU forward pass now produces numerically-correct layer outputs.
+Three independent forward-pass bugs — two in dequantization, one in the SwiGLU activation —
+had localized to a ~8× layer-0 norm explosion. All three are fixed and verified against a
+numpy reference to a **0.9992** after-FFN norm ratio.
+
+#### The 8× Explosion: Root Causes (commits `96be171`, `4fafd60`) ✅ COMPLETE!
+
+The layer-0 after-FFN hidden-state norm was **~8.0× too large** vs the numpy reference.
+Tensor-by-tensor comparison against a Python reference (`cmp_ffn_tensors.py`) isolated the
+divergence to three independent bugs:
+
+**- Q5_0 / Q5_1 dequantization** (`pesti-runner/src/dequantize.rs`)
+  - Both read the two nibble streams sequentially; ggml **interleaves** them within each
+    32-element sub-block. Fixed to the ggml interleaved layout.
+
+**- Q6_K dequantization** (`pesti-runner/src/gguf_weight_loader.rs`)
+  - Output values were pushed in the wrong order (a buffer-based reorder was missing).
+  - Fixed to the ggml `buf[l]=q1, buf[l+32]=q2, buf[l+64]=q3, buf[l+96]=q4` ordering.
+
+**- SwiGLU sigmoid** (`pesti-runner/src/transformer/layer.rs` + `pesti-runner/src/kernel/dispatch.rs`)
+  - The `x < 0` branch computed `x/(1+e^x)` = **silu(x)**, not sigmoid(x). The value was then
+    multiplied by `x` *again* → `x²·sigmoid(x)·y`. Since ~half of `gate` is negative, swiglu
+    was massively corrupted (corr 0.07).
+  - Fixed to the numerically-stable `e^x/(1+e^x)` for `x < 0`. Fixed in **both** the library
+    path (`layer.rs`) and the dispatch path (`dispatch.rs`) — the same bug existed in both.
+
+**- QKV attention bias** (`pesti-runner/src/transformer/model.rs`)
+  - Qwen/Qwen3 models carry an `attn_qkv` bias tensor that was being dropped. Now loaded and
+    added to the QKV projection output.
+
+**- Tokenizer field fix** (`pesti-runner/src/transformer/tokenizer.rs`)
+
+#### Verification Evidence
+
+| Check | Before | After | Status |
+|-------|--------|-------|--------|
+| Layer-0 after-FFN norm ratio (vs numpy ref) | ~8.0 | **0.9992** | ✅ |
+| `swiglu` tensor maxdiff (vs ref) | 8.21 | **8.6e-06** | ✅ |
+| `down` tensor maxdiff (vs ref) | 10.56 | **3.3e-06** | ✅ |
+| Q5_0 / Q5_1 / Q6_K stored weights | scrambled | **byte-exact (maxdiff 0.0)** | ✅ |
+| CPU end-to-end generation | garbage | `Paris. It is the largest city in Europe...` | ✅ |
+| Lib unit tests | - | **62/62 pass** | ✅ |
+
+**End-to-end proof** (`cpu_e2e_generate.rs`, CPU path — the one fixed):
+- Prompt: `The capital of France is`
+- Output: `Paris. It is the largest city in Europe and the second largest in the world. It is
+  also the capital of the department of Paris...`
+
+#### Verification Tooling (commit `bd3e3f4`) ✅ COMPLETE!
+
+New ad-hoc conformance scaffolding to localize forward-pass divergence:
+- `pesti-runner/examples/dump_l0_intermediates.rs` - Per-sub-op layer-0 dumper
+- `pesti-runner/examples/dump_ffn_tensors.rs` - Full-precision FFN tensor dumper
+- `pesti-runner/examples/dump_w2.rs` - Single-tensor weight dumper
+- `pesti-runner/examples/cpu_e2e_generate.rs` - CPU-only greedy text generation (bypasses GPU OOM)
+- `conformance-corpus/cmp_ffn_tensors.py` - Tensor-by-tensor FFN comparison vs numpy
+- `conformance-corpus/diag_w2_layout.py` - w2 layout hypothesis tester
+- `conformance-corpus/probe_layer0.py` - **GQA fix**: block-wise expansion via `np.repeat` (llama.cpp `h / n_rep` convention)
+- `conformance-corpus/ref_emb_norm.py` - Reference embedding-norm probe
+
+#### Known Engineering Gaps (frontier, not debt)
+
+- ⚠️ **Full `cargo test` has pre-existing compile errors** in unrelated test targets (missing
+  `gemm` crate, `get_vocab` on tokenizer). The lib's 62 unit tests pass; these targets predate
+  this work.
+- ⚠️ **GPU e2e path OOMs** when both GPUs are occupied by other processes (env resource issue,
+  not a code regression). The CPU path — the one fixed here — is fully verified.
+- ⚠️ **7 `comprehensive_attention_conformance` tests are `ignored`** — they compare against a
+  now-deprecated attention reference that was found to be itself buggy. Re-enabling requires a
+  corrected reference.
+
+### EDR-010: Week 16 Forward-Pass Correctness 🆕
+**Date**: 2026-08-22
+**Status**: ✅ Complete
+
+**Decision**: Fix the CPU forward-pass correctness (dequant layout + SwiGLU + QKV bias) before
+any further GPU work.
+
+**Rationale**: The GPU dispatch path routes through the same CPU dequant + activation code. A
+forward pass that is numerically wrong on CPU cannot be made right on GPU. Localizing the 8×
+explosion to three independent bugs (two dequant, one activation) — and fixing the activation bug
+in *both* the library and dispatch paths — is the highest-leverage correctness work available.
+
+**Verification requirement (met)**: Layer-0 after-FFN norm ratio ≤ 1.01 vs numpy reference.
+Measured: **0.9992**.
+
+---
+
 ## [0.1.7] - 2026-08-20 (In Progress)
 
 ### Week 15: Real Tokenizer + GQA Fix + Divergence Probes 🆕🆕🆕
