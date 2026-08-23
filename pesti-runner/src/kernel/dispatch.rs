@@ -127,6 +127,10 @@ pub struct DispatchContext {
     cpu_gemm: crate::kernel::CpuGemmKernel,
     /// Cached CPU attention kernel for fallback.
     cpu_attention: CpuAttentionKernel,
+    /// Number of times a GPU op failed and fell back to CPU. Non-zero after a
+    /// run means the GPU path is NOT fully working (e.g. OOM on a shared GPU)
+    /// and results may be a CPU/GPU mix — check before trusting "GPU" numbers.
+    gpu_fallback_count: std::sync::atomic::AtomicU32,
 }
 
 impl DispatchContext {
@@ -154,6 +158,7 @@ impl DispatchContext {
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
+            gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -207,6 +212,7 @@ impl DispatchContext {
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
+            gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -224,6 +230,7 @@ impl DispatchContext {
             prefer_gpu,
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
+            gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -256,6 +263,15 @@ impl DispatchContext {
     /// Whether GPU is actually available (not just preferred).
     pub fn gpu_available(&self) -> bool {
         self.engine.gpu_available()
+    }
+
+    /// Number of times a GPU operation failed and fell back to CPU since this
+    /// context was created. A non-zero value after a run means the GPU path is
+    /// not fully working (e.g. OOM on a busy GPU) and the results are a
+    /// CPU/GPU mix — do not treat them as pure-GPU numbers.
+    pub fn gpu_fallback_count(&self) -> u32 {
+        self.gpu_fallback_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Get the GEMM architecture.
@@ -343,23 +359,27 @@ impl DispatchContext {
                 .map_err(|e| DispatchError::Transfer(format!("H2D C init: {e}")))?;
         }
 
-        // Dispatch to GPU or CPU fallback
-        let _result = self
+        // Dispatch to GPU. If the matmul fails (e.g. OOM on a shared GPU, or a
+        // kernel-launch error), fall back to the CPU GEMM rather than reading
+        // back an allocated-but-never-written C buffer as zeros — a silently
+        // zeroed output would corrupt the logits with no indication that the
+        // GPU path failed. (Previously this was `let _result = matmul(...)`,
+        // which swallowed the error and returned zeros.)
+        let matmul_ok = self
             .engine
-            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k);
+            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
+            .is_ok();
 
-        // Transfer result back to host
+        // Transfer result back to host (only meaningful if the matmul ran).
         let mut c_host = vec![0.0f32; c_len];
-        let c_bytes_out: &mut [u8] =
-            unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
-        let d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
-        if !d2h_ok {
-            warn!("GEMM dispatch: D2H failed, using zero output");
-        }
-
-        // Sync after async D2H to ensure data is ready
-        if let Err(e) = self.memory.sync() {
-            warn!(error = %e, "GEMM dispatch: sync failed, returning partial result");
+        let mut d2h_ok = false;
+        if matmul_ok {
+            let c_bytes_out: &mut [u8] =
+                unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
+            d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
+            if d2h_ok && self.memory.sync().is_err() {
+                d2h_ok = false;
+            }
         }
 
         // Free device buffers. `RawHandle` has no Drop, so every GEMM call
@@ -368,6 +388,16 @@ impl DispatchContext {
         let _ = self.memory.free(a_handle);
         let _ = self.memory.free(b_handle);
         let _ = self.memory.free(c_handle);
+
+        if !matmul_ok || !d2h_ok {
+            self.gpu_fallback_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            warn!(
+                matmul_ok,
+                d2h_ok, "GEMM dispatch: GPU path failed, falling back to CPU GEMM"
+            );
+            return self.dispatch_gemm_cpu(a_host, b_host, c_init, m, n, k, alpha, beta);
+        }
 
         Ok(c_host)
     }
