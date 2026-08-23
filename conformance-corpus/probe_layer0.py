@@ -72,7 +72,11 @@ print(f"[REF] L0 v norm={float(np.sqrt((v*v).sum())):.4f} head={v[:8].round(4).t
 
 # RoPE on q,k at pos 0 -> cos=1, sin=0 => unchanged
 # single-token attention: softmax over 1 position = 1.0, attn_out = v
-attn_out = v  # [n_embd]
+# GQA: query head h uses kv head (h // n_rep). The expansion is BLOCK-wise:
+# heads 0..n_rep-1 -> kv0, heads n_rep..2*n_rep-1 -> kv1, etc.
+# np.repeat along axis=0 of the [n_kv, head_dim] matrix gives exactly that.
+n_rep = n_head // n_head_kv
+attn_out = np.repeat(v.reshape(n_head_kv, head_dim), n_rep, axis=0).flatten()  # [n_embd]
 attn_proj = wo.T @ attn_out
 x2 = x + attn_proj
 print(f"[REF] L0 attn_proj norm={float(np.sqrt((attn_proj*attn_proj).sum())):.4f} head={attn_proj[:8].round(4).tolist()}")
