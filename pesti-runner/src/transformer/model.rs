@@ -365,6 +365,11 @@ pub struct LlamaModel {
     /// One `LayerKvCache` per transformer layer. Initialized on first
     /// `forward_layers_with_cache()` call.
     pub cpu_kv_caches: Option<Vec<crate::transformer::kv_cache::LayerKvCache>>,
+    /// Optional per-layer hidden-state capture for the dispatch (GPU) path.
+    /// When `Some`, `forward_with_dispatch` pushes each layer's output into
+    /// this vec (in layer order) so a conformance dumper can diff every layer
+    /// against a numpy oracle. `None` = no capture (normal inference).
+    pub capture_per_layer: Option<Vec<Vec<f32>>>,
 }
 
 impl LlamaModel {
@@ -484,6 +489,7 @@ impl LlamaModel {
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
             cpu_kv_caches: None,
+            capture_per_layer: None,
         })
     }
 
@@ -551,6 +557,7 @@ impl LlamaModel {
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
             cpu_kv_caches: None,
+            capture_per_layer: None,
         })
     }
 
@@ -1427,6 +1434,11 @@ impl LlamaModel {
                 &mut key_caches[layer_idx],
                 &mut value_caches[layer_idx],
             )?;
+
+            // Optional per-layer capture for conformance dumping (GPU path).
+            if let Some(ref mut cap) = self.capture_per_layer {
+                cap.push(h.clone());
+            }
 
             // DEBUG: per-layer hidden dump for conformance triage.
             if std::env::var("PESTI_DEBUG_HIDDEN").is_ok() {
