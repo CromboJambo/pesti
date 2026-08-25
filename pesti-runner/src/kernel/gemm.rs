@@ -395,6 +395,18 @@ impl CudaGemmKernel {
             .map_err(|e| GemmError::LaunchFailed(format!("kernel launch failed: {e:?}")))?;
         }
 
+        // Synchronize the launch stream before returning. The kernel runs on a
+        // non-blocking stream (rt.new_stream()), which has NO implicit ordering
+        // with the legacy default stream that the memory backend's synchronous
+        // cuMemcpyDtoH_v2 runs on. Without this, a caller that reads the output
+        // buffer back to host (dispatch_gemm's d2h) can race the still-running
+        // kernel and read the zero-initialized C — non-deterministically
+        // returning zeros or a correct result depending on timing. This mirrors
+        // KernelFromPtx::matmul, which already syncs after launch.
+        self.stream
+            .synchronize()
+            .map_err(|e| GemmError::LaunchFailed(format!("stream sync failed: {e:?}")))?;
+
         Ok(())
     }
 }

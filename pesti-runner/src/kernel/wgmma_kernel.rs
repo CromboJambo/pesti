@@ -108,6 +108,13 @@ impl WGMMAKernel {
             .map_err(|e| super::GemmError::LaunchFailed(format!("kernel launch failed: {e:?}")))?;
         }
 
+        // Synchronize before returning: the kernel runs on a non-blocking
+        // stream with no implicit ordering against the legacy default stream
+        // used by synchronous D2H copies (same race as CudaGemmKernel::launch).
+        self.stream
+            .synchronize()
+            .map_err(|e| super::GemmError::LaunchFailed(format!("stream sync failed: {e:?}")))?;
+
         Ok(())
     }
 }

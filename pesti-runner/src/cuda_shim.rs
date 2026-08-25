@@ -87,6 +87,15 @@ pub fn cu_stream(stream: &Arc<CudaStream>) -> sys::CUstream {
     stream.cu_stream()
 }
 
+/// Synchronize a CUDA stream (block until all queued work completes).
+///
+/// Needed after launching a kernel on a non-blocking stream before any
+/// synchronous (legacy-default-stream) D2H copy of the kernel's output —
+/// the two streams have no implicit ordering.
+pub fn stream_synchronize(stream: &Arc<CudaStream>) -> Result<(), DriverError> {
+    stream.synchronize()
+}
+
 /// Trait extension for CUresult to provide `.result()` method.
 pub trait IntoResult {
     fn result(self) -> Result<(), DriverError>;

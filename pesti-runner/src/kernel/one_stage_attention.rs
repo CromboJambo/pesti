@@ -130,6 +130,12 @@ impl OneStageAttentionKernel {
                 cu_stream,
                 &mut params,
             )?;
+            // The kernel runs on a non-blocking stream that has no implicit
+            // ordering with the legacy default stream used by the synchronous
+            // copy_device_to_host below. Without this sync the D2H can read the
+            // output buffer while the kernel is still writing it (same race as
+            // CudaGemmKernel::launch).
+            crate::cuda_shim::stream_synchronize(&stream)?;
         }
 
         // Read back output
