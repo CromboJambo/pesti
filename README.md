@@ -92,12 +92,15 @@ cargo run -p pesti-runner --release --features cuda \
 | llama.cpp FFI runner | ~218 tok/s on TinyLlama-1.1B, consistent across Q3_K_M–Q8_0 (see `pesti-runner/README.md`) |
 
 ### ⚠️ Frontier (not yet done — tracked in `ROADMAP.md`)
-- **Real end-to-end decode tok/s** on a real model. The Week 12/13 throughput
-  numbers below are *projections from synthetic micro-benchmarks*, **not**
-  measured transformer decode. Week 14 is the measurement sprint for this.
-- **GPU end-to-end path** — the `cudarc` dispatch path exists but OOMs when
-  both GPUs are occupied by other processes (environment resource issue, not a
-  code regression). The CPU path is the fully-verified one.
+- **Real end-to-end decode tok/s** on the GPU path. CPU path measured at
+  ~100 tok/s on Qwen2.5-0.5B (Week 14, `docs/history/WEEK_14_RESULTS.md`);
+  the Week 12/13 throughput numbers below are *projections from synthetic
+  micro-benchmarks*, **not** measured transformer decode.
+- **GPU end-to-end path** (Week 17, in progress) — the `cudarc` dispatch
+  path exists, failed GPU matmuls now fall back to CPU GEMM with a
+  `gpu_fallback_count()` counter (no more silent zeroed buffers), and
+  per-layer GPU capture tooling is in place. Remaining: per-layer oracle
+  diff, divergence fixes, zero-fallback assertion, GPU decode tok/s.
 - **KV-cache updates during autoregressive generation** (paged attention).
 - FP8 quantization, multi-GPU scaling.
 
@@ -298,8 +301,8 @@ known gaps), see [`ROADMAP.md`](ROADMAP.md).
 - [x] Conformance tooling (numpy oracle + full-vector diffs)
 
 ### Next (frontier)
-- [ ] Real end-to-end decode tok/s measurement (Week 14)
-- [ ] GPU end-to-end path (resolve OOM under load)
+- [ ] GPU end-to-end correctness + decode tok/s (Week 17, in progress)
+- [ ] Measured llama.cpp baseline on same model/prompt/hardware (Week 14 remainder)
 - [ ] KV-cache updates during autoregressive generation (paged attention)
 - [ ] FP8 quantization, multi-GPU scaling
 - [ ] Contribute back to llama.cpp / candle / burn
@@ -313,5 +316,5 @@ known gaps), see [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
-*Last updated: August 22, 2026 (Week 16 — 24-layer forward conformance PASS)*
+*Last updated: August 25, 2026 (Week 13/14 reconciled; Week 17 GPU e2e correctness in progress)*
 *This README will change as I learn more. If it looks perfect, it's lying.*

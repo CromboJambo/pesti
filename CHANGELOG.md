@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.8] - 2026-08-22 (In Progress)
 
+### Week 17 (in progress): GPU End-to-End Correctness 🆕
+
+**New capability (partial)**: GPU dispatch path no longer silently corrupts
+results on matmul failure, and per-layer GPU capture tooling is in place for
+numpy-oracle diffing.
+
+**- GPU GEMM fallback counter + error propagation** (commit `dcdee2a`)
+  - `dispatch_gemm` previously did `let _result = matmul(...)` — a failed GPU
+    matmul (e.g. OOM on a shared GPU) silently returned a zeroed C buffer,
+    corrupting logits with no indication the GPU path failed
+  - matmul/D2H failures now fall back to CPU GEMM (correct result, not zeros)
+  - `DispatchContext::gpu_fallback_count()` counts GPU→CPU fallbacks so tests
+    can assert a run was fully GPU (zero fallbacks)
+
+**- Per-layer GPU capture + GPU GEMM probes** (commit `a7ac124`)
+  - `LlamaModel.capture_per_layer` — `forward_with_dispatch` pushes each
+    layer's output when set (None = normal inference, no overhead)
+  - `probe_gpu_gemm.rs` — raw dispatch_gemm sanity (2x2 + 1x8 vs expected)
+  - `probe_gpu_gemm2.rs` — exact output-head GEMM, GPU vs CPU on real weights
+  - `dump_all_layers_gpu.rs` — full per-layer hidden dump through the real
+    GPU dispatch path for numpy-oracle diffing
+
+**Remaining (tracked in ROADMAP.md Week 17)**: run the GPU per-layer oracle
+diff, fix divergences, assert zero fallbacks, measure GPU decode tok/s.
+
 ### Week 16: Forward-Pass Correctness — Dequant Layout + SwiGLU + QKV Bias 🆕🆕🆕
 
 **New capability**: The CPU forward pass now produces numerically-correct layer outputs.
@@ -180,7 +205,7 @@ Measured: **0.9992**.
 
 ---
 
-## [0.1.6] - 2026-08-16 (In Progress)
+## [0.1.6] - 2026-08-16 (Week 13 Benchmarking Sprint - closed, projections superseded by Week 14)
 
 ### Week 13: End-to-End Benchmarking & Performance Profiling 🆕🆕
 
@@ -241,12 +266,12 @@ Measured: **0.9992**.
 ⚠️ **Small Matrix Bias**: 64×512×2048 is smaller than real inference workloads  
 ⚠️ **Utilization Inflation**: Measured 1,072% of peak (impossible), likely 30-60% in reality  
 
-#### Next Steps
+#### Next Steps (reconciled 2026-08-25)
 
-- [ ] Install `nsys` for accurate CUDA kernel profiling
-- [ ] Run full inference pipeline with Qwen2.5-0.5B model to validate projections
-- [ ] Implement KV cache updates during autoregressive generation (Priority 4)
-- [ ] Test long sequences at seq_len=512, 1024, 2048 (Priority 5)
+- [x] ~~Install `nsys` for accurate CUDA kernel profiling~~ — deferred; manual sync timing was the deliverable, nsys adds no value until the GPU e2e path is correct (tracked in ROADMAP.md Week 13 "Not done")
+- [x] ~~Run full inference pipeline with Qwen2.5-0.5B model to validate projections~~ — done in Week 14: real measurement ~100 tok/s (CPU path), projections were ~15× inflated (see `docs/history/WEEK_14_RESULTS.md`)
+- [ ] Implement KV cache updates during autoregressive generation (Priority 4) — carried to Week 17+ (ROADMAP.md)
+- [ ] Test long sequences at seq_len=512, 1024, 2048 (Priority 5) — carried to Week 17+ (ROADMAP.md)
 
 ### Files Added in Week 13 Sprint (commit 5d16b34)
 - `pesti-runner/examples/benchmark_week13_priority2.rs` (222 lines) - End-to-end benchmark with numerical conformance

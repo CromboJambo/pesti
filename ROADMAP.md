@@ -249,6 +249,51 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 
 ---
 
+## Week 17: GPU End-to-End Correctness (🔄 IN PROGRESS - started August 23, 2026)
+
+### Date
+August 23-25, 2026
+
+### Goal
+Make the GPU forward pass numerically correct against the same numpy oracle
+that verified the CPU path in Week 16, then measure real GPU decode tok/s.
+The CPU path is the oracle-verified reference; the GPU path must match it
+per-layer with zero silent fallbacks.
+
+### Completed Tasks (August 23)
+
+#### 1. **GPU GEMM Fallback Counter + Error Propagation** ✅ (commit `dcdee2a`)
+- [x] `dispatch_gemm` no longer swallows matmul errors — a failed GPU matmul
+  (e.g. OOM on a shared GPU) previously returned a **zeroed** C buffer,
+  silently corrupting logits
+- [x] matmul/D2H failures now fall back to CPU GEMM (correct result, not zeros)
+- [x] `DispatchContext::gpu_fallback_count()` — tests can assert a run was
+  fully GPU (zero fallbacks)
+
+#### 2. **Per-Layer GPU Capture Tooling** ✅ (commit `a7ac124`)
+- [x] `LlamaModel.capture_per_layer` — `forward_with_dispatch` pushes each
+  layer's output when set (None = normal inference, no overhead)
+- [x] `probe_gpu_gemm.rs` — raw dispatch_gemm sanity (2x2 + 1x8 vs expected)
+- [x] `probe_gpu_gemm2.rs` — exact output-head GEMM, GPU vs CPU on real weights
+- [x] `dump_all_layers_gpu.rs` — full per-layer hidden dump through the real
+  GPU dispatch path for numpy-oracle diffing (`compare_full_vectors.py` format)
+
+### Next Steps (Week 17)
+- [ ] Run `probe_gpu_gemm` / `probe_gpu_gemm2` — raw GEMM sanity on this hardware
+- [ ] Run `dump_all_layers_gpu` vs numpy oracle — find first diverging layer
+- [ ] Fix GPU-path divergence (dequant layout, attention, KV cache on device)
+- [ ] Assert `gpu_fallback_count() == 0` on a full forward pass
+- [ ] GPU decode tok/s measurement (completes Week 14's remaining deliverable)
+- [ ] Long-sequence validation (seq_len 512/1024/2048) — carried from Week 13
+
+### Environment Note
+Both GPUs are shared (Unsloth llama-server resident, ~15GB used per GPU).
+Use `PESTI_KV_MAX_SEQ` to cap KV allocation, and expect the fallback counter
+to be non-zero under contention — a zero-fallback assertion requires an
+exclusive GPU window.
+
+---
+
 ## Week 16: Forward-Pass Correctness (✅ COMPLETE - 0.9992 norm ratio) 🆕🆕🆕
 
 ### Date
@@ -359,7 +404,7 @@ Self-contained GGUF tokenizer reconstruction and CPU attention correctness fixes
 
 ---
 
-## Week 14: Real End-to-End Decode Measurement (🔄 REWRITTEN - 30GB VRAM)
+## Week 14: Real End-to-End Decode Measurement (🔄 PARTIALLY DONE - real CPU number, GPU unmeasured)
 
 ### Date
 August 17, 2026
@@ -380,17 +425,31 @@ Get a real measured tok/s number on a real model with a real decoder, then profi
 Week 13 projections (~500-1,728 tok/s) were based on synthetic micro-benchmarks and sync timing that does not represent real transformer decode cost. The only useful Week 14 artifact is real measurement.
 
 ### Deliverables
-- [ ] `pesti-runner/examples/week14_e2e_decode.rs` - Real decode benchmark using existing loader/tokenizer/sample path
-- [ ] Real tok/s measurement on Bonsai-27B or fallback model
-- [ ] llama.cpp baseline on same model/prompt/hardware
-- [ ] `WEEK_14_E2E_RESULTS.md` - Measured numbers, bottlenecks, next steps
-- [ ] Updated `ROADMAP.md` with real data instead of projections
+- [x] `pesti-runner/examples/week14_e2e_decode.rs` - Real decode benchmark using existing loader/tokenizer/sample path
+- [x] Real tok/s measurement on a real model — **~100 tok/s (CPU path)** on Qwen2.5-0.5B-Instruct-Q4_K_M, 64 tokens (see `docs/history/WEEK_14_RESULTS.md`)
+- [ ] llama.cpp baseline on same model/prompt/hardware (currently "estimated ~1.4×", never measured)
+- [x] `WEEK_14_RESULTS.md` - Measured numbers, bottlenecks, next steps
+- [x] Updated `ROADMAP.md` with real data instead of projections
 
 ### Success Criteria
 - [x] Plan updated to reflect actual hardware
-- [ ] Decode benchmark completes and prints real tok/s
-- [ ] Clear statement of top 3 bottlenecks from profiling
-- [ ] Comparison vs llama.cpp baseline
+- [x] Decode benchmark completes and prints real tok/s (~100 tok/s CPU, Qwen2.5-0.5B)
+- [ ] Clear statement of top 3 bottlenecks from profiling (qualitative only so far)
+- [ ] Comparison vs llama.cpp baseline (measured)
+
+### Reality Check (absorbed from WEEK_14_RESULTS.md)
+Week 13's ~500-1,728 tok/s projections were ~15× inflated: the synthetic
+benchmark measured CPU compute speed of isolated GEMM micro-ops, not real
+transformer decode. The real transformer forward pass is limited by weight
+loading, CPU-bound matmuls (CPU path), KV cache overhead, and kernel
+efficiency. The 27B model targets from the original rewrite were never
+benchmarked — the forward pass was not yet numerically correct until Week
+16, so a 27B decode benchmark was meaningless before then.
+
+### Remaining (carried to Week 17+)
+- [ ] Measured llama.cpp baseline on the same model/prompt/hardware
+- [ ] GPU-path decode tok/s (blocked on GPU e2e correctness — see Week 17)
+- [ ] Top-3 bottleneck statement from real profiling
 
 ### Notes
 - CPU decode path already exists and loads GGUF correctly
@@ -399,6 +458,11 @@ Week 13 projections (~500-1,728 tok/s) were based on synthetic micro-benchmarks 
 - Old targets: ~72-150 tok/s (0.5B). New target: real tok/s on 27B model.
 
 ---
+
+## Week 13: End-to-End Benchmarking + Profiling (✅ COMPLETE - projections only, superseded by Week 14)
+
+### Date
+August 16, 2026
 
 ### Goal
 Complete end-to-end benchmarking and performance profiling to verify CUDA GEMM integration and project realistic throughput.
@@ -444,12 +508,32 @@ Complete end-to-end benchmarking and performance profiling to verify CUDA GEMM i
 ### Total Projected Speedup: ~9× over baseline (35 → 315+ tok/s) 🚀
 ### Target Exceeded: ~500-900% faster than 100 tok/s goal ✅
 
+### Not done (deferred to Week 17+)
+- **nsys profiling** — deferred; manual sync-timing profiling was the Week 13
+  deliverable and nsys adds no value until the GPU e2e path is correct.
+- **KV-cache updates during autoregressive generation (paged attention)** —
+  still frontier; tracked in README frontier list.
+- **Long-sequence validation (seq_len 512/1024/2048)** — never run; cheap to
+  add once the GPU e2e path is numerically verified (Week 17).
+- **WGMMA architecture note** — `wgmma.mma_async` requires sm_90a+ (Hopper);
+  the sm_8.9 (Ada) target does not support it. The WGMMA kernel is a
+  benchmark artifact, not part of the production path; production GEMM uses
+  the cudarc/CUTLASS path.
+
 ---
 
-## Phase 4: Upstream Contribution (❌ Not Started - Optional Grind)
+## Phase 3.5: GPU Forward Pass Requirements (📋 Requirements Doc - pre-Week 17)
 
 ### Goal
 Define the exact implementation plan to complete the GPU forward pass so it can produce numerical results comparable to the CPU path.
+
+### Status Note (August 25, 2026)
+The gap analysis below predates Weeks 15-16. The CPU path is now fully
+correct (24-layer conformance PASS), the GPU dispatch path exists with a
+fallback counter (`DispatchContext::gpu_fallback_count()`), and per-layer GPU
+capture tooling exists (`dump_all_layers_gpu.rs`, `probe_gpu_gemm.rs`,
+`probe_gpu_gemm2.rs`). Week 17 executes this plan: per-layer GPU-vs-numpy
+oracle diffing, then fixes, then a zero-fallback assertion.
 
 ### Requirements Document
 
@@ -704,5 +788,5 @@ Understanding the ecosystem and community through meaningful contributions
 
 ---
 
-*Last updated: August 22, 2026 (Week 16 Forward-Pass Correctness Complete!)*  
+*Last updated: August 25, 2026 (Week 13/14 reconciled; Week 17 GPU e2e correctness in progress)*  
 *This roadmap will change as I learn more. If it looks perfect, it's lying.*
