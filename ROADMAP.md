@@ -292,6 +292,14 @@ Use `PESTI_KV_MAX_SEQ` to cap KV allocation, and expect the fallback counter
 to be non-zero under contention — a zero-fallback assertion requires an
 exclusive GPU window.
 
+### Known Tradeoff: Per-Launch Stream Sync (commit `63ef0b5`)
+The stream-sync-after-launch fix in `CudaGemmKernel` / `WGMMAKernel` /
+`OneStageAttentionKernel` is a **correctness stopgap, not a throughput
+fix**: synchronizing after every kernel launch serializes launch and
+readback. It is fine for the current dispatch path (which D2H-copies
+every GEMM output), but if layers are later batched on the stream, move
+the sync to the readback boundary instead of paying it per launch.
+
 ---
 
 ## Week 16: Forward-Pass Correctness (✅ COMPLETE - 0.9992 norm ratio) 🆕🆕🆕
