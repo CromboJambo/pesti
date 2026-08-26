@@ -252,7 +252,7 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 ## Week 17: GPU End-to-End Correctness (🔄 IN PROGRESS - started August 23, 2026)
 
 ### Date
-August 23-25, 2026
+August 23-26, 2026
 
 ### Goal
 Make the GPU forward pass numerically correct against the same numpy oracle
@@ -279,12 +279,50 @@ per-layer with zero silent fallbacks.
   GPU dispatch path for numpy-oracle diffing (`compare_full_vectors.py` format)
 
 ### Next Steps (Week 17)
-- [ ] Run `probe_gpu_gemm` / `probe_gpu_gemm2` — raw GEMM sanity on this hardware
-- [ ] Run `dump_all_layers_gpu` vs numpy oracle — find first diverging layer
-- [ ] Fix GPU-path divergence (dequant layout, attention, KV cache on device)
-- [ ] Assert `gpu_fallback_count() == 0` on a full forward pass
+- [x] Run `probe_gpu_gemm` / `probe_gpu_gemm2` — raw GEMM sanity on this hardware
+  (2x2 + 1x4 GEMM exact; full 151936-col output-head GEMM writes all columns,
+  0 bad cols)
+- [x] Run `dump_all_layers_gpu` vs numpy oracle — full 24-layer + prehead +
+  logits diff (`compare_full_vectors.py`): **no race-class divergence**.
+  GPU vs oracle: max|d| grows 5.6e-3 (layer 0) → 5.1e-2 (layer 23),
+  prehead 1.4e-1, logits 5.0e-2; norm ratio 0.999–1.001, corr ≥ 0.999993,
+  top-8 tokens + argmax identical to oracle. CPU vs oracle on the same
+  vectors: max|d| ≤ 7.6e-5, PASS at 1e-3. The GPU residual is f16
+  tensor-core accumulation rounding (mma.sync accumulates in f16 tiles),
+  not a sync race or layout bug.
+- [x] Assert `gpu_fallback_count() == 0` on a full forward pass — verified:
+  `dump_all_layers_gpu` reports **GPU fallback count: 0 (all ops ran on GPU)**
 - [ ] GPU decode tok/s measurement (completes Week 14's remaining deliverable)
 - [ ] Long-sequence validation (seq_len 512/1024/2048) — carried from Week 13
+
+### Root Cause: `cuStreamSynchronize` No-Op Under `CU_CTX_SCHED_AUTO` (Aug 26)
+The non-deterministic zero/partial GEMM outputs were a **host-side sync
+bug, not a kernel bug**. Under the primary context's default
+`CU_CTX_SCHED_AUTO` (SPIN) scheduling, `cuStreamSynchronize` on a
+non-blocking stream returned before the kernel finished (probe_final
+measured ~0.2 µs — a no-op), so the subsequent synchronous
+`cuMemcpyDtoH_v2` (legacy default stream) raced the kernel and read
+zero-initialized C. `probe_decisive` (k=1024, C re-zeroed on-stream each
+iter, 200 iters, fresh process per mode) isolated it: stream-sync failed
+~1/60 (tail columns 829–1023 stale), event-sync and ctx-sync passed 60/60.
+
+**Fix**: `cuda_shim::stream_synchronize` is now event-based
+(`cuEventCreate` → `cuEventRecord` on the kernel stream →
+`cuEventSynchronize` → destroy) — `cuEventSynchronize` always blocks the
+host regardless of context scheduling flags. All post-launch sync call
+sites route through it (gemm, attention, rope, builder, memory `sync`).
+`CudaMemoryBackend::alloc` uses a new `cuda_shim::context_synchronize`
+instead: its `cuMemsetD8_v2` runs on the legacy default stream, which a
+kernel-stream wait cannot order against — only a context-wide wait can.
+
+Verification after the fix: `probe_decisive` stream mode 0/200 bad,
+`probe_fix_verify` S1 (old behavior) 1/60 partial vs S2/S3/S4 0/60,
+62/62 lib tests pass, full GPU forward = 0 fallbacks.
+Intermediate characterization probes from the investigation
+(`probe_buffer_race`, `probe_firstlaunch`, `probe_fix_combo`,
+`probe_fix_isolated`, `probe_iter`, `probe_mech`, `probe_sync_diag`,
+`probe_sync_mechanism`, `probe_wait_time`, `probe_warmup_scope`) live in
+`scratch/examples/` (not compiled by the workspace).
 
 ### Environment Note
 Both GPUs are shared (Unsloth llama-server resident, ~15GB used per GPU).
@@ -292,13 +330,16 @@ Use `PESTI_KV_MAX_SEQ` to cap KV allocation, and expect the fallback counter
 to be non-zero under contention — a zero-fallback assertion requires an
 exclusive GPU window.
 
-### Known Tradeoff: Per-Launch Stream Sync (commit `63ef0b5`)
-The stream-sync-after-launch fix in `CudaGemmKernel` / `WGMMAKernel` /
+### Known Tradeoff: Per-Launch Sync (commits `63ef0b5` → event-based fix)
+The sync-after-launch in `CudaGemmKernel` / `WGMMAKernel` /
 `OneStageAttentionKernel` is a **correctness stopgap, not a throughput
 fix**: synchronizing after every kernel launch serializes launch and
 readback. It is fine for the current dispatch path (which D2H-copies
 every GEMM output), but if layers are later batched on the stream, move
 the sync to the readback boundary instead of paying it per launch.
+Since Aug 26 the sync itself is event-based (`cuda_shim::stream_synchronize`)
+because `cuStreamSynchronize` is unreliable under `CU_CTX_SCHED_AUTO` —
+see the Root Cause section above.
 
 ---
 
