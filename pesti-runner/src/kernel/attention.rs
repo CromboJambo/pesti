@@ -493,10 +493,10 @@ impl GemmBasedAttentionKernel {
             )
             .map_err(|e| AttentionError::Gemm(e))?;
 
-        // Synchronize stream to ensure GEMM completes
-        self.gemm_kernel
-            .stream()
-            .synchronize()
+        // Synchronize stream to ensure GEMM completes (event-based: see
+        // cuda_shim::stream_synchronize for why cuStreamSynchronize alone
+        // is not a reliable blocking wait).
+        crate::cuda_shim::stream_synchronize(self.gemm_kernel.stream())
             .map_err(|e| AttentionError::Cuda(format!("synchronize: {e}")))?;
 
         // Step 2: Read back scores and apply softmax on CPU
@@ -540,10 +540,10 @@ impl GemmBasedAttentionKernel {
             )
             .map_err(|e| AttentionError::Gemm(e))?;
 
-        // Synchronize before returning
-        self.gemm_kernel
-            .stream()
-            .synchronize()
+        // Synchronize before returning (event-based: see
+        // cuda_shim::stream_synchronize for why cuStreamSynchronize alone
+        // is not a reliable blocking wait).
+        crate::cuda_shim::stream_synchronize(self.gemm_kernel.stream())
             .map_err(|e| AttentionError::Cuda(format!("synchronize: {e}")))?;
 
         Ok(output_buffer)

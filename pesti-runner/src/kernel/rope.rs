@@ -144,9 +144,8 @@ impl CudaRopeKernel {
             )
             .map_err(|e| AttentionError::LaunchFailed(format!("RoPE launch failed: {e:?}")))?;
 
-            // Synchronize
-            self.stream
-                .synchronize()
+            // Synchronize (event-based: see cuda_shim::stream_synchronize)
+            crate::cuda_shim::stream_synchronize(&self.stream)
                 .map_err(|e| AttentionError::LaunchFailed(format!("RoPE sync failed: {e:?}")))?;
         }
 

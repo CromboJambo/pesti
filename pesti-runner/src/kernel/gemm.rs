@@ -401,10 +401,12 @@ impl CudaGemmKernel {
         // cuMemcpyDtoH_v2 runs on. Without this, a caller that reads the output
         // buffer back to host (dispatch_gemm's d2h) can race the still-running
         // kernel and read the zero-initialized C — non-deterministically
-        // returning zeros or a correct result depending on timing. This mirrors
-        // KernelFromPtx::matmul, which already syncs after launch.
-        self.stream
-            .synchronize()
+        // returning zeros or a correct result depending on timing.
+        //
+        // stream_synchronize is event-based: cuStreamSynchronize is a no-op
+        // under the primary context's default CU_CTX_SCHED_AUTO (SPIN)
+        // scheduling, so it does NOT actually wait for the kernel.
+        crate::cuda_shim::stream_synchronize(&self.stream)
             .map_err(|e| GemmError::LaunchFailed(format!("stream sync failed: {e:?}")))?;
 
         Ok(())

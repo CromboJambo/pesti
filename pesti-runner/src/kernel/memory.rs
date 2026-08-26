@@ -323,10 +323,14 @@ impl MemoryBackend for CudaMemoryBackend {
                 MemoryError::Cuda(format!("cuMemsetD8_v2: {e:?}"))
             })?;
 
-            // Explicit sync to ensure memset completes before kernel reads
-            self.stream.synchronize().map_err(|e| {
-                tracing::warn!(error = %e, "Stream sync after alloc failed");
-                MemoryError::Cuda(format!("Stream sync: {e:?}"))
+            // Explicit sync to ensure memset completes before kernel reads.
+            // cuMemsetD8_v2 runs on the legacy default stream, so a
+            // kernel-stream wait cannot order against it — use a
+            // context-wide wait (always blocks, unlike cuStreamSynchronize
+            // under CU_CTX_SCHED_AUTO).
+            crate::cuda_shim::context_synchronize().map_err(|e| {
+                tracing::warn!(error = %e, "Context sync after alloc failed");
+                MemoryError::Cuda(format!("Context sync: {e:?}"))
             })?;
         }
 
@@ -378,8 +382,7 @@ impl MemoryBackend for CudaMemoryBackend {
     }
 
     fn sync(&self) -> Result<(), MemoryError> {
-        self.stream
-            .synchronize()
+        crate::cuda_shim::stream_synchronize(&self.stream)
             .map_err(|e| MemoryError::Cuda(format!("Stream sync failed: {e:?}")))
     }
 }

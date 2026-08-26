@@ -92,8 +92,41 @@ pub fn cu_stream(stream: &Arc<CudaStream>) -> sys::CUstream {
 /// Needed after launching a kernel on a non-blocking stream before any
 /// synchronous (legacy-default-stream) D2H copy of the kernel's output —
 /// the two streams have no implicit ordering.
+///
+/// Implemented with an event, not `CudaStream::synchronize`
+/// (`cuStreamSynchronize`): under the primary context's default
+/// `CU_CTX_SCHED_AUTO` (SPIN) scheduling, `cuStreamSynchronize` can return
+/// before the stream's work is actually done, so a caller that then reads
+/// the output buffer back to host races the still-running kernel and
+/// non-deterministically reads stale data. `cuEventSynchronize` always
+/// blocks the host until the recorded event (i.e. all prior stream work)
+/// completes, regardless of context scheduling flags.
 pub fn stream_synchronize(stream: &Arc<CudaStream>) -> Result<(), DriverError> {
-    stream.synchronize()
+    unsafe {
+        use cudarc::driver::sys;
+        let mut ev = std::mem::zeroed();
+        sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DEFAULT as u32)
+            .result()?;
+        let res = sys::cuEventRecord(ev, stream.cu_stream()).result();
+        if res.is_err() {
+            let _ = sys::cuEventDestroy_v2(ev);
+            return res;
+        }
+        let res = sys::cuEventSynchronize(ev).result();
+        let _ = sys::cuEventDestroy_v2(ev);
+        res
+    }
+}
+
+/// Synchronize the whole CUDA context (block until ALL streams' work completes).
+///
+/// Use this when ordering against work on the legacy default stream is
+/// required — e.g. a synchronous `cuMemsetD8_v2` (which runs on the default
+/// stream) must complete before a kernel on a non-blocking stream reads the
+/// memset region. `stream_synchronize` on the kernel stream cannot order
+/// against the default stream; only a context-wide wait can.
+pub fn context_synchronize() -> Result<(), DriverError> {
+    unsafe { cudarc::driver::sys::cuCtxSynchronize().result() }
 }
 
 /// Trait extension for CUresult to provide `.result()` method.

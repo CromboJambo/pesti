@@ -351,9 +351,8 @@ impl GemmKernel for KernelFromPtx {
                     .map_err(|e| GemmError::LaunchFailed(format!("Kernel launch failed: {e:?}")))?;
                 }
 
-                // Synchronize
-                stream
-                    .synchronize()
+                // Synchronize (event-based: see cuda_shim::stream_synchronize)
+                crate::cuda_shim::stream_synchronize(&stream)
                     .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
 
                 return Ok(());
