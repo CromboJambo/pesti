@@ -16,6 +16,7 @@ tarpaulin-report.json
 __pycache__/
 *.pyc
 unsloth_compiled_cache/
+.venv/
 
 # Model weights / large binary blobs
 # models/  # Removed - merged into conformance-corpus/

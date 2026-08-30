@@ -1,0 +1,21 @@
+[project]
+name = "pesti-python"
+version = "0.1.0"
+description = "Python tooling for pesti: conformance corpus, weight comparison, benchmarks. Managed with uv (cargo-for-Python)."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "gguf",
+]
+
+# Optional heavy deps — install on demand with `uv sync --group llama`.
+# llama-cpp-python compiles a C++ backend; the scripts that use it
+# (scripts/generate_reference_weights.py) also self-install as a fallback.
+[dependency-groups]
+llama = [
+    "llama-cpp-python",
+]
+
+# Note: register_model.py and pesti-runner/src/kernel/ptx/test_wgmma_matmul.py
+# import `hermes_tools`, which only exists inside the Hermes agent runtime —
+# they run via the agent, not from this venv.
