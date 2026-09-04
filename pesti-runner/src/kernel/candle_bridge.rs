@@ -256,8 +256,32 @@ pub fn gemm(
         device,
     )?;
 
+    gemm_with_tensors(&a_t, &b_t, c, m, k, n, alpha, beta)
+}
+
+/// GEMM from pre-built GPU tensors: `C = alpha * (A @ B) + beta * C`.
+///
+/// `a` — [m, k] tensor, `b` — [k, n] tensor (typically a cached, transposed
+/// weight matrix uploaded once at model construction).
+///
+/// Callers that run the same weight through many forward passes (decode
+/// steps) should build `b` once with [`Tensor::from_vec`] and call this,
+/// instead of [`gemm`] which re-converts and re-uploads the full weight
+/// matrix to the device on every call.
+pub fn gemm_with_tensors(
+    a_t: &Tensor,
+    b_t: &Tensor,
+    c: Option<&[f32]>,
+    m: usize,
+    _k: usize,
+    n: usize,
+    alpha: f32,
+    beta: f32,
+) -> Result<Vec<f32>, candle_core::Error> {
+    let device = bridge_device();
+
     // A @ B
-    let mut result = a_t.matmul(&b_t)?;
+    let mut result = a_t.matmul(b_t)?;
 
     // alpha * result
     if alpha != 1.0 {

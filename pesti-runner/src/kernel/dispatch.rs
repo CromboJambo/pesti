@@ -54,7 +54,7 @@ use crate::kernel::kvcache_stub::Kvcache;
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
-use candle_core::{DType, Device};
+use candle_core::{DType, Device, Tensor};
 use half::f16;
 use tracing::{debug, warn};
 
@@ -444,12 +444,104 @@ impl DispatchContext {
     /// x: [batch_size, in_features] f32
     /// W: [out_features, in_features] f16 (weight matrix)
     /// bias: [out_features] f32 (optional)
+    /// weight_t_gpu: optional pre-built GPU tensor of the transposed weight
+    ///   matrix [in_features, out_features] (see `LinearDispatch`). When
+    ///   provided, the per-call host transpose + full weight re-upload to the
+    ///   device is skipped — decode steps become kernel-only.
     ///
     /// Returns: [batch_size, out_features] f32
     ///
     /// Automatically dispatches to GPU if available, falls back to CPU.
     /// When GPU is available, uses `candle_bridge::gemm` for GPU-accelerated
     /// matrix multiplication via candle-core's CUDA backend.
+    #[cfg(feature = "cuda")]
+    pub fn dispatch_linear(
+        &self,
+        x: &[f32],
+        weights: &[f16],
+        bias: Option<&[f32]>,
+        in_features: usize,
+        out_features: usize,
+        batch_size: usize,
+        #[cfg(feature = "cuda")] weight_t_gpu: Option<&Tensor>,
+    ) -> Result<Vec<f32>, DispatchError> {
+        let m = batch_size;
+        let k = in_features;
+        let n = out_features;
+
+        // Validate weight shape
+        assert_eq!(
+            weights.len(),
+            n * k,
+            "Weight shape mismatch: expected {} elements ({}×{}), got {}",
+            n * k,
+            n,
+            k,
+            weights.len()
+        );
+
+        // Convert input to f16 for GPU
+        let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
+
+        // Use candle_bridge::gemm when a real CUDA device is available, CPU
+        // fallback otherwise. (The bridge only runs on GPU when candle-core is
+        // built with its cuda feature; otherwise prefer the native CPU GEMM.)
+        #[cfg(feature = "cuda")]
+        let mut result = if self.prefer_gpu
+            && self.gpu_available()
+            && crate::kernel::candle_bridge::bridge_is_cuda()
+        {
+            let a_t = Tensor::from_vec(x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(), (m, k), crate::kernel::candle_bridge::bridge_device())
+                .map_err(|e| DispatchError::Kernel(format!("x tensor: {e}")))?;
+            // Cached transposed weight tensor (built once at model
+            // construction) — skips the per-call host transpose + weight
+            // re-upload.
+            if let Some(b_t) = weight_t_gpu {
+                candle_bridge::gemm_with_tensors(&a_t, b_t, None, m, k, n, 1.0, 0.0)
+                    .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm_with_tensors: {e}")))
+            } else {
+                // Transpose weights: W is [out, in], need [in, out] for GEMM
+                // W^T[i,j] = W[j,i]
+                let w_t: Vec<f16> = {
+                    let mut out = Vec::with_capacity(k * n);
+                    for i in 0..k {
+                        for j in 0..n {
+                            out.push(weights[j * k + i]);
+                        }
+                    }
+                    out
+                };
+                candle_bridge::gemm(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
+                    .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
+            }
+        } else {
+            debug!(m, n, k, "Linear: using CPU GEMM");
+            // Transpose weights: W is [out, in], need [in, out] for GEMM
+            let w_t: Vec<f16> = {
+                let mut out = Vec::with_capacity(k * n);
+                for i in 0..k {
+                    for j in 0..n {
+                        out.push(weights[j * k + i]);
+                    }
+                }
+                out
+            };
+            Ok(self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?)
+        }?;
+
+        // Add bias if present
+        if let Some(b) = bias {
+            for b_idx in 0..batch_size {
+                for o in 0..out_features {
+                    result[b_idx * out_features + o] += b[o];
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    #[cfg(not(feature = "cuda"))]
     pub fn dispatch_linear(
         &self,
         x: &[f32],
@@ -498,7 +590,7 @@ impl DispatchContext {
                 weights.len()
             );
 
-            candle_bridge::gemm(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)
+            candle_bridge::gemm(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
                 .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
         } else {
             debug!(m, n, k, "Linear: using CPU GEMM");
@@ -648,6 +740,7 @@ impl Default for DispatchContext {
 ///
 /// Wraps weight matrix + bias and provides `forward()` that automatically
 /// picks the best backend.
+#[derive(Clone)]
 pub struct LinearDispatch {
     /// Weight matrix (stored as f16 for GPU compatibility).
     weights_f16: Vec<f16>,
@@ -657,6 +750,18 @@ pub struct LinearDispatch {
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
+    /// Cached GPU tensor of the TRANSPOSED weight matrix [in, out].
+    ///
+    /// Built once at construction when the candle bridge is CUDA-backed.
+    /// `dispatch_linear` used to transpose on the host AND re-upload the
+    /// full weight matrix to the device on every call — with 168 GEMM calls
+    /// per decode step that dominated step time. Caching the transposed
+    /// tensor on the device makes decode steps kernel-only.
+    ///
+    /// When the bridge is CPU-only this is `None` and the native CPU path
+    /// (which transposes per call, as before) is used.
+    #[cfg(feature = "cuda")]
+    weight_t_gpu: Option<Tensor>,
 }
 
 impl LinearDispatch {
@@ -667,12 +772,35 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
+        let k = in_features;
+        let n = out_features;
         Self {
+            #[cfg(feature = "cuda")]
+            weight_t_gpu: Self::build_weight_t_gpu(&weights_f16, k, n),
             weights_f16,
             weights_f32,
             bias,
             in_features,
             out_features,
+        }
+    }
+
+    /// Build the transposed weight tensor [k, n] on the bridge GPU device,
+    /// once. Returns `None` when the bridge is not CUDA-backed (CPU path).
+    #[cfg(feature = "cuda")]
+    fn build_weight_t_gpu(weights_f16: &[f16], k: usize, n: usize) -> Option<Tensor> {
+        if !crate::kernel::candle_bridge::bridge_is_cuda() {
+            return None;
+        }
+        let w_t: Vec<f32> = (0..k)
+            .flat_map(|i| (0..n).map(move |j| weights_f16[j * k + i].to_f32()))
+            .collect();
+        match Tensor::from_vec(w_t, (k, n), crate::kernel::candle_bridge::bridge_device()) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(error = %e, "LinearDispatch: failed to cache GPU weight tensor, using per-call transpose");
+                None
+            }
         }
     }
 
@@ -694,6 +822,8 @@ impl LinearDispatch {
             self.in_features,
             self.out_features,
             batch_size,
+            #[cfg(feature = "cuda")]
+            self.weight_t_gpu.as_ref(),
         )
     }
 
@@ -747,6 +877,7 @@ fn ctx_dispatch_linear_cpu(
 // ── AttentionDispatch: GPU-aware attention layer ───────────────────────────
 
 /// An attention layer that can dispatch to GPU or CPU.
+#[derive(Clone)]
 pub struct AttentionDispatch {
     /// Q projection weights.
     pub wq: LinearDispatch,
@@ -772,8 +903,12 @@ impl AttentionDispatch {
     /// 2. RoPE on Q and K
     /// 3. softmax(Q @ K^T / sqrt(head_dim)) @ V
     /// 4. Output projection (wo)
+    ///
+    /// Takes `&self`: the KV caches are passed in as `&mut Kvcache`, so the
+    /// dispatch layer itself is not mutated. (Relaxed from `&mut self` so the
+    /// pre-built cached layers can be borrowed immutably across decode steps.)
     pub fn forward(
-        &mut self,
+        &self,
         ctx: &DispatchContext,
         x: &[f32],
         batch_size: usize,
@@ -1208,6 +1343,7 @@ impl AttentionDispatch {
 // ── LayerDispatch: GPU-aware transformer layer ─────────────────────────────
 
 /// A transformer layer that can dispatch to GPU or CPU.
+#[derive(Clone)]
 pub struct LayerDispatch {
     pub attention: AttentionDispatch,
     pub feed_forward: FeedForwardDispatch,
@@ -1217,8 +1353,12 @@ pub struct LayerDispatch {
 
 impl LayerDispatch {
     /// Forward pass through one transformer layer with dispatch.
+    ///
+    /// Takes `&self`: the KV caches are passed in as `&mut Kvcache`, so the
+    /// layer is not mutated. Relaxed from `&mut self` so the pre-built cached
+    /// layers can be borrowed immutably across decode steps.
     pub fn forward(
-        &mut self,
+        &self,
         ctx: &DispatchContext,
         x: &[f32],
         batch_size: usize,
@@ -1262,6 +1402,7 @@ impl LayerDispatch {
 
 // ── FeedForwardDispatch ────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct FeedForwardDispatch {
     pub w1: LinearDispatch,
     pub w2: LinearDispatch,
