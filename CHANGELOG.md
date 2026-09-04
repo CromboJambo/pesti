@@ -44,8 +44,12 @@ n-gram checksum) that runs on CPU and serves four roles: **fallback** (no blacko
 the GPU drops), **editor node** (bounded early correction of the fast path's output),
 **load balancer** (route by preserved momentum, not just speed), and **drift-gated
 compaction trigger** (re-anchor both paths toward the stable summary when they diverge).
-The governing rule: **bounded positive gates on everything that accumulates state; hard
-sparsity only for compute.**
+Compaction is **blast-radius containment**, not error prevention: the slow friend does not
+stop the fast friend from messing up the first time — it keeps feedback latency short
+enough that a mistake stays a small local correction, preventing the error from repeating
+(wrong state feeding back into itself) or being buried in patches (trajectory too far
+committed to unwind cheaply). The governing rule: **bounded positive gates on everything
+that accumulates state; hard sparsity only for compute.**
 
 **Rationale**: The Qwen3.8-Flash-Next reference architecture already implements this split
 as a layer schedule — 3 Gated-DeltaNet layers (fixed-size, O(1), bounded-gate recurrent
@@ -60,6 +64,15 @@ drift signal this is meant to bound: GPU-vs-oracle divergence grows smoothly wit
 Scoped MoE routing (a maintained bounded expert-relevance prior from stable memory bounds
 where the hard top-k runs) generalizes QSA's indexer pattern to the one genuinely-hard gate
 in the model and is the concrete mechanism for the "overall load balancer" role.
+
+The blast-radius framing has an in-model precedent: Qwen3.8-Flash-Next ships Multi-Token
+Prediction (Unsloth MTP guide, https://unsloth.ai/docs/models/qwen3.8-next#mtp-guide) —
+draft several tokens, verify in parallel, keep only what verifies. That is the fast/wild
+polarity at the token level: reach stays affordable *because* verification is bounded, so a
+failed draft costs one rejected position, not a corrupted trajectory. The compaction weight
+is the same mechanism on a longer horizon. And the wild friend's throughput budget is set by
+quantization — NVFP4 W4A4 on Blackwell (Unsloth NVFP4 guide, https://unsloth.ai/docs/basics/nvfp4)
+makes aggressive drafting cheap enough that pacing can keep up.
 
 **Verification requirement (not yet met — gates in ROADMAP.md → Phase 5)**:
 - **G1**: Divergence probe (stable low-pass summary vs precise/GPU path, growing `seq_len`)

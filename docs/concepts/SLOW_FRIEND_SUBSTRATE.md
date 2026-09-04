@@ -19,6 +19,8 @@
 | vLLM recipe | https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next |
 | `ROADMAP.md` Week 17 | PESTI's *measured* GPU-vs-oracle drift (f16 tensor-core accumulation) |
 | `Computational Inertia Concept.md` | The flywheel / "preserve intent, bound debt" principle this doc operationalizes |
+| Unsloth MTP guide | https://unsloth.ai/docs/models/qwen3.8-next#mtp-guide — Qwen3.8-Flash-Next ships Multi-Token Prediction (trained-in speculative decoding: draft several tokens, verify in parallel, keep only verified). The fast/wild polarity at the token level — an in-model precedent for blast-radius containment (§4) |
+| Unsloth NVFP4 guide | https://unsloth.ai/docs/basics/nvfp4 — FP4 quantization for Blackwell (W4A4, ~2.5× faster on RTX 50xx). The wild friend's throughput budget: how much reach is affordable before re-anchoring (§4) |
 
 ---
 
@@ -160,7 +162,9 @@ N-grams are **deterministically addressed** — a known bigram/trigram maps stra
 
 ---
 
-## 4. Drift-gated compaction / re-anchor
+## 4. Drift-gated compaction / re-anchor (blast-radius containment)
+
+The operating principle: **the slow friend does not stop the fast friend from messing up the first time.** The wild path will err — that's what reach is for. What the slow friend does is keep its *pacing* short enough that a mistake stays a small, local correction instead of compounding into a trajectory you have to unwind. It doesn't prevent the error; it prevents the error from **repeating** (by re-anchoring before the wrong state feeds back into itself) and from being **buried in patches** (by keeping the patch window small while the divergence is still cheap to fix).
 
 Replace a hard `if divergence > threshold: compact` (a cliff) with a **bounded confidence weight** `w ∈ [0,1]`:
 
@@ -177,11 +181,46 @@ loop:
 
 The slow friend is the **reference clock / arbiter** precisely because it hasn't drifted — you compact *toward* it, not away from it. This inverts the usual "GPU is authoritative" assumption: at high context the cheap stable memory becomes the source of truth for re-anchoring. The "nope let's take a break and compact so we can take off again from a more similar understanding" is clock resync, made smooth by the bounded weight instead of a stop sign.
 
+### Blast radius is set by feedback latency, not detection accuracy
+
+The constraint on the slow friend is not "detect drift cheaply" — it's that **the feedback latency must be shorter than the error-propagation window.** If the fast friend errs at token N and the next checksum lands at token N+200, you've already built 200 tokens on a wrong foundation; re-anchoring now costs unwinding 200 tokens of committed trajectory. The blast radius of any mistake is bounded by how long it takes to notice it.
+
+This splits the slow friend's work into two parts with different cadences:
+
+- **State maintenance — per-token, O(1).** The GDN update and n-gram checksum must run *every* token so the reference is always current. This is the pacing mechanism; it doesn't judge anything, it just keeps the clock honest.
+- **Divergence check — every N tokens.** The expensive comparison (checksum projection, logit distance) can be amortized. But the correction weight `w` must ramp as soon as divergence *begins* to rise — not when it's confirmed. Waiting for certainty is exactly how a small patch becomes a full re-anchor: `w` staying at 1 too long lets the wild friend run free past the point where a small correction suffices, and now every downstream token is built on the error.
+
+The target regime is always "small correction": divergence rising → `w` starts pulling → re-anchor happens while the patch window is still a few tokens wide. The slow friend's job is to keep you in that regime even when the first mistake lands.
+
+### In-model precedent: MTP drafts are verified, not trusted
+
+Qwen3.8-Flash-Next ships Multi-Token Prediction (Unsloth MTP guide): the model drafts several tokens per step, then verifies them in parallel and keeps only what passes — 1.3–1.7× faster inference with no accuracy degradation, at ~2 GB extra headroom (`--spec-type draft-mtp --spec-draft-n-max N` in llama.cpp). That is the fast/wild polarity operating at the token level: **draft cheaply and far, verify against the model's own precise path, commit only what verifies.** The wild friend gets to reach further per step *because* verification is parallel and bounded — which is exactly why its mistakes stay local. A draft that fails verification costs one rejected position, not a corrupted trajectory.
+
+The substrate-level compaction weight is the same mechanism with a longer horizon: MTP bounds the blast radius of *single-token* errors; `w` bounds the blast radius of *state-level* drift. Both follow the rule "bounded verification keeps unbounded reach affordable." And both are throughput-budgeted by the wild friend's speed — NVFP4-class quantization (Unsloth NVFP4 guide, W4A4 on Blackwell, ~2.5× faster) is what makes aggressive drafting cheap enough that verification can keep up; cheaper wild steps buy more room for the slow friend to pace them.
+
 ### Divergence metric options (cheapest first)
 
 1. **State checksum** — project GDN `S_t` to a summary vector every N tokens; compare against the GPU's attention-derived representation of the same span (cosine / KL). Cheap, continuous, but couples to internal tensors.
 2. **Logit divergence** — run both paths on the same prefix; measure next-token distribution distance at sampled checkpoints. Model-agnostic, but costs a forward pass on the slow friend.
 3. **Semantic anchor checksum** — the slow friend answers a fixed set of anchor questions about established context ("what facts are locked in? what did we decide?"). When its answers stop matching the GPU's current behavior, the GPU has drifted from ground truth. A *semantic* (not just numerical) checksum; cheap because the slow friend is small.
+
+### Discrete-anchor verification (sparse bootstrap)
+
+The continuous metrics above compare state *every* token. A cheaper variant keeps a **lossless sparse log** instead of a dense recurrent summary, and only measures divergence at **discrete transformations** — the steps where something actually changed: a tool call fired, a file was written, a decision committed. Between anchors you don't checksum; you verify that the *next* discrete event matches what the bootstrap predicted. This is the "reader stays ahead of compression" rule made concrete:
+
+- **The bootstrap is a log, not a state.** Discrete events (tool call issued → result returned success; file written; decision made) are lossless — they either happened or they didn't. A log doesn't accumulate error the way a continuous EMA does. The reader stays ahead because it only ever records ground-truth transitions, never an approximation of them.
+- **Divergence = anchor mismatch.** At each discrete event the compressed path's behavior is checked against the bootstrap's record: "bootstrap logged tool `write_file` → success; compressed path produced a different result / errored." That mismatch *is* the drift signal, measured against verifiable state rather than continuous hidden states.
+- **The checksum is a hash of the activation signature at that step** — for MoE models this is the router's expert set (already computed, zero extra forward passes); for dense models it is the attention-head / per-layer hidden-state-norm fingerprint (§3 note below). Hashing a small event signature at O(events) is far cheaper than an EMA over `hidden_dim` at O(tokens).
+
+**MTP-native probe (cheapest of all — in-model, no second model).** Models that ship Multi-Token Prediction (Qwen3.8-Flash-Next, and the MTP GGUF variants of Qwen3.6-35B-A3B / Qwen3-Coder) already draft several tokens per step and verify them against their own precise path. The **draft-vs-verified agreement rate** is a built-in divergence probe: when the compressed path starts *failing its own MTP verifications*, drift has crossed into measurable territory — no second model, no external checksum, computed during normal inference. llama.cpp exposes it directly (`llamacpp:spec_decode_num_accepted_tokens_total` / `_draft_tokens_total`, and a per-generation `draft acceptance = X` log line).
+
+**Measured (Qwen3.6-35B-A3B-MTP UD-IQ2_M, c=32768, 2026-09-04).** Open-ended continuation gave flat acceptance (~45–53%) from 512 → 24k context tokens; a needle-in-haystack retrieval (planted unique word recalled at low temp) was correct 4/4 across 512 → 16k with 100% acceptance. **Conclusion: MTP acceptance measures next-token self-consistency (predictability), not faithfulness to buried context.** A degraded model that confidently emits fluent-but-wrong text still passes its own MTP verifications — its drafts are internally consistent, just wrong about the world. So the native probe is *necessary but not sufficient* for G1:
+- ✅ Catches "the model is breaking down structurally" (acceptance collapses) — cheap, in-model, zero infra.
+- ❌ Does **not** catch "the model is confidently wrong about long-context facts" — which is exactly the failure mode quant-ladder compaction worries are about.
+
+That second half is what the **discrete-event bootstrap** covers: a faithfulness check against ground truth (tool calls, writes, decisions), not a self-consistency check. The two probes are complementary — MTP acceptance = "is it coherent," bootstrap = "is it *true*." Caveat: aggressive "turbo" fine-tunes that cut thinking tokens 1/2–1/10 make each committed step carry more weight, so anchor frequency must be *higher*, not lower, to keep the patch window small.
+
+**Dense vs MoE signal sourcing.** The "which expert moved the session" checksum is **MoE-specific** — it exists only where there is a router (Qwen3-Coder-30B-A3B: 128 experts → top-8; Qwen3.6-35B-A3B). Dense models (e.g. Qwen3.8-27B, the HauhauCS/DavidAU fine-tunes) have no router to hash; their discrete signature comes from **attention-head activation patterns** and **per-layer hidden-state norms** at event boundaries — still sparse, still cheap, just a different fingerprint. The polarity framework and blast-radius pacing are unchanged; only *where the checksum is read* differs by architecture.
 
 ### The editor node becomes bounded + early
 
@@ -251,7 +290,7 @@ PESTI already has the tooling for this: per-layer capture (`capture_per_layer`, 
 |------|--------------|------------------|
 | **G1: Drift signal is real** | Divergence probe shows smooth, length-correlated growth on a real model | If flat → the drift premise is weak; revisit before building compaction |
 | **G2: Bounded scope reduces drift** | Scoped router's expert activations stay closer to low-context reference as length grows vs free router | If no improvement → keep GDN state for fallback/editor only, drop scoped routing |
-| **G3: Slow friend is cheap enough** | Maintaining `e_t` + checksum adds < budget (e.g. <5% step time) on CPU | If too slow → shrink summary dim / use n-gram-only scoping |
+| **G3: Slow friend is cheap enough to pace** | Per-token state maintenance (GDN update + checksum) adds < budget (e.g. <5% step time) on CPU; divergence checks amortized every N tokens — feedback latency stays shorter than the error-propagation window | If too slow → shrink summary dim / use n-gram-only scoping |
 | **G4: Two-model vs fused** | Two-model split fits PESTI substrate + local-first better (expected) | Fused only if a single host can run the reference model |
 
 ---
