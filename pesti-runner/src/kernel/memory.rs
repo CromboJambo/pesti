@@ -317,20 +317,15 @@ impl MemoryBackend for CudaMemoryBackend {
                 MemoryError::Cuda(format!("cuMemAlloc_v2: {e:?}"))
             })?;
 
-            // Zero-initialize the allocated memory (CUDA cuMemAlloc doesn't zero!)
+            // Zero-initialize the allocated memory (CUDA cuMemAlloc doesn't zero!).
+            // cuMemsetD8_v2 is synchronous with respect to the host and runs on
+            // the legacy default stream, so it has completed by the time this
+            // call returns — no follow-up sync needed. (A context-wide sync
+            // here used to be called on EVERY allocation; with ~450 allocs per
+            // decode step it cost ~3 s/step. See Week 17 perf notes.)
             sys::cuMemsetD8_v2(dptr, 0, bytes).result().map_err(|e| {
                 tracing::warn!(error = %e, "cuMemsetD8_v2 failed");
                 MemoryError::Cuda(format!("cuMemsetD8_v2: {e:?}"))
-            })?;
-
-            // Explicit sync to ensure memset completes before kernel reads.
-            // cuMemsetD8_v2 runs on the legacy default stream, so a
-            // kernel-stream wait cannot order against it — use a
-            // context-wide wait (always blocks, unlike cuStreamSynchronize
-            // under CU_CTX_SCHED_AUTO).
-            crate::cuda_shim::context_synchronize().map_err(|e| {
-                tracing::warn!(error = %e, "Context sync after alloc failed");
-                MemoryError::Cuda(format!("Context sync: {e:?}"))
             })?;
         }
 
