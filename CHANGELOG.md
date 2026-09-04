@@ -34,6 +34,49 @@ numpy-oracle diffing.
 **Remaining (tracked in ROADMAP.md Week 17)**: run the GPU per-layer oracle
 diff, fix divergences, assert zero fallbacks, measure GPU decode tok/s.
 
+### EDR-011: Slow-Friend Substrate — Bounded Memory, Scoped MoE, Drift-Gated Compaction 🆕
+**Date**: 2026-09-02
+**Status**: 📋 Concept / Direction (no code yet) — deep content in `docs/concepts/SLOW_FRIEND_SUBSTRATE.md` (see "The Polarity" section for the fast×slow framing), implementation spec (G1) in `docs/specs/SLOW_FRIEND_SPEC.md`
+
+**Decision**: Adopt a "slow friend" as a first-class substrate component — a cheap,
+always-on, stable reference (Gated-DeltaNet-style recurrent state + deterministic
+n-gram checksum) that runs on CPU and serves four roles: **fallback** (no blackout when
+the GPU drops), **editor node** (bounded early correction of the fast path's output),
+**load balancer** (route by preserved momentum, not just speed), and **drift-gated
+compaction trigger** (re-anchor both paths toward the stable summary when they diverge).
+The governing rule: **bounded positive gates on everything that accumulates state; hard
+sparsity only for compute.**
+
+**Rationale**: The Qwen3.8-Flash-Next reference architecture already implements this split
+as a layer schedule — 3 Gated-DeltaNet layers (fixed-size, O(1), bounded-gate recurrent
+state) + 1 Qwen-Sparse-Attention layer (precise retrieval, MQA-indexer-scoped to a bounded
+budget) repeating, plus a 51B deterministic n-gram table offloaded to host RAM. GDN is the
+slow friend; sparse attention is the wild friend; the n-gram table is CPU-resident
+redundancy. Its ablations show sigmoid (bounded positive) gates beat tanh/SiLU in both loss
+and stability across GDN *and* attention, and that bounded gates are what let the widened
+residual be stored in FP8. PESTI's own Week 17/Week 15 measurements already exhibit the
+drift signal this is meant to bound: GPU-vs-oracle divergence grows smoothly with depth
+(5.6e-3 → 5.1e-2, f16 tensor-core accumulation) — exactly the stable-reference use case.
+Scoped MoE routing (a maintained bounded expert-relevance prior from stable memory bounds
+where the hard top-k runs) generalizes QSA's indexer pattern to the one genuinely-hard gate
+in the model and is the concrete mechanism for the "overall load balancer" role.
+
+**Verification requirement (not yet met — gates in ROADMAP.md → Phase 5)**:
+- **G1**: Divergence probe (stable low-pass summary vs precise/GPU path, growing `seq_len`)
+  shows smooth, length-correlated growth on a real model. *Seed evidence exists (Week 17/15);
+  not yet run as the dedicated probe.*
+- **G2**: Scoping routing by the stable prior keeps expert activations closer to a low-context
+  reference as length grows, vs a free router.
+- **G3**: Maintaining the summary + checksum adds < budget (target <5% step time) on CPU.
+- **G4**: Two-model split (small CPU friend + big GPU wild) fits PESTI's substrate + local-first
+  better than running the fused reference model (172.78 GiB FP8 — not hostable on ~32 GB VRAM).
+
+**Out of scope / cautions**: Do NOT run Qwen3.8-Flash-Next itself (VRAM). Keep the routing
+scope soft (prior + expanded candidate set, never a hard mask) and compaction a bounded weight,
+not a boolean threshold. Project GDN state over expert *groups*, not all 512, if the pool is large.
+
+---
+
 ### Week 16: Forward-Pass Correctness — Dequant Layout + SwiGLU + QKV Bias 🆕🆕🆕
 
 **New capability**: The CPU forward pass now produces numerically-correct layer outputs.

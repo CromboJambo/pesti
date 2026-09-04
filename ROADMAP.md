@@ -343,6 +343,39 @@ see the Root Cause section above.
 
 ---
 
+## Phase 5: Slow-Friend Substrate (📋 DIRECTION — reference-backed, no code yet) 🆕
+
+### Reference & Decision Record
+- **Deep content**: [`docs/concepts/SLOW_FRIEND_SUBSTRATE.md`](docs/concepts/SLOW_FRIEND_SUBSTRATE.md)
+- **Implementation spec (G1, self-contained)**: [`docs/specs/SLOW_FRIEND_SPEC.md`](docs/specs/SLOW_FRIEND_SPEC.md) — read this first for a fresh coding session
+- **Decision record**: **EDR-011** in `CHANGELOG.md` (2026-09-02, Concept/Direction)
+- **Reference architecture**: Qwen3.8-Flash-Next (`arXiv-2608.30320v1`, tarball in `docs/concepts/`) — 3× Gated-DeltaNet + 1× Qwen-Sparse-Attention repeating, plus a 51B deterministic n-gram table offloaded to host RAM. GDN = slow friend (bounded, O(1), stable); sparse attention = wild friend (precise, drift-prone at high context).
+
+### The idea in one line
+Keep a cheap always-on **stable reference on CPU** and use it to (a) preserve momentum when the GPU drops, (b) bound/edit the fast path's output, (c) **scope MoE/compute routing**, and (d) trigger **drift-gated compaction** — re-anchor both paths toward the stable summary when they diverge. Governing rule: **bounded positive gates on anything that accumulates state; hard sparsity only for compute.**
+
+### Why now (PESTI already has the seed signal)
+Week 17 measured GPU-vs-oracle divergence growing **smoothly with depth** (5.6e-3 → 5.1e-2, f16 tensor-core accumulation — not a bug); Week 15 measured "f16 drift, smooth per-layer growth, no structural jumps." That is exactly the accumulation-drift a stable low-pass reference is meant to detect and bound. The tooling to probe it already exists: `capture_per_layer`, `dump_all_layers_gpu.rs`, `gpu_fallback_count()`, numpy-oracle diff.
+
+### Nudges (do these in order; each gates the next)
+- [ ] **G1 — Prove the drift signal.** Divergence probe: stable low-pass summary vs precise/GPU path, growing `seq_len` (512 → 1024 → 2048+), on a real model. *Go* if growth is smooth and length-correlated. Reuses Week 17 capture tooling — cheap to add once GPU e2e correctness closes. **Spec: [`docs/specs/SLOW_FRIEND_SPEC.md`](docs/specs/SLOW_FRIEND_SPEC.md) (self-contained; build `kernel/slow_friend/` + `examples/slow_friend_drift.rs`).**
+- [ ] **G2 — Prove scoping reduces drift.** Maintain a bounded expert-relevance prior `e_t` from the stable state; compare scoped top-k vs free top-k activation overlap against a low-context reference as length grows. *Go* if scoped stays closer to the low-context reference.
+- [ ] **G3 — Prove it's cheap.** Measuring/maintaining `e_t` + checksum adds < budget (target <5% step time) on CPU. If too slow, shrink summary dim or use n-gram-only scoping.
+- [ ] **G4 — Pick the form.** Two-model split (small CPU friend + big GPU wild) vs fused reference model. Expected: two-model fits PESTI's substrate + local-first better; the fused reference is 172.78 GiB FP8 and not hostable on ~32 GB VRAM.
+
+### Design cautions (from EDR-011)
+- Keep the routing scope **soft** — prior + expanded candidate set (M > k), never a hard mask.
+- Keep compaction a **bounded weight**, not a boolean threshold.
+- Project GDN state over expert **groups**, not all 512, if the pool is large.
+- Do NOT run Qwen3.8-Flash-Next itself — it is the *reference for the pattern*, not the target workload.
+
+### What this is NOT (yet)
+- ❌ A commitment to build a GDN kernel or MoE router now.
+- ❌ A change to the current GPU e2e correctness path (Week 17).
+- ✅ A reference-backed direction with explicit go/no-go gates, so the next agent knows *where* to nudge and *what evidence* closes each gate.
+
+---
+
 ## Week 16: Forward-Pass Correctness (✅ COMPLETE - 0.9992 norm ratio) 🆕🆕🆕
 
 ### Date
