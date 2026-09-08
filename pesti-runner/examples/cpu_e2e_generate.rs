@@ -27,6 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let prompt_tokens = tokenizer.encode(&prompt)?;
     eprintln!("prompt: {} ({} tokens)", prompt, prompt_tokens.len());
+    let prompt_ids_str: Vec<String> = prompt_tokens.iter().map(|t| t.to_string()).collect();
+    eprintln!("prompt_ids: [{}]", prompt_ids_str.join(", "));
 
     model.reset_cpu_kv_caches();
 
@@ -41,12 +43,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut generated: Vec<u32> = Vec::new();
     let t0 = Instant::now();
     let mut pos = prompt_tokens.len();
-    for _ in 0..max_tokens {
+    for step in 0..max_tokens {
         let next = pesti_runner::transformer::LlamaModel::argmax_from_logits(&logits);
         if next == 151645 {
             break; // Qwen2.5 eos
         }
         generated.push(next);
+        
+        // Dump top-5 logits for comparison
+        let mut indexed: Vec<(f32, u32)> = logits.iter().enumerate()
+            .map(|(i, &v)| (v, i as u32))
+            .collect();
+        indexed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let top5: Vec<u32> = indexed.iter().take(5).map(|(_, i)| *i).collect();
+        let top5_logits: Vec<f32> = indexed.iter().take(5).map(|(v, _)| *v).collect();
+        eprintln!("[RUST] step={} pos={} -> token {}", step, pos, next);
+        eprintln!("  top5: {:?}", top5);
+        eprintln!("  logits: {:?}", top5_logits);
+        
         let hidden = model.embed(next, pos)?;
         let h = model.forward_layers_with_cache(&hidden, pos)?;
         logits = model.apply_output_head(&h)?;
@@ -62,6 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dt.as_secs_f32(),
         generated.len() as f64 / dt.as_secs_f64()
     );
+    let ids_str: Vec<String> = generated.iter().map(|t| t.to_string()).collect();
+    println!("ids:    [{}]", ids_str.join(", "));
     println!("text:   {}", text);
     Ok(())
 }

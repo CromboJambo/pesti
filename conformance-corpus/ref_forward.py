@@ -13,10 +13,14 @@ import numpy as np
 import gguf
 
 PATH = sys.argv[1]
-if len(sys.argv) > 2:
+if len(sys.argv) > 2 and not sys.argv[2].startswith("--"):
     toks = [int(t) for t in sys.argv[2].split(",")]
 else:
     toks = [785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]  # fox prompt
+
+DUMP_DIR = None
+if len(sys.argv) > 3 and sys.argv[3].startswith("--dump="):
+    DUMP_DIR = sys.argv[3].split("=", 1)[1]
 
 reader = gguf.GGUFReader(PATH)
 

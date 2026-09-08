@@ -551,7 +551,7 @@ impl LlamaModel {
             wk: LinearDispatch::new(
                 f32_to_f16(&layer.attention.wk.weight),
                 layer.attention.wk.weight.clone(),
-                layer.attention.wq.bias.clone(),
+                layer.attention.wk.bias.clone(),
                 layer.attention.wk.in_features,
                 layer.attention.wk.out_features,
             ),
