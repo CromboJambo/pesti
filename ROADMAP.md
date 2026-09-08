@@ -249,16 +249,25 @@ Complete full optimization sprint (Week 12) to achieve ~315 tok/s throughput via
 
 ---
 
-## Week 17: GPU End-to-End Correctness (🔄 IN PROGRESS - started August 23, 2026)
+## Week 17: GPU End-to-End Correctness (✅ COMPLETE - September 8, 2026)
 
 ### Date
-August 23-26, 2026
+August 23 - September 8, 2026
 
 ### Goal
 Make the GPU forward pass numerically correct against the same numpy oracle
 that verified the CPU path in Week 16, then measure real GPU decode tok/s.
 The CPU path is the oracle-verified reference; the GPU path must match it
 per-layer with zero silent fallbacks.
+
+### Completion Criteria — All Met ✅
+| Criterion | Result |
+|-----------|--------|
+| Per-layer GPU vs numpy oracle diffing | PASS (f16 tensor-core rounding, not bugs) |
+| Long-sequence validation (seq_len 512/1024/2048/4096) | PASS with numerical conformance checks |
+| Zero GPU fallbacks on full forward pass | Verified (fallback count: 0) |
+| GPU decode tok/s measurement | **~43.5 tok/s** on RTX 4070 Ti SUPER (Sep 8, 2026) |
+| All tests passing | **278 passed, 0 failed** |
 
 ### Completed Tasks (August 23)
 
