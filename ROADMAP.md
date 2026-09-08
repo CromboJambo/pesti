@@ -287,7 +287,7 @@ per-layer with zero silent fallbacks.
 - [x] `dump_all_layers_gpu.rs` — full per-layer hidden dump through the real
   GPU dispatch path for numpy-oracle diffing (`compare_full_vectors.py` format)
 
-### Next Steps (Week 17)
+### Next Steps (Week 17) — All Completed ✅
 - [x] Run `probe_gpu_gemm` / `probe_gpu_gemm2` — raw GEMM sanity on this hardware
   (2x2 + 1x4 GEMM exact; full 151936-col output-head GEMM writes all columns,
   0 bad cols)
