@@ -111,33 +111,37 @@ pub fn apply_rope(
     offset: usize,
 ) -> Result<Tensor, candle_core::Error> {
     let dims = x.dims();
-    let dim = dims
-        .last()
-        .ok_or(candle_core::Error::Msg("x has no last dim".into()))?
-        / 2;
+    let last_dim = *dims.last().ok_or(candle_core::Error::Msg("x has no last dim".into()))?;
+    let half_dim = last_dim / 2;
 
-    let chunks = x.narrow(dims.len() - 1, 0, dim)?.chunk(2, dims.len() - 1)?;
-    let x0 = &chunks[0];
-    let x1 = &chunks[1];
+    // Split x into two halves along the last dimension
+    let x0 = x.narrow(dims.len() - 1, 0, half_dim)?;
+    let x1 = x.narrow(dims.len() - 1, half_dim, half_dim)?;
 
-    let cos_chunks = cos.narrow(0, offset, dim)?.chunk(2, dim - 1)?;
-    let cos0 = &cos_chunks[0];
-    let cos1 = &cos_chunks[1];
+    // Extract the appropriate row from cos/sin based on offset
+    // cos/sin have shape [seq_len, half_dim]; we need the row at `offset`
+    let cos_row = cos.narrow(0, offset, 1)?;
+    let sin_row = sin.narrow(0, offset, 1)?;
 
-    let sin_chunks = sin.narrow(0, offset, dim)?.chunk(2, dim - 1)?;
-    let sin0 = &sin_chunks[0];
-    let sin1 = &sin_chunks[1];
+    // Reshape cos/sin to broadcast against x's shape.
+    // x has shape [..., last_dim]; after splitting, x0/x1 have [..., half_dim].
+    // We reshape cos/sin from [1, half_dim] to [1, 1, ..., 1, half_dim] so they
+    // broadcast correctly across batch/seq/head dimensions.
+    let mut reshape_dims: Vec<usize> = vec![1; dims.len() - 1];
+    reshape_dims.push(half_dim);
+    let cos_reshaped = cos_row.reshape(reshape_dims.clone())?;
+    let sin_reshaped = sin_row.reshape(reshape_dims)?;
 
-    // x0 * cos0 - x1 * sin1
-    let x0_cos0 = x0.matmul(cos0)?;
-    let x1_sin1 = x1.matmul(sin1)?;
-    let part0 = x0_cos0.broadcast_sub(&x1_sin1)?;
-    // x1 * cos1 + x0 * sin0
-    let x1_cos1 = x1.matmul(cos1)?;
-    let x0_sin0 = x0.matmul(sin0)?;
-    let part1 = x1_cos1.broadcast_add(&x0_sin0)?;
+    // Apply rotation: x0 * cos - x1 * sin, x1 * cos + x0 * sin
+    let x0_cos = (&x0 * &cos_reshaped)?;
+    let x1_sin = (&x1 * &sin_reshaped)?;
+    let part0 = (&x0_cos - &x1_sin)?;
 
-    // Concatenate along last dimension
+    let x1_cos = (&x1 * &cos_reshaped)?;
+    let x0_sin = (&x0 * &sin_reshaped)?;
+    let part1 = (&x1_cos + &x0_sin)?;
+
+    // Concatenate back together along the last dimension
     Tensor::cat(&[part0, part1], dims.len() - 1)
 }
 
