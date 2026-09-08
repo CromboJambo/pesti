@@ -1119,107 +1119,74 @@ impl AttentionDispatch {
         result
     }
 
-    // ── GPU-accelerated helpers ──────────────────────────────────────────
+    // ── GPU-accelerated helpers ────────────────────────────────────────
 
-    /// GPU-accelerated RoPE using candle_bridge.
-    fn apply_rope_gpu(
-        q: &mut [f32],
-        k: &mut [f32],
+    /// Apply RoPE to Q [1, seq_len, num_heads, head_dim] and K
+    /// [1, seq_len, num_kv_heads, head_dim] for global positions
+    /// start_pos..start_pos+seq_len (Qwen2.5 interleaved pairing).
+    fn rope_tensors(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
         seq_len: usize,
         start_pos: usize,
-        head_dim: usize,
-    ) -> Result<(), DispatchError> {
-        let _cos_shape = [seq_len, head_dim / 2];
-        let (cos, sin) = candle_bridge::rope_embeddings(seq_len, head_dim, 10000.0, 0)
+    ) -> Result<(Tensor, Tensor), DispatchError> {
+        let hd = self.head_dim;
+        let (cos, sin) = candle_bridge::rope_embeddings(seq_len, hd, self.rope_base, start_pos)
             .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
 
-        let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter()
-                .map(|v| half::f16::from_f32(*v))
-                .collect::<Vec<_>>(),
-            &[1, seq_len, head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
+        // rope_embeddings produces f32; match the q/k dtype so the elementwise
+        // ops below don't hit a dtype mismatch.
+        let dt = q.dtype();
+        let cos = cos.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
+        let sin = sin.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
 
-        let k_tensor = candle_bridge::f16_to_tensor(
-            &k.iter()
-                .map(|v| half::f16::from_f32(*v))
-                .collect::<Vec<_>>(),
-            &[1, seq_len, head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
+        // cos/sin: [seq_len, hd/2] → broadcast over leading dims
+        let half = hd / 2;
+        let q_chunks = q.chunk(2, q.dims().len() - 1)
+            .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
+        let k_chunks = k.chunk(2, k.dims().len() - 1)
+            .map_err(|e| DispatchError::Kernel(format!("k chunk: {e}")))?;
+        let q0 = q_chunks[0].clone();
+        let q1 = q_chunks[1].clone();
+        let k0 = k_chunks[0].clone();
+        let k1 = k_chunks[1].clone();
 
-        let q_out = candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
-            .map_err(|e| DispatchError::Kernel(format!("apply_rope(q): {e}")))?;
-        let k_out = candle_bridge::apply_rope(&k_tensor, &cos, &sin, start_pos)
-            .map_err(|e| DispatchError::Kernel(format!("apply_rope(k): {e}")))?;
+        let c = cos.unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze: {e}")))?
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze: {e}")))?; // [1, 1, seq_len, half]
+        let s_ = sin.unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze: {e}")))?
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze: {e}")))?;
 
-        let q_result = candle_bridge::tensor_to_f32(&q_out)
-            .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32(q): {e}")))?;
-        let k_result = candle_bridge::tensor_to_f32(&k_out)
-            .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32(k): {e}")))?;
+        let q0r = (&q0 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let q1r = (&q1 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let qr0 = (&q0r - &q1r).map_err(|e| DispatchError::Kernel(format!("rope sub: {e}")))?;
+        let qr1a = (&q1 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let qr2 = (&q0 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let qr1 = (&qr1a + &qr2).map_err(|e| DispatchError::Kernel(format!("rope add: {e}")))?;
 
-        // Extract the seq_len slice (first position for decode)
-        for i in 0..head_dim {
-            q[i] = q_result[i];
-            k[i] = k_result[i];
-        }
+        let k0r = (&k0 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let k1r = (&k1 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let kr0 = (&k0r - &k1r).map_err(|e| DispatchError::Kernel(format!("rope sub: {e}")))?;
+        let kr1a = (&k1 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let kr2 = (&k0 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
+        let kr1 = (&kr1a + &kr2).map_err(|e| DispatchError::Kernel(format!("rope add: {e}")))?;
 
-        Ok(())
+        let q_out = Tensor::cat(&[&qr0, &qr1], hd)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat: {e}")))?;
+        let k_out = Tensor::cat(&[&kr0, &kr1], hd)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat: {e}")))?;
+
+        Ok((q_out, k_out))
     }
 
-    /// GPU-accelerated SDPA using candle_bridge.
-    fn sdpa_gpu(
-        q: &[f32],
-        k_cache: &Kvcache,
-        v_cache: &Kvcache,
-        num_heads: usize,
-        num_kv_heads: usize,
-        head_dim: usize,
-        seq_len: usize,
-        start_pos: usize,
-        scale: f32,
-    ) -> Result<Vec<f32>, DispatchError> {
-        let cache_len = start_pos + seq_len;
-
-        // Build Q tensor: [1, seq_len, num_heads, head_dim]
-        let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter()
-                .map(|v| half::f16::from_f32(*v))
-                .collect::<Vec<_>>(),
-            &[1, seq_len, num_heads, head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
-
-        // Build K and V tensors from KV cache
-        let k_buffer = k_cache.buffer();
-        let v_buffer = v_cache.buffer();
-
-        let k_slice: Vec<f16> = k_buffer.as_slice().map_or(vec![], |b| b.to_vec());
-        let v_slice: Vec<f16> = v_buffer.as_slice().map_or(vec![], |b| b.to_vec());
-
-        let k_tensor =
-            candle_bridge::f16_to_tensor(&k_slice, &[1, cache_len, num_kv_heads, head_dim], None)
-                .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
-
-        let v_tensor =
-            candle_bridge::f16_to_tensor(&v_slice, &[1, cache_len, num_kv_heads, head_dim], None)
-                .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v): {e}")))?;
-
-        // Run SDPA
-        let attn_out = candle_bridge::sdpa(&q_tensor, &k_tensor, &v_tensor, scale)
-            .map_err(|e| DispatchError::Kernel(format!("sdpa: {e}")))?;
-
-        let result = candle_bridge::tensor_to_f32(&attn_out)
-            .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32: {e}")))?;
-
-        Ok(result)
-    }
-
-    /// GPU-accelerated full attention path: RoPE + SDPA via candle_bridge.
+    /// GPU-accelerated full attention path: RoPE + KV write + SDPA via
+    /// candle_bridge. Mirrors the CPU fallback's semantics exactly (RoPE on
+    /// K before caching, per-position cache writes, GQA head expansion,
+    /// causal mask offset by start_pos).
     fn forward_gpu(
         &self,
         ctx: &DispatchContext,
@@ -1236,108 +1203,154 @@ impl AttentionDispatch {
         let embed_dim = self.num_heads * self.head_dim;
         let cache_len = start_pos + seq_len;
 
-        // Write K/V from projections to KV cache
+        // Q/K/V as tensors: [1, seq_len, heads, head_dim]
+        let q_t = candle_bridge::f16_to_tensor(
+            &q.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &[1, seq_len, self.num_heads, self.head_dim],
+            None,
+        )
+        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
+        let k_t = candle_bridge::f16_to_tensor(
+            &k.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &[1, seq_len, self.num_kv_heads, self.head_dim],
+            None,
+        )
+        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
+        let v_t = candle_bridge::f16_to_tensor(
+            &v.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &[1, seq_len, self.num_kv_heads, self.head_dim],
+            None,
+        )
+        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v): {e}")))?;
+
+        // RoPE on Q and K (global positions start_pos..start_pos+seq_len)
+        let (q_rope_t, k_rope_t) = self.rope_tensors(&q_t, &k_t, seq_len, start_pos)?;
+
+        // Write RoPE'd K / V rows into the KV cache at global positions.
         let kv_dim = self.num_kv_heads * self.head_dim;
+        let k_rows: Vec<f32> = candle_bridge::tensor_to_f32(&k_rope_t)
+            .map_err(|e| DispatchError::Kernel(format!("k rows to f32: {e}")))?;
+        let v_rows: Vec<f32> = candle_bridge::tensor_to_f32(&v_t)
+            .map_err(|e| DispatchError::Kernel(format!("v rows to f32: {e}")))?;
         for pos in 0..seq_len {
             let global_pos = start_pos + pos;
-            let k_start = global_pos * kv_dim;
-            let k_row: Vec<f16> = k[k_start..(k_start + kv_dim)]
-                .iter()
-                .map(|&val| half::f16::from_f32(val))
-                .collect();
-            let v_start = global_pos * kv_dim;
-            let v_row: Vec<f16> = v[v_start..(v_start + kv_dim)]
-                .iter()
-                .map(|&val| half::f16::from_f32(val))
-                .collect();
-            // Write each tensor into its OWN cache's OWN region only.
-            // Do NOT use write_kv_at here: it writes K AND V into one buffer,
-            // and with separate key/value caches that cross-contaminates each
-            // cache's unused region (harmless to region-selective CPU readers,
-            // corrupting to whole-buffer GPU readers). See Kvcache::write_kv_at
-            // docs and the `kv_write_no_cross_contamination` regression test.
+            let k_row: Vec<half::f16> = k_rows[pos * kv_dim..(pos + 1) * kv_dim]
+                .iter().map(|&x| half::f16::from_f32(x)).collect();
+            let v_row: Vec<half::f16> = v_rows[pos * kv_dim..(pos + 1) * kv_dim]
+                .iter().map(|&x| half::f16::from_f32(x)).collect();
+            // Write each tensor into its OWN cache's OWN region only (see
+            // Kvcache::write_kv_at docs / kv_write_no_cross_contamination).
             key_cache.write_k_at(global_pos, &k_row).map_err(|e| {
                 DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}"))
             })?;
             value_cache.write_v_at(global_pos, &v_row).map_err(|e| {
                 DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}"))
             })?;
-
-            // DEBUG: Log KV writes
-            if start_pos == 0 || pos == seq_len - 1 {
-                println!(
-                    "[DEBUG] forward_gpu: wrote K/V at global_pos={}, key_cache.seq_len={}",
-                    global_pos,
-                    key_cache.seq_len()
-                );
-            }
         }
 
-        // Extract K/V from cache for SDPA
-        let k_buf = key_cache
-            .buffer()
-            .as_slice()
-            .ok_or_else(|| DispatchError::Kernel("KV cache buffer not available".into()))?;
-        let v_buf = value_cache
-            .buffer()
-            .as_slice()
-            .ok_or_else(|| DispatchError::Kernel("Value cache buffer not available".into()))?;
+        // Read the full K/V history back from the caches. Layout:
+        // [pos][kv_head][head_dim] for pos < max_seq, then the V region.
+        let head_stride = self.num_kv_heads * self.head_dim;
+        let k_buf = key_cache.buffer().as_slice()
+            .ok_or_else(|| DispatchError::Kernel("K cache buffer unavailable".into()))?;
+        let v_buf = value_cache.buffer().as_slice()
+            .ok_or_else(|| DispatchError::Kernel("V cache buffer unavailable".into()))?;
+        let k_hist: Vec<half::f16> = (0..cache_len)
+            .flat_map(|p| k_buf[p * head_stride..(p + 1) * head_stride].iter().copied())
+            .collect();
+        let v_hist: Vec<half::f16> = (0..cache_len)
+            .flat_map(|p| v_buf[p * head_stride..(p + 1) * head_stride].iter().copied())
+            .collect();
 
-        // Build K/V tensors: [1, cache_len, num_kv_heads, head_dim]
-        let k_tensor = candle_bridge::f16_to_tensor(
-            k_buf,
-            &[1, cache_len, self.num_kv_heads, self.head_dim],
-            None,
+        let k_t2 = candle_bridge::f16_to_tensor(&k_hist, &[1, cache_len, self.num_kv_heads, self.head_dim], None)
+            .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k_hist): {e}")))?;
+        let v_t2 = candle_bridge::f16_to_tensor(&v_hist, &[1, cache_len, self.num_kv_heads, self.head_dim], None)
+            .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v_hist): {e}")))?;
+
+        // GQA: expand KV heads so every query head has its group's KV head.
+        // Query heads are grouped contiguously (head h → kv head h / g), so
+        // concat [k0 repeated g, k1 repeated g, ...] along the head dim.
+        let g = self.num_heads / self.num_kv_heads;
+        let mut k_parts: Vec<Tensor> = Vec::with_capacity(self.num_kv_heads * g);
+        let mut v_parts: Vec<Tensor> = Vec::with_capacity(self.num_kv_heads * g);
+        for kv_h in 0..self.num_kv_heads {
+            let k_g = k_t2
+                .narrow(2, kv_h, 1)
+                .map_err(|e| DispatchError::Kernel(format!("k narrow: {e}")))?;
+            let v_g = v_t2
+                .narrow(2, kv_h, 1)
+                .map_err(|e| DispatchError::Kernel(format!("v narrow: {e}")))?;
+            for _ in 0..g {
+                k_parts.push(k_g.clone());
+                v_parts.push(v_g.clone());
+            }
+        }
+        let k_exp = Tensor::cat(&k_parts, 2)
+            .map_err(|e| DispatchError::Kernel(format!("k cat: {e}")))?;
+        let v_exp = Tensor::cat(&v_parts, 2)
+            .map_err(|e| DispatchError::Kernel(format!("v cat: {e}")))?;
+
+        // Causal mask offset by start_pos: query i (global start_pos+i) may
+        // attend to keys j <= start_pos+i. eye(cache_len)[i, j] = 1 iff
+        // i == j, so the top-left [seq_len, cache_len] window is 1 on the
+        // diagonal shifted right by start_pos — exactly the allowed set.
+        let eye = Tensor::eye(cache_len, candle_core::DType::F32, candle_bridge::bridge_device())
+            .map_err(|e| DispatchError::Kernel(format!("eye: {e}")))?;
+        let mask = eye
+            .narrow(0, 0, seq_len)
+            .and_then(|m| m.narrow(1, 0, cache_len))
+            .map_err(|e| DispatchError::Kernel(format!("mask narrow: {e}")))?;
+        let neg_inf = Tensor::full(
+            f32::NEG_INFINITY,
+            (seq_len, cache_len),
+            candle_bridge::bridge_device(),
         )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
+            .map_err(|e| DispatchError::Kernel(format!("neg_inf full: {e}")))?;
+        let zero = Tensor::new(0.0f32, candle_bridge::bridge_device())
+            .map_err(|e| DispatchError::Kernel(format!("zero new: {e}")))?;
+        let attn_mask = mask
+            .where_cond(&zero, &neg_inf)
+            .map_err(|e| DispatchError::Kernel(format!("where_cond: {e}")))?;
 
-        let v_tensor = candle_bridge::f16_to_tensor(
-            v_buf,
-            &[1, cache_len, self.num_kv_heads, self.head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v): {e}")))?;
+        // scores [1, seq_len, num_heads, cache_len] → softmax → @ V
+        let k_exp_t = k_exp
+            .transpose(2, 3)
+            .map_err(|e| DispatchError::Kernel(format!("k transpose: {e}")))?;
+        let scale_t = Tensor::new(scale, candle_bridge::bridge_device())
+            .map_err(|e| DispatchError::Kernel(format!("scale tensor: {e}")))?;
+        let scores = q_rope_t
+            .matmul(&k_exp_t)
+            .and_then(|s| s.broadcast_mul(&scale_t))
+            .map_err(|e| DispatchError::Kernel(format!("scores matmul: {e}")))?;
+        let mask_b = attn_mask
+            .unsqueeze(0)
+            .and_then(|m| m.unsqueeze(0))
+            .map_err(|e| DispatchError::Kernel(format!("mask unsqueeze: {e}")))?;
+        let attn = (&scores + &mask_b)
+            .and_then(|a| candle_nn::ops::softmax(&a, candle_core::D::Minus1))
+            .map_err(|e| DispatchError::Kernel(format!("softmax: {e}")))?;
+        let attn_out = attn
+            .matmul(&v_exp)
+            .map_err(|e| DispatchError::Kernel(format!("attn matmul: {e}")))?;
 
-        // Apply RoPE to Q
-        let _cos_shape = [cache_len, self.head_dim / 2];
-        let (cos, sin) = candle_bridge::rope_embeddings(cache_len, self.head_dim, 10000.0, 0)
-            .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
+        // Output projection: [seq_len, num_heads*head_dim] @ wo^T per position
+        let attn_f32 = candle_bridge::tensor_to_f32(&attn_out)
+            .map_err(|e| DispatchError::Kernel(format!("attn out to f32: {e}")))?;
 
-        let q_tensor = candle_bridge::f16_to_tensor(
-            &q.iter()
-                .map(|&val| half::f16::from_f32(val))
-                .collect::<Vec<_>>(),
-            &[1, seq_len, self.num_heads, self.head_dim],
-            None,
-        )
-        .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
-
-        let q_rope_tensor = candle_bridge::apply_rope(&q_tensor, &cos, &sin, start_pos)
-            .map_err(|e| DispatchError::Kernel(format!("apply_rope: {e}")))?;
-
-        // Run SDPA
-        let attn_out = candle_bridge::sdpa(&q_rope_tensor, &k_tensor, &v_tensor, scale)
-            .map_err(|e| DispatchError::Kernel(format!("sdpa: {e}")))?;
-
-        let result = candle_bridge::tensor_to_f32(&attn_out)
-            .map_err(|e| DispatchError::Kernel(format!("tensor_to_f32: {e}")))?;
-
-        // Output projection: attn_output @ wo^T
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
         for b in 0..batch_size {
             for pos in 0..seq_len {
                 let attn_start = (b * seq_len + pos) * self.num_heads * self.head_dim;
-                let attn_slice = &result[attn_start..attn_start + self.num_heads * self.head_dim];
+                let attn_slice = &attn_f32[attn_start..attn_start + self.num_heads * self.head_dim];
                 let wo_output = self.wo.forward(ctx, attn_slice, 1)?;
                 let out_start = (b * seq_len + pos) * embed_dim;
-                for i in 0..embed_dim {
-                    output[out_start + i] = wo_output[i];
-                }
+                output[out_start..out_start + embed_dim].copy_from_slice(&wo_output);
             }
         }
 
         Ok(output)
     }
+
 }
 
 // ── LayerDispatch: GPU-aware transformer layer ─────────────────────────────

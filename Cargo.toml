@@ -42,7 +42,11 @@ llama-cpp-sys-2 = "0.1.146"
 encoding_rs = "0.8"
 
 # ML inference (pure-Rust path)
-candle-core = { version = "0.10.2", package = "candle-core" }
+# candle-core gets its `cuda` feature so the candle_bridge GEMM path runs on
+# GPU when pesti-runner's `cuda` feature is active — otherwise Device::new_cuda
+# fails ("not been built with cuda support") and every bridged matmul silently
+# falls back to CPU.
+candle-core = { version = "0.10.2", package = "candle-core", features = ["cuda"] }
 candle-nn = { version = "0.10.2" }
 candle-transformers = { version = "0.10.2" }
 candle-datasets = { version = "0.10.2" }

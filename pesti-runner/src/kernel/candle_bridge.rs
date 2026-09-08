@@ -153,19 +153,21 @@ pub fn apply_rope(
 /// * `seq_len` — Sequence length
 /// * `head_dim` — Dimension per attention head
 /// * `base` — RoPE base (typically 10000.0)
-/// * `max_pos` — Maximum position (for scaling)
+/// * `start_pos` — Global position of the first row. Decoding at position p
+///   needs rows p..p+seq_len, not 0..seq_len — callers that pass a start_pos
+///   offset to `apply_rope` must build embeddings for those positions.
 pub fn rope_embeddings(
     seq_len: usize,
     head_dim: usize,
     base: f32,
-    _max_pos: usize,
+    start_pos: usize,
 ) -> Result<(Tensor, Tensor), candle_core::Error> {
     let dim = head_dim / 2;
     let inv_freq: Vec<f32> = (0..dim)
         .map(|i| base.powf(-(i as f32 * 2.0) / head_dim as f32))
         .collect();
 
-    let positions: Vec<f32> = (0..seq_len).map(|p| p as f32).collect();
+    let positions: Vec<f32> = (start_pos..start_pos + seq_len).map(|p| p as f32).collect();
 
     // Compute positions * inv_freq
     let _shape = (seq_len, dim);
