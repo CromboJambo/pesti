@@ -164,30 +164,40 @@ fn run_long_sequence_test(seq_len: usize) {
     let module = pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), ptx_src)
         .unwrap();
 
-    // Single-kernel signature: q, k, v, out, scale, seq_q, seq_k, heads, dim, rope_base
-    let mangled_name = "_Z29fused_attention_single_kernelPK6__halfS1_S1_PS_fiiiif";
+    // Single-kernel signature changed: now takes pre-allocated scores/probs buffers
+    let mangled_name = "_Z29fused_attention_single_kernelPK6__halfS1_S1_PS_PfS3_fiiiif";
     let function = module.load_function(mangled_name).unwrap();
 
     // Single-kernel writes output directly (no intermediate scores buffer)
     let output_buffer_bytes = seq_q * num_heads * head_dim * 2; // half
     let out_ptr = pesti_runner::cuda_runtime::allocate_device_memory(output_buffer_bytes).unwrap();
 
+    // Pre-allocate score and prob buffers: [seq_q, num_heads, seq_k] of f32
+    let scores_bytes = seq_q * num_heads * seq_k * 4;
+    let probs_bytes = seq_q * num_heads * seq_k * 4;
+    let scores_ptr = pesti_runner::cuda_runtime::allocate_device_memory(scores_bytes).unwrap();
+    let probs_ptr = pesti_runner::cuda_runtime::allocate_device_memory(probs_bytes).unwrap();
+
     unsafe {
         let mut q_v: u64 = q_ptr as u64;
         let mut k_v: u64 = k_ptr as u64;
         let mut v_v: u64 = v_ptr as u64;
         let mut out_v: u64 = out_ptr as u64;
+        let mut scores_v: u64 = scores_ptr as u64;
+        let mut probs_v: u64 = probs_ptr as u64;
         let mut seq_q_v: u32 = seq_q as u32;
         let mut seq_k_v: u32 = seq_k as u32;
         let mut num_heads_v: u32 = num_heads as u32;
         let mut head_dim_v: u32 = head_dim as u32;
         let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let mut params: [*mut std::ffi::c_void; 10] = [
+        let mut params: [*mut std::ffi::c_void; 12] = [
             &mut q_v as *mut u64 as *mut std::ffi::c_void,
             &mut k_v as *mut u64 as *mut std::ffi::c_void,
             &mut v_v as *mut u64 as *mut std::ffi::c_void,
             &mut out_v as *mut u64 as *mut std::ffi::c_void,
+            &mut scores_v as *mut u64 as *mut std::ffi::c_void,
+            &mut probs_v as *mut u64 as *mut std::ffi::c_void,
             &mut (scale as f32) as *mut f32 as *mut std::ffi::c_void,
             &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
             &mut seq_k_v as *mut u32 as *mut std::ffi::c_void,
@@ -225,6 +235,8 @@ fn run_long_sequence_test(seq_len: usize) {
     pesti_runner::cuda_runtime::free_device_memory(k_ptr).unwrap();
     pesti_runner::cuda_runtime::free_device_memory(v_ptr).unwrap();
     pesti_runner::cuda_runtime::free_device_memory(out_ptr).unwrap();
+    pesti_runner::cuda_runtime::free_device_memory(scores_ptr).unwrap();
+    pesti_runner::cuda_runtime::free_device_memory(probs_ptr).unwrap();
 
     assert_eq!(nan_count, 0, "Found NaN outputs at sequence length {}", seq_q);
     assert_eq!(inf_count, 0, "Found Inf outputs at sequence length {}", seq_q);
@@ -238,4 +250,34 @@ fn test_long_sequence_attention_64() {
 #[test]
 fn test_very_long_sequence_attention_128() {
     run_long_sequence_test(128);
+}
+
+#[test]
+fn test_long_sequence_attention_256() {
+    run_long_sequence_test(256);
+}
+
+#[test]
+fn test_long_sequence_attention_512() {
+    run_long_sequence_test(512);
+}
+
+#[test]
+fn test_beyond_max_seq_1024() {
+    run_long_sequence_test(1024);
+}
+
+#[test]
+fn test_extreme_seq_4096() {
+    run_long_sequence_test(4096);
+}
+
+#[test]
+fn test_seq_2048() {
+    run_long_sequence_test(2048);
+}
+
+#[test]
+fn test_seq_1536() {
+    run_long_sequence_test(1536);
 }

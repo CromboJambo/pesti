@@ -1,27 +1,26 @@
 //! Single-kernel fused attention with half-swap RoPE, causal mask, and softmax
 //! Eliminates inter-kernel communication bugs from two-kernel architecture
+//! Fixed for arbitrary sequence lengths via pre-allocated score/prob buffers.
 
 #include <cuda_fp16.h>
 #include <math.h>
 #include <float.h>
 
+#define MAX_HEAD_DIM 128
+
 /**
- * Fused Attention Kernel - Single Launch
+ * Fused Attention Kernel - Single Launch (dynamic seq length)
  * 
- * This kernel performs all attention operations in one launch:
- * 1. Apply half-swap RoPE to Q and K
- * 2. Compute attention scores (Q @ K^T) with causal mask
- * 3. Apply softmax with max-subtraction trick
- * 4. Multiply by V and accumulate output
- * 
- * Architecture: Sequential processing (correctness first, optimization later)
- * Target: RTX 4070 Ti SUPER (sm_8.9)
+ * Accepts pre-allocated per-block buffers for scores and probs to support
+ * arbitrary sequence lengths beyond compile-time stack limits.
  */
 __global__ void fused_attention_single_kernel(
     const half* __restrict__ q_ptr,      // [seq_q, num_heads, head_dim]
     const half* __restrict__ k_ptr,      // [seq_k, num_heads, head_dim]
     const half* __restrict__ v_ptr,      // [seq_k, num_heads, head_dim]
     half* __restrict__ out_ptr,           // [seq_q, num_heads, head_dim]
+    float* scores_buf,                    // [seq_q, num_heads, seq_k] pre-allocated
+    float* probs_buf,                     // [seq_q, num_heads, seq_k] pre-allocated
     float scale,                          // 1/sqrt(head_dim)
     int seq_q,                            // Query sequence length
     int seq_k,                            // Key/value sequence length
@@ -36,40 +35,22 @@ __global__ void fused_attention_single_kernel(
     if (q_pos >= seq_q || head >= num_heads) return;
     
     const int HALF_DIM = head_dim / 2;
-    const int MAX_SEQ = 512;  // Maximum sequence length for stack arrays
+    
+    // Point to this block's score/prob slices
+    int buf_offset = q_pos * num_heads * seq_k + head * seq_k;
+    float* scores = scores_buf + buf_offset;
+    float* probs = probs_buf + buf_offset;
     
     // ========================================================================
-    // STEP 1: Apply half-swap RoPE to Q for this thread's dimensions
-    // ========================================================================
-    
-    float q_rope[MAX_SEQ];  // RoPE-applied Q values (dimension-indexed)
-    
-    // Load and apply RoPE to Q (half-swap: dimension i pairs with i + head_dim/2)
-    for (int d = tid; d < HALF_DIM; d += blockDim.x) {
-        int idx_first = q_pos * num_heads * head_dim + head * head_dim + d;
-        int idx_second = q_pos * num_heads * head_dim + head * head_dim + (d + HALF_DIM);
-        
-        float q_first = __half2float(q_ptr[idx_first]);
-        float q_second = __half2float(q_ptr[idx_second]);
-        
-        // Apply RoPE rotation (simplified - assumes position 0 for now, will fix below)
-        q_rope[d] = q_first;
-        q_rope[d + HALF_DIM] = q_second;
-    }
-    
-    // ========================================================================
-    // STEP 2: Compute attention scores with causal mask (sequential over k_pos)
+    // STEP 1: Compute attention scores with causal mask (sequential over k_pos)
     // ========================================================================
     
     float max_score = -FLT_MAX;
-    float scores[MAX_SEQ];  // Attention scores per k_pos (sequence position)
     
-    // First pass: compute scores and find max
-    float min_score = FLT_MAX;
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
         // Apply causal mask: mask out future tokens (k_pos > q_pos)
         if (k_pos > q_pos) {
-            scores[k_pos] = -1e9f;  // Use large negative instead of -FLT_MAX for stability
+            scores[k_pos] = -1e9f;
             continue;
         }
         
@@ -82,20 +63,8 @@ __global__ void fused_attention_single_kernel(
             float q_val = __half2float(q_ptr[idx_q]);
             float k_val = __half2float(k_ptr[idx_k]);
             
-            // Apply half-swap RoPE to Q and K
-            int half_d = d / 2;
-            if (d < HALF_DIM) {
-                // First half: pair with second half
-                float q_first = q_val;
-                float q_second = __half2float(q_ptr[q_pos * num_heads * head_dim + head * head_dim + d + HALF_DIM]);
-                float k_first = k_val;
-                float k_second = __half2float(k_ptr[k_pos * num_heads * head_dim + head * head_dim + d + HALF_DIM]);
-                
-                // Simplified RoPE (cos=1, sin=0 for position 0)
-                score += q_first * k_first;
-            } else {
-                score += q_val * k_val;
-            }
+            // Simplified RoPE (cos=1, sin=0 for position 0)
+            score += q_val * k_val;
         }
         
         // Scale by 1/sqrt(head_dim)
@@ -109,11 +78,10 @@ __global__ void fused_attention_single_kernel(
     }
     
     // ========================================================================
-    // STEP 3: Apply softmax with max-subtraction trick
+    // STEP 2: Apply softmax with max-subtraction trick
     // ========================================================================
     
     float exp_sum = 0.0f;
-    float probs[MAX_SEQ];
     
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
         if (scores[k_pos] == -FLT_MAX) {
@@ -133,10 +101,10 @@ __global__ void fused_attention_single_kernel(
     }
     
     // ========================================================================
-    // STEP 4: Weighted sum of V to get final output
+    // STEP 3: Weighted sum of V to get final output
     // ========================================================================
     
-    float out_vals[MAX_SEQ];
+    float out_vals[MAX_HEAD_DIM];
     for (int d = tid; d < head_dim; d += blockDim.x) {
         out_vals[d] = 0.0f;
         
@@ -150,7 +118,7 @@ __global__ void fused_attention_single_kernel(
     }
     
     // ========================================================================
-    // STEP 5: Store output (FP32 → FP16)
+    // STEP 4: Store output (FP32 → FP16)
     // ========================================================================
     
     for (int d = tid; d < head_dim; d += blockDim.x) {
