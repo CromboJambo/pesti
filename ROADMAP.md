@@ -887,5 +887,5 @@ Understanding the ecosystem and community through meaningful contributions
 
 ---
 
-*Last updated: August 25, 2026 (Week 13/14 reconciled; Week 17 GPU e2e correctness in progress)*  
+*Last updated: September 8, 2026 (Week 17 GPU e2e correctness COMPLETE — 43.5 tok/s measured)*  
 *This roadmap will change as I learn more. If it looks perfect, it's lying.*
