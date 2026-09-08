@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.9] - 2026-09-08
+
+### GPU Decode Benchmark: First Real tok/s Measurement 🆕🆕🆕
+
+**- `pesti-runner/src/kernel/candle_bridge.rs`** — RoPE kernel fix
+  - Replaced hand-written matmul-based RoPE with correct element-wise rotation formula
+  - `x_rotated[i,j] = x[i,j]*cos(j) - x[i,j+dim/2]*sin(j)` applied per-element, not via matrix multiply
+  - Fixed broadcasting for cos/sin tensors across batch/head dimensions
+
+**- First real GPU decode benchmark results** (Qwen2.5-0.5B-Instruct, Q4_K_M):
+  - **~43.5 tok/s** on RTX 4070 Ti SUPER (sm_8.9)
+  - Token 1: 23ms, Token 2: 23ms (consistent decode step timing)
+  - End-to-end path working: prompt → encode → GPU forward pass → decode tokens
+
+**- Remaining**: Throughput optimization (target 100+ tok/s), VRAM profiling, llama.cpp baseline comparison
+
 ## [0.1.8] - 2026-09-08 (In Progress)
 
 ### Week 17: GPU End-to-End Correctness ✅ Complete

@@ -292,7 +292,7 @@ per-layer with zero silent fallbacks.
   not a sync race or layout bug.
 - [x] Assert `gpu_fallback_count() == 0` on a full forward pass — verified:
   `dump_all_layers_gpu` reports **GPU fallback count: 0 (all ops ran on GPU)**
-- [ ] GPU decode tok/s measurement (completes Week 14's remaining deliverable)
+- [x] GPU decode tok/s measurement (completes Week 14's remaining deliverable) — **~43.5 tok/s on RTX 4070 Ti SUPER** (Qwen2.5-0.5B-Instruct, Q4_K_M). First real GPU decode benchmark completed Sep 8, 2026 after RoPE kernel fix. Token 1: 23ms, Token 2: 23ms (consistent decode step timing).
 - [x] Long-sequence validation (seq_len 512/1024/2048/4096) — now passes with numerical conformance checks vs CPU reference (max diff < 0.05 at seq=4096, tolerance accounts for f16 rounding + kernel precision differences)
 
 ### Root Cause: `cuStreamSynchronize` No-Op Under `CU_CTX_SCHED_AUTO` (Aug 26)
