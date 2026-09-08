@@ -173,7 +173,7 @@ pub fn extract_model_config(header: &GgufHeader) -> HashMap<String, String> {
     }
 
     // File type
-    if let Some(ft) = header.get_kv_str("general.file_type") {
+    if let Some(ft) = header.get_kv_u32("general.file_type") {
         config.insert("file_type".to_string(), ft.to_string());
     }
 
