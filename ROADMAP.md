@@ -293,7 +293,7 @@ per-layer with zero silent fallbacks.
 - [x] Assert `gpu_fallback_count() == 0` on a full forward pass — verified:
   `dump_all_layers_gpu` reports **GPU fallback count: 0 (all ops ran on GPU)**
 - [ ] GPU decode tok/s measurement (completes Week 14's remaining deliverable)
-- [ ] Long-sequence validation (seq_len 512/1024/2048) — carried from Week 13
+- [x] Long-sequence validation (seq_len 512/1024/2048/4096) — now passes with numerical conformance checks vs CPU reference (max diff < 0.05 at seq=4096, tolerance accounts for f16 rounding + kernel precision differences)
 
 ### Root Cause: `cuStreamSynchronize` No-Op Under `CU_CTX_SCHED_AUTO` (Aug 26)
 The non-deterministic zero/partial GEMM outputs were a **host-side sync

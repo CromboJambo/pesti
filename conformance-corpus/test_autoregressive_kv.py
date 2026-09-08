@@ -4,6 +4,10 @@
 Runs numpy oracle vs Rust CPU implementation, compares token-by-token choices,
 and reports first divergence point if any. Validates that KV cache updates
 produce identical results across both implementations.
+
+Exit codes:
+    0 = all tokens match
+    1 = tokens diverge
 """
 import subprocess
 import sys
@@ -17,7 +21,7 @@ STEPS = 10
 
 def run_numpy_oracle(steps, prompt_text):
     result = subprocess.run(
-        [sys.executable, "conformance-corpus/ref_autoregressive.py", MODEL, "--steps", str(steps), f"--prompt={prompt_text}"],
+        [sys.executable, "conformance-corpus/ref_autoregressive.py", MODEL, "--steps=" + str(steps), "--prompt=" + prompt_text],
         capture_output=True, text=True, timeout=120
     )
     # Find JSON object in output (it's the last large block)
@@ -102,3 +106,10 @@ else:
     print(f"\nToken count mismatch: numpy={len(numpy_tokens)}, rust={len(rust_tokens)}")
 
 print(f"\nRust generated text: '{rust_text}'")
+
+# Exit with non-zero on divergence
+if len(numpy_tokens) != len(rust_tokens):
+    sys.exit(1)
+for n, r in zip(numpy_tokens, rust_tokens):
+    if n != r:
+        sys.exit(1)

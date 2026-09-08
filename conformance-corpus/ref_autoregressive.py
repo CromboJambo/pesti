@@ -7,7 +7,7 @@ identical tokenization between numpy oracle and Rust implementation.
 Tensors loaded via gguf package dequantization, with proper KV cache updates
 across generation steps. Greedy decoding (argmax) for deterministic comparison.
 
-Usage: ref_autoregressive.py <model.gguf> tok1,tok2,... [--steps N]
+Usage: ref_autoregressive.py <model.gguf> tok1,tok2,... [--steps=N] [--prompt=text]
 """
 import sys
 import json
@@ -21,13 +21,21 @@ else:
     toks = [785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]  # default fox prompt
 
 steps = 10
+prompt_text = None
 for i in range(3, len(sys.argv)):
-    if sys.argv[i].startswith("--steps="):
-        steps = int(sys.argv[i].split("=", 1)[1])
+    arg = sys.argv[i]
+    if arg.startswith("--steps="):
+        steps = int(arg.split("=", 1)[1])
+    elif arg.startswith("--prompt="):
+        prompt_text = arg.split("=", 1)[1]
+
+if prompt_text is None:
+    prompt_text = "The quick brown fox jumps over the lazy dog."
 
 print(f"[REF] Autoregressive oracle: {steps} steps")
 print(f"[REF] Model: {PATH}")
 print(f"[REF] Prompt tokens ({len(toks)}): {toks}")
+print(f"[REF] Prompt text: {prompt_text!r}")
 
 # Load GGUF and extract architecture params (same pattern as ref_forward.py)
 reader = gguf.GGUFReader(PATH)
@@ -215,6 +223,7 @@ print(f"\n[REF] Generated tokens: {json.dumps(generated_tokens)}")
 result = {
     "generated": generated_tokens,
     "steps": steps,
-    "prompt_tokens": toks
+    "prompt_tokens": toks,
+    "prompt_text": prompt_text
 }
 print(json.dumps(result))

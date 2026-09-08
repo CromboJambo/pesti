@@ -1,6 +1,9 @@
 //! Long-sequence attention conformance test
 //! Tests the fused attention kernel with longer sequences (64 and 128 tokens)
 //! to verify correctness beyond the original short-sequence tests.
+//!
+//! Compares GPU kernel output against CPU reference implementation for
+//! numerical conformance, not just NaN/Inf stability checks.
 
 use half::f16;
 use pesti_runner::cuda_runtime::CudaRuntime;
@@ -87,6 +90,32 @@ fn reference_softmax(scores: &[f32], seq_q: usize, seq_k: usize, num_heads: usiz
     probs
 }
 
+/// Compute reference attention output (softmax @ V) per head
+fn reference_attention_output(
+    probs: &[f32],
+    v: &[f32],
+    seq_q: usize,
+    seq_k: usize,
+    num_heads: usize,
+    head_dim: usize,
+) -> Vec<f32> {
+    let mut output = vec![0.0f32; seq_q * num_heads * head_dim];
+    for q_pos in 0..seq_q {
+        for head in 0..num_heads {
+            for d in 0..head_dim {
+                let mut sum = 0.0f32;
+                for k_pos in 0..seq_k {
+                    let prob_idx = q_pos * num_heads * seq_k + head * seq_k + k_pos;
+                    let v_offset = k_pos * num_heads * head_dim + head * head_dim + d;
+                    sum += probs[prob_idx] * v[v_offset];
+                }
+                output[q_pos * num_heads * head_dim + head * head_dim + d] = sum;
+            }
+        }
+    }
+    output
+}
+
 fn run_long_sequence_test(seq_len: usize) {
     let cuda_rt = CudaRuntime::new(0).unwrap();
     if !cuda_rt.is_valid() {
@@ -116,12 +145,18 @@ fn run_long_sequence_test(seq_len: usize) {
     // Convert to float for reference computation
     let mut q_f: Vec<f32> = q_h.iter().map(|x| x.to_f32()).collect();
     let mut k_f: Vec<f32> = k_h.iter().map(|x| x.to_f32()).collect();
+    let v_f: Vec<f32> = v_h.iter().map(|x| x.to_f32()).collect();
 
     // Apply RoPE to Q (reference)
     for pos in 0..seq_q {
         for head in 0..num_heads {
             let offset = pos * num_heads * head_dim + head * head_dim;
-            apply_rope_cpu(&mut q_f[offset..offset + head_dim], head_dim, pos, rope_base);
+            apply_rope_cpu(
+                &mut q_f[offset..offset + head_dim],
+                head_dim,
+                pos,
+                rope_base,
+            );
         }
     }
 
@@ -129,14 +164,21 @@ fn run_long_sequence_test(seq_len: usize) {
     for pos in 0..seq_k {
         for head in 0..num_heads {
             let offset = pos * num_heads * head_dim + head * head_dim;
-            apply_rope_cpu(&mut k_f[offset..offset + head_dim], head_dim, pos, rope_base);
+            apply_rope_cpu(
+                &mut k_f[offset..offset + head_dim],
+                head_dim,
+                pos,
+                rope_base,
+            );
         }
     }
 
-    // Reference computation: scores → causal mask → softmax
+    // Reference computation: scores -> causal mask -> softmax -> @V
     let mut ref_scores = reference_attention_scores(&q_f, &k_f, seq_q, seq_k, num_heads, head_dim);
     apply_causal_mask(&mut ref_scores, seq_q, seq_k, num_heads);
-    let _ref_probs = reference_softmax(&ref_scores, seq_q, seq_k, num_heads);
+    let ref_probs = reference_softmax(&ref_scores, seq_q, seq_k, num_heads);
+    let ref_output =
+        reference_attention_output(&ref_probs, &v_f, seq_q, seq_k, num_heads, head_dim);
 
     // GPU computation
     let q_size = seq_q * num_heads * head_dim * 2;
@@ -147,12 +189,8 @@ fn run_long_sequence_test(seq_len: usize) {
     let k_ptr = pesti_runner::cuda_runtime::allocate_device_memory(k_size).unwrap();
     let v_ptr = pesti_runner::cuda_runtime::allocate_device_memory(v_size).unwrap();
 
-    pesti_runner::cuda_runtime::copy_host_to_device(
-        q_ptr,
-        q_h.as_ptr() as *const u8,
-        q_size,
-    )
-    .unwrap();
+    pesti_runner::cuda_runtime::copy_host_to_device(q_ptr, q_h.as_ptr() as *const u8, q_size)
+        .unwrap();
     pesti_runner::cuda_runtime::copy_host_to_device(k_ptr, k_h.as_ptr() as *const u8, k_size)
         .unwrap();
     pesti_runner::cuda_runtime::copy_host_to_device(v_ptr, v_h.as_ptr() as *const u8, v_size)
@@ -161,8 +199,8 @@ fn run_long_sequence_test(seq_len: usize) {
     let stream = cuda_rt.new_stream().unwrap();
     // Use single-kernel fused attention (patched for longer sequences with softmax stability fix)
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_single_kernel.ptx");
-    let module = pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), ptx_src)
-        .unwrap();
+    let module =
+        pesti_runner::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), ptx_src).unwrap();
 
     // Single-kernel signature changed: now takes pre-allocated scores/probs buffers
     let mangled_name = "_Z29fused_attention_single_kernelPK6__halfS1_S1_PS_PfS3_fiiiif";
@@ -209,12 +247,20 @@ fn run_long_sequence_test(seq_len: usize) {
         let grid = (seq_q as u32, num_heads as u32, 1u32);
         let block = (head_dim as u32, 1u32, 1u32);
 
-        launch_kernel(function.cu_function(), grid, block, 0, cu_stream(&stream), &mut params).unwrap();
+        launch_kernel(
+            function.cu_function(),
+            grid,
+            block,
+            0,
+            cu_stream(&stream),
+            &mut params,
+        )
+        .unwrap();
     }
 
     cuda_rt.synchronize().unwrap();
 
-    // Copy output back and check for NaN/Inf (basic sanity)
+    // Copy output back and compare against reference
     let mut gpu_out: Vec<f16> = vec![f16::ZERO; seq_q * num_heads * head_dim];
     pesti_runner::cuda_runtime::copy_device_to_host(
         gpu_out.as_mut_ptr() as *mut u8,
@@ -226,9 +272,21 @@ fn run_long_sequence_test(seq_len: usize) {
     let nan_count = gpu_out.iter().filter(|x| x.to_f32().is_nan()).count();
     let inf_count = gpu_out.iter().filter(|x| x.to_f32().is_infinite()).count();
 
+    // Numerical conformance check: compare GPU output to CPU reference
+    let mut max_diff = 0.0f32;
+    for i in 0..gpu_out.len() {
+        let gpu_val = gpu_out[i].to_f32();
+        let ref_val = ref_output[i];
+        let diff = (gpu_val - ref_val).abs();
+        if diff > max_diff {
+            max_diff = diff;
+        }
+    }
+
     println!("Sequence length: {}", seq_q);
     println!("NaN outputs: {}", nan_count);
     println!("Inf outputs: {}", inf_count);
+    println!("Max absolute difference from reference: {:.6}", max_diff);
 
     // Cleanup
     pesti_runner::cuda_runtime::free_device_memory(q_ptr).unwrap();
@@ -238,8 +296,23 @@ fn run_long_sequence_test(seq_len: usize) {
     pesti_runner::cuda_runtime::free_device_memory(scores_ptr).unwrap();
     pesti_runner::cuda_runtime::free_device_memory(probs_ptr).unwrap();
 
-    assert_eq!(nan_count, 0, "Found NaN outputs at sequence length {}", seq_q);
-    assert_eq!(inf_count, 0, "Found Inf outputs at sequence length {}", seq_q);
+    assert_eq!(
+        nan_count, 0,
+        "Found NaN outputs at sequence length {}",
+        seq_q
+    );
+    assert_eq!(
+        inf_count, 0,
+        "Found Inf outputs at sequence length {}",
+        seq_q
+    );
+    // Tolerance: f16 rounding + kernel precision differences
+    assert!(
+        max_diff < 0.05,
+        "Numerical conformance failed at seq {}: max diff = {:.6}",
+        seq_q,
+        max_diff
+    );
 }
 
 #[test]
