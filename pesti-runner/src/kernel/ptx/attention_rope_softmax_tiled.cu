@@ -93,8 +93,8 @@ __global__ void fused_attention_kernel_tiled(
         // Apply scale (1/sqrt(head_dim))
         dot *= scale;
         
-        // Causal mask: set to -inf if q_pos >= k_pos
-        if (q_pos >= k_pos) {
+        // Causal mask: set to -inf if k_pos > q_pos (future tokens)
+        if (k_pos > q_pos) {
             dot = -INFINITY;
         }
         

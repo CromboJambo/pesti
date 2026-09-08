@@ -36,13 +36,13 @@ __global__ void fused_attention_single_kernel(
     if (q_pos >= seq_q || head >= num_heads) return;
     
     const int HALF_DIM = head_dim / 2;
-    const int MAX_DIM = 16;  // Maximum head dimension for this test
+    const int MAX_SEQ = 512;  // Maximum sequence length for stack arrays
     
     // ========================================================================
     // STEP 1: Apply half-swap RoPE to Q for this thread's dimensions
     // ========================================================================
     
-    float q_rope[MAX_DIM];  // RoPE-applied Q values
+    float q_rope[MAX_SEQ];  // RoPE-applied Q values (dimension-indexed)
     
     // Load and apply RoPE to Q (half-swap: dimension i pairs with i + head_dim/2)
     for (int d = tid; d < HALF_DIM; d += blockDim.x) {
@@ -62,13 +62,14 @@ __global__ void fused_attention_single_kernel(
     // ========================================================================
     
     float max_score = -FLT_MAX;
-    float scores[MAX_DIM];  // We'll use seq_k as the array size (simplified)
+    float scores[MAX_SEQ];  // Attention scores per k_pos (sequence position)
     
     // First pass: compute scores and find max
+    float min_score = FLT_MAX;
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
         // Apply causal mask: mask out future tokens (k_pos > q_pos)
         if (k_pos > q_pos) {
-            scores[k_pos] = -FLT_MAX;
+            scores[k_pos] = -1e9f;  // Use large negative instead of -FLT_MAX for stability
             continue;
         }
         
@@ -112,7 +113,7 @@ __global__ void fused_attention_single_kernel(
     // ========================================================================
     
     float exp_sum = 0.0f;
-    float probs[MAX_DIM];
+    float probs[MAX_SEQ];
     
     for (int k_pos = 0; k_pos < seq_k; k_pos++) {
         if (scores[k_pos] == -FLT_MAX) {
@@ -135,7 +136,7 @@ __global__ void fused_attention_single_kernel(
     // STEP 4: Weighted sum of V to get final output
     // ========================================================================
     
-    float out_vals[MAX_DIM];
+    float out_vals[MAX_SEQ];
     for (int d = tid; d < head_dim; d += blockDim.x) {
         out_vals[d] = 0.0f;
         
