@@ -172,6 +172,19 @@ pub struct GgufTokenizerConfig {
     pub eos_token_id: Option<u32>,
 }
 
+/// Stub tokenizer backend enum (mirrors real TokenizerBackend from transformer/tokenizer.rs)
+#[derive(Debug, Clone, Copy)]
+pub enum TokenizerBackend {
+    MistralRs,
+    Qwen2Bpe,
+}
+
+impl Default for TokenizerBackend {
+    fn default() -> Self {
+        TokenizerBackend::MistralRs
+    }
+}
+
 impl GgufTokenizerConfig {
     /// Build tokenizer config from GGUF header (stub - uses defaults)
     pub fn from_gguf_header(header: &pesti_gguf::types::GgufHeader) -> Self {
@@ -221,6 +234,7 @@ impl GgufTokenizerConfig {
 /// Stub tokenizer loader (mirrors real load_tokenizer_from_gguf from transformer/tokenizer.rs)
 pub fn load_tokenizer_from_gguf(
     path: &Path,
+    _backend: TokenizerBackend,
 ) -> Result<(GgufTokenizerConfig, TokenizerType), crate::error::RunnerError> {
     use pesti_gguf::parser::parse_gguf;
 

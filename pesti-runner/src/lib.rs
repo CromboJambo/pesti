@@ -101,11 +101,11 @@ pub use tier::{LayerProfiler, Tier, TieredExecution};
 pub use tokenizer::Tokenizer;
 #[cfg(feature = "cuda")]
 pub use transformer::{
-    GgufTokenizerConfig, LlamaModel, SamplingConfig, argmax, load_tokenizer_from_gguf, sample,
+    GgufTokenizerConfig, LlamaModel, SamplingConfig, TokenizerBackend, argmax, load_tokenizer_from_gguf, sample,
 };
 #[cfg(not(feature = "cuda"))]
 pub use transformer_stub::{
-    GgufTokenizerConfig, LlamaModel, SamplingConfig, argmax, load_tokenizer_from_gguf, sample,
+    GgufTokenizerConfig, LlamaModel, SamplingConfig, TokenizerBackend, argmax, load_tokenizer_from_gguf, sample,
 };
 
 // ── llama.rs: High-level API over llama.cpp ──

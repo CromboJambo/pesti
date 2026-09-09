@@ -20,10 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load tokenizer from GGUF
     let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
         std::path::Path::new(model_path),
-        pesti_runner::transformer::TokenizerBackend::MistralRs,
+        pesti_runner::TokenizerBackend::MistralRs,
     )?;
 
-    let text = tokenizer.decode(&ids)?;
+    let text = tokenizer.decode(&ids, true).map_err(|e| format!("decode error: {}", e))?;
     println!("{}", text);
 
     Ok(())

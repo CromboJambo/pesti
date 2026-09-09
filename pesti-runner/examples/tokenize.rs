@@ -15,10 +15,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
         std::path::Path::new(model_path),
-        pesti_runner::transformer::TokenizerBackend::MistralRs,
+        pesti_runner::TokenizerBackend::MistralRs,
     )?;
 
-    let ids = tokenizer.encode(text)?;
+    let ids = tokenizer.encode(text.as_str(), true).map_err(|e| format!("encode error: {}", e))?.get_ids().to_vec();
     let id_strs: Vec<String> = ids.iter().map(|t| t.to_string()).collect();
     println!("{}", id_strs.join(","));
 

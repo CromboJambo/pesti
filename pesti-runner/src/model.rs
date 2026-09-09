@@ -261,7 +261,7 @@ impl Model {
 #[cfg(not(feature = "cuda"))]
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 #[cfg(not(feature = "cuda"))]
-use crate::transformer_stub::{GgufTokenizerConfig, load_tokenizer_from_gguf};
+use crate::transformer_stub::{GgufTokenizerConfig, load_tokenizer_from_gguf, TokenizerBackend};
 #[cfg(not(feature = "cuda"))]
 use std::path::Path;
 
@@ -308,7 +308,7 @@ impl CpuModel {
         }
 
         // Load tokenizer from GGUF
-        let (tokenizer_config, tokenizer) = load_tokenizer_from_gguf(path)
+        let (tokenizer_config, tokenizer) = load_tokenizer_from_gguf(path, TokenizerBackend::MistralRs)
             .map_err(|e| crate::error::RunnerError::Tokenizer(e.to_string()))?;
 
         // Debug: print tokenizer info
