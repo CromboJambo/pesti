@@ -26,11 +26,11 @@ PESTI has a working GPU inference path for Qwen2.5-0.5B-Instruct with:
 
 ## Remaining Work
 
-### Week 18: Stabilize and Measure
-- Fix broken examples (`tokenize.rs`, `encode_tokens.rs`, `decode_tokens.rs`)
-- Establish CPU vs GPU throughput benchmarks (tok/s) with real measurements
-- Document VRAM usage characteristics
-- Decide on pesti-safetensors failing tests (fix vs accept as known issues)
+### Week 18: Stabilize and Measure (✅ Complete)
+- [x] Fix broken examples (`tokenize.rs`, `encode_tokens.rs`, `decode_tokens.rs`) — commit 1651549
+- [x] Establish CPU vs GPU throughput benchmarks (tok/s) with real measurements
+- [x] Document VRAM usage characteristics (docs/benchmarks/VRAM-USAGE.md)
+- [x] Decide on pesti-safetensors failing tests (accept as known issues; mostly pass)
 
 ### Week 19: Optimization Pass
 - Profile attention kernels under nvprof/nsys
