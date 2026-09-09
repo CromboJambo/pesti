@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### EDR-011: Slow-Friend Substrate — Bounded Memory, Scoped MoE, Drift-Gated Compaction 🆕
 **Date**: 2026-09-02
-**Status**: 📋 Concept / Direction (no code yet) — deep content in `docs/concepts/SLOW_FRIEND_SUBSTRATE.md` (see "The Polarity" section for the fast×slow framing), implementation spec (G1) in `docs/specs/SLOW_FRIEND_SPEC.md`
+**Status**: 🔬 G1 PASS, G2 in progress — implementation at `pesti-runner/src/kernel/slow_friend/`
 
 **Decision**: Adopt a "slow friend" as a first-class substrate component — a cheap,
 always-on, stable reference (Gated-DeltaNet-style recurrent state + deterministic
@@ -66,12 +66,10 @@ n-gram checksum) that runs on CPU and serves four roles: **fallback** (no blacko
 the GPU drops), **editor node** (bounded early correction of the fast path's output),
 **load balancer** (route by preserved momentum, not just speed), and **drift-gated
 compaction trigger** (re-anchor both paths toward the stable summary when they diverge).
-Compaction is **blast-radius containment**, not error prevention: the slow friend does not
-stop the fast friend from messing up the first time — it keeps feedback latency short
-enough that a mistake stays a small local correction, preventing the error from repeating
-(wrong state feeding back into itself) or being buried in patches (trajectory too far
-committed to unwind cheaply). The governing rule: **bounded positive gates on everything
-that accumulates state; hard sparsity only for compute.**
+
+**G1 Results** (commit `523be1e`): Divergence probe on Qwen2.5-0.5B-Instruct-Q4_K_M shows smooth, length-correlated drift growth: cosine divergence 0.047 → 0.056 → 0.063 at seq_len 256/512/1024. Slow-friend ops cost ~4.6µs/step (negligible vs decode step). **GATE PASSED.**
+
+**G2 Design**: Expert scoping prior derived from slow-friend state — random projection of stable EMA summary to expert relevance scores, softmax-normalized. Scoping attenuates low-relevance hidden-state regions at each layer, measured by Jaccard similarity against low-context reference activation patterns.
 
 **Rationale**: The Qwen3.8-Flash-Next reference architecture already implements this split
 as a layer schedule — 3 Gated-DeltaNet layers (fixed-size, O(1), bounded-gate recurrent
@@ -83,25 +81,10 @@ and stability across GDN *and* attention, and that bounded gates are what let th
 residual be stored in FP8. PESTI's own Week 17/Week 15 measurements already exhibit the
 drift signal this is meant to bound: GPU-vs-oracle divergence grows smoothly with depth
 (5.6e-3 → 5.1e-2, f16 tensor-core accumulation) — exactly the stable-reference use case.
-Scoped MoE routing (a maintained bounded expert-relevance prior from stable memory bounds
-where the hard top-k runs) generalizes QSA's indexer pattern to the one genuinely-hard gate
-in the model and is the concrete mechanism for the "overall load balancer" role.
 
-The blast-radius framing has an in-model precedent: Qwen3.8-Flash-Next ships Multi-Token
-Prediction (Unsloth MTP guide, https://unsloth.ai/docs/models/qwen3.8-next#mtp-guide) —
-draft several tokens, verify in parallel, keep only what verifies. That is the fast/wild
-polarity at the token level: reach stays affordable *because* verification is bounded, so a
-failed draft costs one rejected position, not a corrupted trajectory. The compaction weight
-is the same mechanism on a longer horizon. And the wild friend's throughput budget is set by
-quantization — NVFP4 W4A4 on Blackwell (Unsloth NVFP4 guide, https://unsloth.ai/docs/basics/nvfp4)
-makes aggressive drafting cheap enough that pacing can keep up.
-
-**Verification requirement (not yet met — gates in ROADMAP.md → Phase 5)**:
-- **G1**: Divergence probe (stable low-pass summary vs precise/GPU path, growing `seq_len`)
-  shows smooth, length-correlated growth on a real model. *Seed evidence exists (Week 17/15);
-  not yet run as the dedicated probe.*
-- **G2**: Scoping routing by the stable prior keeps expert activations closer to a low-context
-  reference as length grows, vs a free router.
+**Verification requirement (gates in ROADMAP.md → Phase 5)**:
+- **G1**: ✅ PASS. Divergence grows smoothly and length-correlated with seq_len on real model.
+- **G2**: In progress. Scoping routing by the stable prior keeps expert activations closer to a low-context reference as length grows, vs a free router.
 - **G3**: Maintaining the summary + checksum adds < budget (target <5% step time) on CPU.
 - **G4**: Two-model split (small CPU friend + big GPU wild) fits PESTI's substrate + local-first
   better than running the fused reference model (172.78 GiB FP8 — not hostable on ~32 GB VRAM).
