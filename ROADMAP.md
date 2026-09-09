@@ -379,6 +379,8 @@ Week 17 measured GPU-vs-oracle divergence growing **smoothly with depth** (5.6e-
 - [x] **G3 — Prove it's cheap enough to pace.** ✅ PASS (measured during G1). Per-token slow-friend cost: ~4.6µs/step vs ~23ms decode step = ~0.02% of step time, well under 5% budget. Feedback latency trivially satisfied.
 - [x] **G4 — Pick the form.** ✅ DECIDED. Two-model split (small CPU friend + big GPU wild) fits PESTI's substrate and local-first constraints; fused reference model is 172.78 GiB FP8, not hostable on ~32 GB VRAM.
 - [x] **G5 — Bootstrap log → routing-alignment training data.** ✅ COMPLETE. SessionLogger captures per-step signals (hidden norms, divergence scores, activation pattern hashes) as JSONL. Tested on Qwen2.5-0.5B with 128 tokens; generates valid routing-distillation training data. Commit `73972ce`.
+- [ ] **G6 — Prove compaction works.** ⏸️ ON HOLD. Re-anchoring at threshold increased mean divergence by 70% (threshold too low, triggered on 1016/1024 steps). Needs higher threshold or cooldown period; only testable near context limit.
+- [ ] **G7 — End-to-end integration.** 📋 SPEC WRITTEN. Wire slow-friend into actual decode loop; prove non-interference (identical tokens), measure per-step divergence during real generation, validate drift detection with induced degradation. Spec: `docs/specs/SLOW_FRIEND_G7_SPEC.md`.
 
 ### Design cautions (from EDR-011)
 - Keep the routing scope **soft** — prior + expanded candidate set (M > k), never a hard mask.
