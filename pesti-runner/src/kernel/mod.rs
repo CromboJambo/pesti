@@ -109,6 +109,7 @@ pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
 #[cfg(feature = "cuda")]
 pub mod rope;
+pub mod slow_friend;
 pub mod softmax;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
