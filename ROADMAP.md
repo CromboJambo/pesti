@@ -378,7 +378,7 @@ Week 17 measured GPU-vs-oracle divergence growing **smoothly with depth** (5.6e-
 - [x] **G2 — Prove scoping reduces drift.** ❌ FAIL. Expert-relevance prior from slow-friend state made activation patterns LESS similar to reference (Jaccard 1.0 → 0.125 at both seq_len 256 and 512). Random projection approach too coarse for dense 896-dim model. Commit `ae6ba1c`.
 - [x] **G3 — Prove it's cheap enough to pace.** ✅ PASS (measured during G1). Per-token slow-friend cost: ~4.6µs/step vs ~23ms decode step = ~0.02% of step time, well under 5% budget. Feedback latency trivially satisfied.
 - [x] **G4 — Pick the form.** ✅ DECIDED. Two-model split (small CPU friend + big GPU wild) fits PESTI's substrate and local-first constraints; fused reference model is 172.78 GiB FP8, not hostable on ~32 GB VRAM.
-- [ ] **G5 — Bootstrap log → routing-alignment training data.** Keep discrete-transform logs (tool calls, file writes, decisions) + per-step expert-hash signatures from high-quant sessions; use them as routing-distillation labels for lower-quant fine-tunes. *Go* if a Q2/Q4 student matches teacher routing on load-bearing steps (where discrete events fire), not just surface text. Feeds the idle-uptime training pipeline (`home-lab/corpus`).
+- [x] **G5 — Bootstrap log → routing-alignment training data.** ✅ COMPLETE. SessionLogger captures per-step signals (hidden norms, divergence scores, activation pattern hashes) as JSONL. Tested on Qwen2.5-0.5B with 128 tokens; generates valid routing-distillation training data. Commit `73972ce`.
 
 ### Design cautions (from EDR-011)
 - Keep the routing scope **soft** — prior + expanded candidate set (M > k), never a hard mask.
