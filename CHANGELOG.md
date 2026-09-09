@@ -84,8 +84,8 @@ drift signal this is meant to bound: GPU-vs-oracle divergence grows smoothly wit
 
 **Verification requirement (gates in ROADMAP.md → Phase 5)**:
 - **G1**: ✅ PASS. Divergence grows smoothly and length-correlated with seq_len on real model.
-- **G2**: In progress. Scoping routing by the stable prior keeps expert activations closer to a low-context reference as length grows, vs a free router.
-- **G3**: Maintaining the summary + checksum adds < budget (target <5% step time) on CPU.
+- **G2**: ❌ FAIL. Expert scoping prior made activation patterns LESS similar to reference (Jaccard 1.0 → 0.125 at both seq_len 256 and 512). Random projection approach too coarse for dense 896-dim model partitioned into 8 experts.
+- **G3**: ✅ PASS. Per-token slow-friend cost measured during G1: ~4.6µs/step vs ~23ms decode step = ~0.02% of step time, well under 5% budget. Feedback latency trivially satisfied.
 - **G4**: Two-model split (small CPU friend + big GPU wild) fits PESTI's substrate + local-first
   better than running the fused reference model (172.78 GiB FP8 — not hostable on ~32 GB VRAM).
 
