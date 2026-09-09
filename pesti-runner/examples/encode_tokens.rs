@@ -1,5 +1,4 @@
 //! Minimal tokenizer test - encode text to token IDs
-use pesti_runner::{TokenizerBackend, load_tokenizer_from_gguf};
 use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,14 +11,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_path = &args[1];
     let text = &args[2];
 
-    let (_config, tokenizer) = load_tokenizer_from_gguf(
+    let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
         std::path::Path::new(model_path),
-        TokenizerBackend::MistralRs,
+        pesti_runner::transformer::TokenizerBackend::MistralRs,
     )?;
 
-    // Match cpu_e2e_generate: encode_with_special(text, true, false)
-    let ids = tokenizer.encode_with_special(text, true, false)?;
-    println!("{}", ids.join(","));
+    // Use encode() directly (same as cpu_e2e_generate)
+    let ids = tokenizer.encode(text)?;
+    let id_strs: Vec<String> = ids.iter().map(|t| t.to_string()).collect();
+    println!("{}", id_strs.join(","));
 
     Ok(())
 }

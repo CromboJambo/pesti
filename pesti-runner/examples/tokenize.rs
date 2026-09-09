@@ -13,14 +13,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_path = &args[1];
     let text = &args[2];
 
-    let (config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
+    let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
         std::path::Path::new(model_path),
-        pesti_runner::TokenizerBackend::MistralRs,
+        pesti_runner::transformer::TokenizerBackend::MistralRs,
     )?;
 
-    let tokens = tokenizer.encode(text, true)?;
-    let ids: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
-    println!("{}", ids.join(","));
+    let ids = tokenizer.encode(text)?;
+    let id_strs: Vec<String> = ids.iter().map(|t| t.to_string()).collect();
+    println!("{}", id_strs.join(","));
 
     Ok(())
 }
