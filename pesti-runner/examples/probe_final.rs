@@ -22,10 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use pesti_runner::kernel::{CudaGemmKernelBuilder, GemmArch};
 
     let mode = std::env::args().nth(1).unwrap_or_else(|| "sync_d2h".into());
-    let warmup: bool = std::env::args()
-        .nth(2)
-        .map(|s| s == "1")
-        .unwrap_or(false);
+    let warmup: bool = std::env::args().nth(2).map(|s| s == "1").unwrap_or(false);
 
     let rt = Arc::new(CudaRuntime::new(0)?);
     let info = rt.device_info().clone();
@@ -114,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let r = sys::cuStreamSynchronize(s);
                 ss_ret = r as i32;
                 r.result().unwrap();
-            }
+            },
             "async_es" => unsafe {
                 sys::cuMemcpyDtoHAsync_v2(
                     c_host.as_mut_ptr() as *mut std::ffi::c_void,
@@ -133,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 es_ret = r as i32;
                 r.result().unwrap();
                 sys::cuEventDestroy_v2(ev);
-            }
+            },
             "blocking_async" => unsafe {
                 sys::cuMemcpyDtoHAsync_v2(
                     c_host.as_mut_ptr() as *mut std::ffi::c_void,
@@ -146,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let r = sys::cuStreamSynchronize(s);
                 ss_ret = r as i32;
                 r.result().unwrap();
-            }
+            },
             other => panic!("unknown mode {other}"),
         }
         ss_nanos += t0.elapsed().as_nanos();

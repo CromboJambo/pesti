@@ -73,7 +73,10 @@ fn main() {
                 })
             })
             .collect();
-        out.insert("tensors_stored_size".to_string(), serde_json::Value::Array(stored));
+        out.insert(
+            "tensors_stored_size".to_string(),
+            serde_json::Value::Array(stored),
+        );
         match serde_json::to_string_pretty(&out) {
             Ok(json) => {
                 println!("{json}");

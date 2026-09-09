@@ -7,8 +7,10 @@ pub mod state;
 pub mod divergence;
 pub mod scoping;
 pub mod logging;
+pub mod compaction;
 
 pub use state::{SlowFriendConfig, SlowFriendState};
 pub use divergence::{DivergenceMetric, DivergenceScore, divergence};
 pub use scoping::{ExpertPrior, apply_scoping, activation_pattern, jaccard_similarity};
 pub use logging::SessionLogger;
+pub use compaction::{CompactionTrigger, reanchor};

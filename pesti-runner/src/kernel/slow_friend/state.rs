@@ -45,6 +45,11 @@ impl SlowFriendState {
         &self.summary
     }
 
+    /// Mutable access to the summary for in-place modification (e.g., re-anchoring).
+    pub fn summary_mut(&mut self) -> &mut [f32] {
+        &mut self.summary
+    }
+
     pub fn norm(&self) -> f32 {
         let sum: f64 = self.summary.iter().map(|x| (*x as f64) * (*x as f64)).sum();
         (sum.sqrt()) as f32

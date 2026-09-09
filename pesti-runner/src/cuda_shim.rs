@@ -105,8 +105,7 @@ pub fn stream_synchronize(stream: &Arc<CudaStream>) -> Result<(), DriverError> {
     unsafe {
         use cudarc::driver::sys;
         let mut ev = std::mem::zeroed();
-        sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DEFAULT as u32)
-            .result()?;
+        sys::cuEventCreate(&mut ev, sys::CUevent_flags::CU_EVENT_DEFAULT as u32).result()?;
         let res = sys::cuEventRecord(ev, stream.cu_stream()).result();
         if res.is_err() {
             let _ = sys::cuEventDestroy_v2(ev);

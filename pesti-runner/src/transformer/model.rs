@@ -526,7 +526,9 @@ impl LlamaModel {
     /// bridge GPU device (see `LinearDispatch::new`), so `forward_with_dispatch`
     /// no longer rebuilds the 24 `LayerDispatch`es (f32→f16 + clone) or
     /// re-uploads the full weight matrices on every forward call.
-    fn build_dispatch_layers(layers: &[TransformerLayer]) -> Vec<crate::kernel::dispatch::LayerDispatch> {
+    fn build_dispatch_layers(
+        layers: &[TransformerLayer],
+    ) -> Vec<crate::kernel::dispatch::LayerDispatch> {
         layers.iter().map(Self::build_layer_dispatch).collect()
     }
 
@@ -632,7 +634,11 @@ impl LlamaModel {
         let w_t: Vec<f32> = (0..hidden)
             .flat_map(|k| (0..vocab).map(move |v| weight[v * hidden + k]))
             .collect();
-        match Tensor::from_vec(w_t, (hidden, vocab), crate::kernel::candle_bridge::bridge_device()) {
+        match Tensor::from_vec(
+            w_t,
+            (hidden, vocab),
+            crate::kernel::candle_bridge::bridge_device(),
+        ) {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::warn!(
@@ -1510,99 +1516,98 @@ impl LlamaModel {
             // at construction, so no per-call f32→f16 conversion, clone, or
             // weight re-upload. Falls back to building on demand when the cache
             // is absent (e.g. the empty wrapper model).
-            let layer_dispatch: Cow<'_, crate::kernel::dispatch::LayerDispatch> = if let Some(
-                cached,
-            ) = self
-                .dispatch_layers
-                .as_ref()
-                .and_then(|layers| layers.get(layer_idx))
-            {
-                Cow::Borrowed(cached)
-            } else {
-                // Build LayerDispatch from this layer's weights
-                let attention_dispatch = crate::kernel::dispatch::AttentionDispatch {
-                    wq: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.attention.wq.weight),
-                        layer.attention.wq.weight.clone(),
-                        layer.attention.wq.bias.clone(),
-                        layer.attention.wq.in_features,
-                        layer.attention.wq.out_features,
-                    ),
-                    wk: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.attention.wk.weight),
-                        layer.attention.wk.weight.clone(),
-                        layer.attention.wk.bias.clone(),
-                        layer.attention.wk.in_features,
-                        layer.attention.wk.out_features,
-                    ),
-                    wv: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.attention.wv.weight),
-                        layer.attention.wv.weight.clone(),
-                        layer.attention.wv.bias.clone(),
-                        layer.attention.wv.in_features,
-                        layer.attention.wv.out_features,
-                    ),
-                    wo: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.attention.wo.weight),
-                        layer.attention.wo.weight.clone(),
-                        layer.attention.wo.bias.clone(),
-                        layer.attention.wo.in_features,
-                        layer.attention.wo.out_features,
-                    ),
-                    num_heads: layer.attention.num_heads,
-                    num_kv_heads: layer.attention.num_kv_heads,
-                    head_dim: layer.attention.head_dim,
-                    kv_dim: layer.attention.kv_dim,
-                    rope_base: layer.attention.rope.base,
+            let layer_dispatch: Cow<'_, crate::kernel::dispatch::LayerDispatch> =
+                if let Some(cached) = self
+                    .dispatch_layers
+                    .as_ref()
+                    .and_then(|layers| layers.get(layer_idx))
+                {
+                    Cow::Borrowed(cached)
+                } else {
+                    // Build LayerDispatch from this layer's weights
+                    let attention_dispatch = crate::kernel::dispatch::AttentionDispatch {
+                        wq: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.attention.wq.weight),
+                            layer.attention.wq.weight.clone(),
+                            layer.attention.wq.bias.clone(),
+                            layer.attention.wq.in_features,
+                            layer.attention.wq.out_features,
+                        ),
+                        wk: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.attention.wk.weight),
+                            layer.attention.wk.weight.clone(),
+                            layer.attention.wk.bias.clone(),
+                            layer.attention.wk.in_features,
+                            layer.attention.wk.out_features,
+                        ),
+                        wv: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.attention.wv.weight),
+                            layer.attention.wv.weight.clone(),
+                            layer.attention.wv.bias.clone(),
+                            layer.attention.wv.in_features,
+                            layer.attention.wv.out_features,
+                        ),
+                        wo: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.attention.wo.weight),
+                            layer.attention.wo.weight.clone(),
+                            layer.attention.wo.bias.clone(),
+                            layer.attention.wo.in_features,
+                            layer.attention.wo.out_features,
+                        ),
+                        num_heads: layer.attention.num_heads,
+                        num_kv_heads: layer.attention.num_kv_heads,
+                        head_dim: layer.attention.head_dim,
+                        kv_dim: layer.attention.kv_dim,
+                        rope_base: layer.attention.rope.base,
+                    };
+
+                    let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
+                        w1: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.feed_forward.w1.weight),
+                            layer.feed_forward.w1.weight.clone(),
+                            layer.feed_forward.w1.bias.clone(),
+                            layer.feed_forward.w1.in_features,
+                            layer.feed_forward.w1.out_features,
+                        ),
+                        w2: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.feed_forward.w2.weight),
+                            layer.feed_forward.w2.weight.clone(),
+                            layer.feed_forward.w2.bias.clone(),
+                            layer.feed_forward.w2.in_features,
+                            layer.feed_forward.w2.out_features,
+                        ),
+                        w3: crate::kernel::dispatch::LinearDispatch::new(
+                            f32_to_f16(&layer.feed_forward.w3.weight),
+                            layer.feed_forward.w3.weight.clone(),
+                            layer.feed_forward.w3.bias.clone(),
+                            layer.feed_forward.w3.in_features,
+                            layer.feed_forward.w3.out_features,
+                        ),
+                        intermediate_dim: layer.feed_forward.intermediate_dim,
+                    };
+
+                    let attention_norm = crate::kernel::dispatch::RmsNormDispatch::new(
+                        layer.attention_norm.weight.clone(),
+                        layer.attention_norm.eps,
+                    );
+
+                    let ffn_norm = crate::kernel::dispatch::RmsNormDispatch::new(
+                        layer.ffn_norm.weight.clone(),
+                        layer.ffn_norm.eps,
+                    );
+
+                    let built = crate::kernel::dispatch::LayerDispatch {
+                        attention: attention_dispatch,
+                        feed_forward: feed_forward_dispatch,
+                        attention_norm,
+                        ffn_norm,
+                    };
+                    // Cache it so subsequent steps don't rebuild.
+                    if let Some(cache) = self.dispatch_layers.as_mut() {
+                        cache.push(built.clone());
+                    }
+                    Cow::Owned(built)
                 };
-
-                let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
-                    w1: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.feed_forward.w1.weight),
-                        layer.feed_forward.w1.weight.clone(),
-                        layer.feed_forward.w1.bias.clone(),
-                        layer.feed_forward.w1.in_features,
-                        layer.feed_forward.w1.out_features,
-                    ),
-                    w2: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.feed_forward.w2.weight),
-                        layer.feed_forward.w2.weight.clone(),
-                        layer.feed_forward.w2.bias.clone(),
-                        layer.feed_forward.w2.in_features,
-                        layer.feed_forward.w2.out_features,
-                    ),
-                    w3: crate::kernel::dispatch::LinearDispatch::new(
-                        f32_to_f16(&layer.feed_forward.w3.weight),
-                        layer.feed_forward.w3.weight.clone(),
-                        layer.feed_forward.w3.bias.clone(),
-                        layer.feed_forward.w3.in_features,
-                        layer.feed_forward.w3.out_features,
-                    ),
-                    intermediate_dim: layer.feed_forward.intermediate_dim,
-                };
-
-                let attention_norm = crate::kernel::dispatch::RmsNormDispatch::new(
-                    layer.attention_norm.weight.clone(),
-                    layer.attention_norm.eps,
-                );
-
-                let ffn_norm = crate::kernel::dispatch::RmsNormDispatch::new(
-                    layer.ffn_norm.weight.clone(),
-                    layer.ffn_norm.eps,
-                );
-
-                let built = crate::kernel::dispatch::LayerDispatch {
-                    attention: attention_dispatch,
-                    feed_forward: feed_forward_dispatch,
-                    attention_norm,
-                    ffn_norm,
-                };
-                // Cache it so subsequent steps don't rebuild.
-                if let Some(cache) = self.dispatch_layers.as_mut() {
-                    cache.push(built.clone());
-                }
-                Cow::Owned(built)
-            };
 
             // RoPE position is a property of the TOKEN, not the layer — every
             // layer applies RoPE at the same position. (Was `start_pos + layer_idx`,
@@ -1751,6 +1756,25 @@ impl LlamaModel {
         rng: &mut rand::rngs::StdRng,
         stop_tokens: &[u32],
     ) -> Result<Vec<u32>> {
+        self.generate_with_hook(prompt, max_tokens, sampling_config, rng, stop_tokens, |_, _| {})
+    }
+
+    /// Generate tokens with an optional per-step hook for the slow-friend substrate.
+    ///
+    /// The hook receives `(position: usize, hidden_state: &[f32])` at each decode step
+    /// and can observe/measure without affecting token generation (observational mode).
+    pub fn generate_with_hook<F>(
+        &mut self,
+        prompt: &[u32],
+        max_tokens: usize,
+        sampling_config: &crate::transformer::SamplingConfig,
+        rng: &mut rand::rngs::StdRng,
+        stop_tokens: &[u32],
+        mut hook: F,
+    ) -> Result<Vec<u32>>
+    where
+        F: FnMut(usize, &[f32]),
+    {
         let mut generated = Vec::new();
 
         // Prefill: run each prompt token through the model at its position so
@@ -1781,6 +1805,7 @@ impl LlamaModel {
         // Autoregressive decode: sample from the current logits, then run the
         // sampled token through the model at its position to produce logits for
         // the next step.
+        let mut hook = hook;
         for _ in 0..max_tokens {
             let next_token = if sampling_config.temperature == 0.0 {
                 Self::argmax_from_logits(&logits)
@@ -1804,6 +1829,11 @@ impl LlamaModel {
                 let hidden_out = self.forward_layers(&hidden, pos)?;
                 self.apply_output_head(&hidden_out)?
             };
+
+            // Slow-friend hook: observe hidden state at each decode step.
+            // In observational mode this does not affect token generation.
+            hook(pos, &logits);
+
             pos += 1;
 
             if pos >= self.config.max_seq_len {

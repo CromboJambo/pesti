@@ -9,13 +9,13 @@ use thiserror::Error;
 pub enum Qwen2Error {
     #[error("Encoding error: {0}")]
     Encode(String),
-    
+
     #[error("Decoding error: {0}")]
     Decode(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -36,10 +36,10 @@ pub struct SpecialTokens {
 pub struct Qwen2Config {
     /// Vocabulary: token_id → byte_sequence
     pub vocab: HashMap<u32, Vec<u8>>,
-    
+
     /// Merges: ordered list of (token1, token2, priority) tuples
     pub merges: Vec<(u32, u32, usize)>,
-    
+
     /// Special tokens (BOS, EOS, PAD)
     pub special_tokens: Option<SpecialTokens>,
 }
@@ -55,21 +55,21 @@ pub struct Qwen2Tokenizer {
 impl Qwen2Tokenizer {
     /// Create a new Qwen2 tokenizer from configuration
     pub fn new(config: Qwen2Config) -> Result<Self, Qwen2Error> {
-        let reverse_vocab: HashMap<Vec<u8>, u32> = config.vocab
+        let reverse_vocab: HashMap<Vec<u8>, u32> = config
+            .vocab
             .iter()
             .map(|(id, bytes)| (bytes.clone(), *id))
             .collect();
 
-        let forward_vocab: HashMap<u32, Vec<u8>> = config.vocab
+        let forward_vocab: HashMap<u32, Vec<u8>> = config
+            .vocab
             .iter()
             .map(|(id, bytes)| (*id, bytes.clone()))
             .collect();
 
         // Build a set of merge pairs for O(1) lookup
-        let merge_pairs: HashSet<(u32, u32)> = config.merges
-            .iter()
-            .map(|(t1, t2, _)| (*t1, *t2))
-            .collect();
+        let merge_pairs: HashSet<(u32, u32)> =
+            config.merges.iter().map(|(t1, t2, _)| (*t1, *t2)).collect();
 
         Ok(Self {
             config,
@@ -106,7 +106,8 @@ impl Qwen2Tokenizer {
     /// Load tokenizer with merges from JSON files
     pub fn load_with_merges(vocab_path: &str, merges_path: &str) -> Result<Self, Qwen2Error> {
         // Load vocabulary
-        let vocab_items: Vec<(String, u32)> = serde_json::from_str(&fs::read_to_string(vocab_path)?)?;
+        let vocab_items: Vec<(String, u32)> =
+            serde_json::from_str(&fs::read_to_string(vocab_path)?)?;
         let vocab: HashMap<u32, Vec<u8>> = vocab_items
             .iter()
             .map(|(token_str, token_id)| {
@@ -116,7 +117,8 @@ impl Qwen2Tokenizer {
             .collect();
 
         // Load merges
-        let merge_pairs_raw: Vec<(u32, u32, usize)> = serde_json::from_str(&fs::read_to_string(merges_path)?)?;
+        let merge_pairs_raw: Vec<(u32, u32, usize)> =
+            serde_json::from_str(&fs::read_to_string(merges_path)?)?;
 
         let config = Qwen2Config {
             vocab,
@@ -161,7 +163,12 @@ impl Qwen2Tokenizer {
     }
 
     /// Encode text with special tokens (BOS/EOS)
-    pub fn encode_with_special(&self, text: &str, add_bos: bool, add_eos: bool) -> Result<Vec<u32>, Qwen2Error> {
+    pub fn encode_with_special(
+        &self,
+        text: &str,
+        add_bos: bool,
+        add_eos: bool,
+    ) -> Result<Vec<u32>, Qwen2Error> {
         let mut tokens = self.encode(text)?;
 
         if add_bos {
@@ -190,7 +197,7 @@ impl Qwen2Tokenizer {
         loop {
             // Find first mergeable pair (two consecutive bytes) with lowest priority
             let best_merge = self.find_best_merge_bytes(&tokens)?;
-            
+
             if best_merge.is_none() {
                 break;
             }
@@ -207,10 +214,10 @@ impl Qwen2Tokenizer {
         for i in 0..tokens.len().saturating_sub(1) {
             let current = tokens[i];
             let next = tokens[i + 1];
-            
+
             // Convert to u32 for comparison with merge_pairs
             let pair = (current as u32, next as u32);
-            
+
             if self.merge_pairs.contains(&pair) {
                 return Ok(Some((current, next, i)));
             }
@@ -227,7 +234,7 @@ impl Qwen2Tokenizer {
         pos: usize,
     ) -> Vec<u8> {
         let mut result = Vec::with_capacity(tokens.len() - 1); // One less byte after merge
-        
+
         let mut i = 0;
         while i < tokens.len() {
             if i == pos && tokens.get(i + 1) == Some(&pair.1) {
@@ -246,7 +253,7 @@ impl Qwen2Tokenizer {
     /// Decode token IDs back to text
     pub fn decode(&self, tokens: &[u32]) -> Result<String, Qwen2Error> {
         let mut result = String::new();
-        
+
         for &token_id in tokens {
             if let Some(bytes) = self.forward_vocab.get(&token_id) {
                 match String::from_utf8(bytes.clone()) {
@@ -318,9 +325,9 @@ mod tests {
         };
 
         let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-        
+
         let tokens = tokenizer.encode("Hello").unwrap();
-        
+
         // Should return byte values: [72, 101, 108, 108, 111]
         assert_eq!(tokens.len(), 5);
     }
@@ -342,7 +349,7 @@ mod tests {
         };
 
         let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-        
+
         let decoded = tokenizer.decode(&[72, 101, 108, 108, 111]).unwrap();
         assert_eq!(decoded, "Hello");
     }
@@ -365,9 +372,9 @@ mod tests {
         };
 
         let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-        
+
         let tokens = tokenizer.encode("Hello").unwrap();
-        
+
         // Should have merged H+e but not the rest
         assert_eq!(tokens.len(), 4); // He, l, l, o
     }
@@ -379,9 +386,9 @@ mod tests {
         std::fs::write("/tmp/test_vocab.json", json_content).unwrap();
 
         let tokenizer = Qwen2Tokenizer::load_from_json("/tmp/test_vocab.json").unwrap();
-        
+
         assert_eq!(tokenizer.vocab_size(), 5);
-        
+
         // Clean up
         std::fs::remove_file("/tmp/test_vocab.json").unwrap();
     }
@@ -407,10 +414,10 @@ mod tests {
         };
 
         let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-        
+
         // Encode with BOS and EOS
         let tokens = tokenizer.encode_with_special("Hello", true, true).unwrap();
-        
+
         assert_eq!(tokens.len(), 7); // BOS + Hello + EOS
         assert_eq!(tokens[0], 151643); // BOS
         assert_eq!(tokens[6], 151644); // EOS (different from BOS)
@@ -437,10 +444,12 @@ mod tests {
         };
 
         let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-        
+
         // Decode with special tokens
-        let decoded = tokenizer.decode(&[151643, 72, 101, 108, 108, 111, 151644]).unwrap();
-        
+        let decoded = tokenizer
+            .decode(&[151643, 72, 101, 108, 108, 111, 151644])
+            .unwrap();
+
         assert!(decoded.contains("<|begin_of_text|>"));
         assert!(decoded.contains("Hello"));
         assert!(decoded.contains("<|end_of_text|>"));

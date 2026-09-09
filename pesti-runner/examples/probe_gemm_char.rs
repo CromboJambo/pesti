@@ -27,13 +27,7 @@
 //!   cargo run -p pesti-runner --release --features cuda --example probe_gemm_char
 use half::f16;
 
-fn run_case(
-    ctx: &pesti_runner::kernel::DispatchContext,
-    name: &str,
-    m: usize,
-    n: usize,
-    k: usize,
-) {
+fn run_case(ctx: &pesti_runner::kernel::DispatchContext, name: &str, m: usize, n: usize, k: usize) {
     // A = ones[m x k], B = identity[k x n] (B[k][j] = 1 if k==j else 0)
     let a: Vec<f16> = vec![f16::from_f32(1.0); m * k];
     let b: Vec<f16> = (0..k * n)

@@ -71,9 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-zero C on the stream (exposes any D2H race deterministically).
     fn rezero(c_ptr: sys::CUdeviceptr, count: usize, s: sys::CUstream) {
         unsafe {
-            sys::cuMemsetD32Async(c_ptr, 0, count, s)
-                .result()
-                .unwrap();
+            sys::cuMemsetD32Async(c_ptr, 0, count, s).result().unwrap();
         }
     }
 
@@ -111,7 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut c_buf =
                 pesti_runner::kernel::DeviceBuffer::<f32>::from_backend(c_handle, m * n);
             kernel.launch(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
-            unsafe { sys::cuStreamSynchronize(s_handle).result().unwrap(); }
+            unsafe {
+                sys::cuStreamSynchronize(s_handle).result().unwrap();
+            }
             if count_bad(&backend, c_handle, m, n) > 0 {
                 partial += 1;
             }
@@ -121,9 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- S2 flag fix: BLOCKING_SYNC, then sync S, sync-D2H ----
     {
-        rt.context()
-            .set_blocking_synchronize()
-            .unwrap();
+        rt.context().set_blocking_synchronize().unwrap();
         eprintln!("  (set CU_CTX_SCHED_BLOCKING_SYNC)");
         let mut partial = 0;
         for _ in 0..iters {
@@ -131,7 +129,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut c_buf =
                 pesti_runner::kernel::DeviceBuffer::<f32>::from_backend(c_handle, m * n);
             kernel.launch(1.0, &a_buf, &b_buf, 0.0, &mut c_buf, m, n, k)?;
-            unsafe { sys::cuStreamSynchronize(s_handle).result().unwrap(); }
+            unsafe {
+                sys::cuStreamSynchronize(s_handle).result().unwrap();
+            }
             if count_bad(&backend, c_handle, m, n) > 0 {
                 partial += 1;
             }
@@ -160,10 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap();
                 sys::cuStreamSynchronize(s_handle).result().unwrap();
             }
-            let bad = c_host
-                .iter()
-                .filter(|&&v| (v - 1.0).abs() > 1e-3)
-                .count();
+            let bad = c_host.iter().filter(|&&v| (v - 1.0).abs() > 1e-3).count();
             if bad > 0 {
                 partial += 1;
             }
@@ -191,10 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap();
                 rt.synchronize().unwrap();
             }
-            let bad = c_host
-                .iter()
-                .filter(|&&v| (v - 1.0).abs() > 1e-3)
-                .count();
+            let bad = c_host.iter().filter(|&&v| (v - 1.0).abs() > 1e-3).count();
             if bad > 0 {
                 partial += 1;
             }

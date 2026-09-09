@@ -22,11 +22,16 @@ fn main() {
     };
 
     let tokenizer = Qwen2Tokenizer::new(config).unwrap();
-    
+
     // Decode with special tokens
-    let decoded = tokenizer.decode(&[151643, 72, 101, 108, 108, 111, 151643]).unwrap();
-    
+    let decoded = tokenizer
+        .decode(&[151643, 72, 101, 108, 108, 111, 151643])
+        .unwrap();
+
     println!("Decoded: '{}'", decoded);
-    println!("Contains BOS tag: {}", decoded.contains("<|begin_of_text|>"));
+    println!(
+        "Contains BOS tag: {}",
+        decoded.contains("<|begin_of_text|>")
+    );
     println!("Contains EOS tag: {}", decoded.contains("<|end_of_text|>"));
 }

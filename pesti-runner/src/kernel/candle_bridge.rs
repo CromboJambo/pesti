@@ -91,6 +91,16 @@ pub fn tensor_to_f32(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
     tensor.to_vec1()
 }
 
+/// Flatten any-rank f32 tensor to a 1D vec on the host.
+pub fn tensor_to_f32_flat(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
+    let shape = tensor.shape();
+    let mut total = 1;
+    for dim in shape.dims() {
+        total *= dim;
+    }
+    tensor.reshape((total,))?.to_vec1()
+}
+
 /// Apply Rotary Positional Embedding (RoPE) using candle-core ops.
 ///
 /// Computes RoPE on the last dimension of the input tensor:

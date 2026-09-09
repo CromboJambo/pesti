@@ -49,9 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break; // Qwen2.5 eos
         }
         generated.push(next);
-        
+
         // Dump top-5 logits for comparison
-        let mut indexed: Vec<(f32, u32)> = logits.iter().enumerate()
+        let mut indexed: Vec<(f32, u32)> = logits
+            .iter()
+            .enumerate()
             .map(|(i, &v)| (v, i as u32))
             .collect();
         indexed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
@@ -60,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[RUST] step={} pos={} -> token {}", step, pos, next);
         eprintln!("  top5: {:?}", top5);
         eprintln!("  logits: {:?}", top5_logits);
-        
+
         let hidden = model.embed(next, pos)?;
         let h = model.forward_layers_with_cache(&hidden, pos)?;
         logits = model.apply_output_head(&h)?;

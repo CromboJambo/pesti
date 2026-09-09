@@ -43,7 +43,11 @@ fn run(
 
 fn main() {
     let ctx = pesti_runner::kernel::DispatchContext::new();
-    eprintln!("gpu={} arch={}", ctx.gpu_available(), ctx.gemm_arch().name());
+    eprintln!(
+        "gpu={} arch={}",
+        ctx.gpu_available(),
+        ctx.gemm_arch().name()
+    );
     // Sweep k values: multiples of 16 (full tiles) and partial tails.
     let ks: Vec<usize> = (1..=48)
         .chain([64usize, 80, 896, 1024])
@@ -66,9 +70,7 @@ fn main() {
         }
         let kmod = k % 16;
         let first: Vec<usize> = cols.iter().take(12).cloned().collect();
-        eprintln!(
-            "k={k:4} (k%16={kmod:2}) n={n:4} bad={bad:3} {tag} first={first:?}"
-        );
+        eprintln!("k={k:4} (k%16={kmod:2}) n={n:4} bad={bad:3} {tag} first={first:?}");
     }
     eprintln!("total failing k values: {fails}");
     eprintln!("fallback_count={}", ctx.gpu_fallback_count());

@@ -37,7 +37,11 @@ fn run(m: usize, k: usize, n: usize) {
     let shown: Vec<(usize, f32, f32)> = bad.iter().take(16).cloned().collect();
     eprintln!(
         "m={} k={} n={} : bad_cols={} first16={:?}",
-        m, k, n, bad.len(), shown
+        m,
+        k,
+        n,
+        bad.len(),
+        shown
     );
 }
 

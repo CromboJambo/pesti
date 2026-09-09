@@ -48,12 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test shapes: (m, k, n). A=ones[m x k], B=identity[k x n].
     // Expected C[i][j] = 1.0 if j < k else 0.0.
-    let shapes: [(usize, usize, usize); 4] = [
-        (1, 16, 64),
-        (1, 32, 64),
-        (1, 896, 96),
-        (1, 1024, 1024),
-    ];
+    let shapes: [(usize, usize, usize); 4] =
+        [(1, 16, 64), (1, 32, 64), (1, 896, 96), (1, 1024, 1024)];
 
     for (m, k, n) in shapes {
         // Allocate ONCE.

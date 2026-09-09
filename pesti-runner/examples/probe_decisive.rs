@@ -22,7 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use pesti_runner::kernel::{CudaGemmKernelBuilder, GemmArch};
 
     let mode = std::env::args().nth(1).unwrap_or_else(|| "event".into());
-    let iters: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+    let iters: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200);
 
     let rt = Arc::new(CudaRuntime::new(0)?);
     let info = rt.device_info().clone();
@@ -49,8 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_handle = backend.alloc(a.len() * 2)?;
     let b_handle = backend.alloc(b.len() * 2)?;
     let c_handle = backend.alloc(m * n * 4)?;
-    let a_bytes: &[u8] = unsafe { std::slice::from_raw_parts(a.as_ptr() as *const u8, a.len() * 2) };
-    let b_bytes: &[u8] = unsafe { std::slice::from_raw_parts(b.as_ptr() as *const u8, b.len() * 2) };
+    let a_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(a.as_ptr() as *const u8, a.len() * 2) };
+    let b_bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(b.as_ptr() as *const u8, b.len() * 2) };
     backend.h2d(a_bytes, a_handle)?;
     backend.h2d(b_bytes, b_handle)?;
     rt.context().synchronize().unwrap();
@@ -109,17 +114,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let min_j = bad.first().map(|(j, _)| *j).unwrap();
                 let max_j = bad.last().map(|(j, _)| *j).unwrap();
                 let all_zero = bad.iter().all(|(_, v)| *v == 0.0);
-                let sample: Vec<String> = bad.iter().take(8).map(|(j, v)| format!("{}={v:.3}", j)).collect();
+                let sample: Vec<String> = bad
+                    .iter()
+                    .take(8)
+                    .map(|(j, v)| format!("{}={v:.3}", j))
+                    .collect();
                 eprintln!(
                     "  [{}] iter={it} bad={} range=[{min_j}..{max_j}] all_zero={} sample=[{}]",
-                    mode, bad.len(), all_zero, sample.join(",")
+                    mode,
+                    bad.len(),
+                    all_zero,
+                    sample.join(",")
                 );
             }
         }
     }
-    eprintln!(
-        "mode={} k=1024: bad_iters={}/{}",
-        mode, bad_iters, iters
-    );
+    eprintln!("mode={} k=1024: bad_iters={}/{}", mode, bad_iters, iters);
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Minimal tokenizer test - encode text to token IDs
+use pesti_runner::{TokenizerBackend, load_tokenizer_from_gguf};
 use std::env;
-use pesti_runner::{load_tokenizer_from_gguf, TokenizerBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();

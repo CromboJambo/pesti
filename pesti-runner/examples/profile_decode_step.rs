@@ -50,13 +50,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_steps = 8usize;
     let mut times = Vec::new();
     for s in 0..n_steps {
-        let next = logits.iter().enumerate().fold((0usize, f32::NEG_INFINITY), |(pi, bv), (i, &v)| {
-            if v > bv {
-                (i, v)
-            } else {
-                (pi, bv)
-            }
-        });
+        let next =
+            logits
+                .iter()
+                .enumerate()
+                .fold((0usize, f32::NEG_INFINITY), |(pi, bv), (i, &v)| {
+                    if v > bv { (i, v) } else { (pi, bv) }
+                });
         let (tok_id, _) = next;
         let tok_id = tok_id as u32;
         let hidden = model.embed(tok_id, pos)?;
