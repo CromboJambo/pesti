@@ -43,6 +43,10 @@ use crate::kernel::attention_stub::{
 use crate::kernel::candle_bridge;
 use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
+use crate::kernel::fused_attention_conformant::{
+    build_fused_attention_kernel_conformant, FusedAttentionArch,
+};
+#[cfg(feature = "cuda")]
 use crate::kernel::gemm::{GemmArch, GemmKernel};
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::gemm_stub::{GemmArch, GemmKernel};
@@ -894,9 +898,59 @@ pub struct AttentionDispatch {
     /// RoPE base (theta). Qwen2.5 uses 1e6, not the 1e4 LLaMA default —
     /// must come from the model config, never hardcoded.
     pub rope_base: f32,
+    /// Optional fused attention kernel for GPU acceleration (set after construction).
+    #[cfg(feature = "cuda")]
+    pub fused_kernel: Option<crate::kernel::fused_attention_conformant::FusedAttentionKernel>,
 }
 
 impl AttentionDispatch {
+    /// Create a new AttentionDispatch with optional fused attention kernel.
+    pub fn new(
+        wq: LinearDispatch,
+        wk: LinearDispatch,
+        wv: LinearDispatch,
+        wo: LinearDispatch,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        rope_base: f32,
+    ) -> Self {
+        let kv_dim = num_kv_heads * head_dim;
+        #[cfg(feature = "cuda")]
+        let fused_kernel = None; // Will be set via set_fused_kernel() after CUDA init
+
+        Self {
+            wq,
+            wk,
+            wv,
+            wo,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            kv_dim,
+            rope_base,
+            #[cfg(feature = "cuda")]
+            fused_kernel,
+        }
+    }
+
+    /// Set the fused attention kernel for GPU acceleration.
+    #[cfg(feature = "cuda")]
+    pub fn set_fused_kernel(&mut self, kernel: crate::kernel::fused_attention_conformant::FusedAttentionKernel) {
+        self.fused_kernel = Some(kernel);
+    }
+
+    /// Check if fused attention kernel is available.
+    #[cfg(feature = "cuda")]
+    fn has_fused_kernel(&self) -> bool {
+        self.fused_kernel.is_some()
+    }
+
+    /// Check if fused attention kernel is available (CPU builds always false).
+    #[cfg(not(feature = "cuda"))]
+    fn has_fused_kernel(&self) -> bool {
+        false
+    }
     /// Compute scaled dot-product attention with dispatch.
     ///
     /// 1. Q/K/V projections (GPU or CPU via dispatch context)
@@ -1132,17 +1186,18 @@ impl AttentionDispatch {
         start_pos: usize,
     ) -> Result<(Tensor, Tensor), DispatchError> {
         let hd = self.head_dim;
+        let half = hd / 2;
         let (cos, sin) = candle_bridge::rope_embeddings(seq_len, hd, self.rope_base, start_pos)
             .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
 
-        // rope_embeddings produces f32; match the q/k dtype so the elementwise
-        // ops below don't hit a dtype mismatch.
+        // rope_embeddings returns [seq_len, half] in f32. Match q/k dtype.
         let dt = q.dtype();
         let cos = cos.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
         let sin = sin.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
 
-        // cos/sin: [seq_len, hd/2] → broadcast over leading dims
-        let half = hd / 2;
+        // q/k layout is [batch, heads, seq, head_dim]. After chunking on last dim,
+        // we get [batch, heads, seq, half]. We need to broadcast cos/sin [seq, half]
+        // to match. Build the target shape with 1s except for seq and half dims.
         let q_chunks = q.chunk(2, q.dims().len() - 1)
             .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
         let k_chunks = k.chunk(2, k.dims().len() - 1)
@@ -1152,33 +1207,51 @@ impl AttentionDispatch {
         let k0 = k_chunks[0].clone();
         let k1 = k_chunks[1].clone();
 
-        let c = cos.unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze: {e}")))?
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze: {e}")))?; // [1, 1, seq_len, half]
-        let s_ = sin.unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze: {e}")))?
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze: {e}")))?;
+        // Determine broadcast shape from actual tensor layout: [batch, heads, seq, half]
+        let q_shape = q0.shape().dims();
+        let k_shape = k0.shape().dims();
+        assert_eq!(q_shape.len(), 4, "expected 4D tensor");
+        assert_eq!(k_shape.len(), 4, "expected 4D tensor");
 
-        let q0r = (&q0 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let q1r = (&q1 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let qr0 = (&q0r - &q1r).map_err(|e| DispatchError::Kernel(format!("rope sub: {e}")))?;
-        let qr1a = (&q1 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let qr2 = (&q0 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let qr1 = (&qr1a + &qr2).map_err(|e| DispatchError::Kernel(format!("rope add: {e}")))?;
+        // Build broadcast shape: [batch, heads, seq, half]
+        let cos_q_shape = vec![1, q_shape[1], q_shape[2], q_shape[3]];
+        let sin_q_shape = cos_q_shape.clone();
+        let cos_k_shape = vec![1, k_shape[1], k_shape[2], k_shape[3]];
+        let sin_k_shape = cos_k_shape.clone();
 
-        let k0r = (&k0 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let k1r = (&k1 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let kr0 = (&k0r - &k1r).map_err(|e| DispatchError::Kernel(format!("rope sub: {e}")))?;
-        let kr1a = (&k1 * &c).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let kr2 = (&k0 * &s_).map_err(|e| DispatchError::Kernel(format!("rope mul: {e}")))?;
-        let kr1 = (&kr1a + &kr2).map_err(|e| DispatchError::Kernel(format!("rope add: {e}")))?;
+        // Reshape and broadcast cos/sin to match Q shape
+        let cos_q = cos.reshape(&cos_q_shape)
+            .map_err(|e| DispatchError::Kernel(format!("cos reshape q: {e}")))?;
+        let sin_q = sin.reshape(&sin_q_shape)
+            .map_err(|e| DispatchError::Kernel(format!("sin reshape q: {e}")))?;
 
-        let q_out = Tensor::cat(&[&qr0, &qr1], hd)
-            .map_err(|e| DispatchError::Kernel(format!("rope cat: {e}")))?;
-        let k_out = Tensor::cat(&[&kr0, &kr1], hd)
-            .map_err(|e| DispatchError::Kernel(format!("rope cat: {e}")))?;
+        // Reshape and broadcast cos/sin to match K shape
+        let cos_k = cos.clone().reshape(&cos_k_shape)
+            .map_err(|e| DispatchError::Kernel(format!("cos reshape k: {e}")))?;
+        let sin_k = sin.clone().reshape(&sin_k_shape)
+            .map_err(|e| DispatchError::Kernel(format!("sin reshape k: {e}")))?;
+
+        // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
+        let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
+        let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
+        let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
+        let q1c = (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
+        let q0s = (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
+        let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
+
+        // Apply RoPE to K
+        let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
+        let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
+        let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
+        let k1c = (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
+        let k0s = (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
+        let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
+
+        let last_dim = q.dims().len() - 1;
+        let q_out = Tensor::cat(&[&qr0, &qr1], last_dim)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat q: {e}")))?;
+        let k_out = Tensor::cat(&[&kr0, &kr1], last_dim)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat k: {e}")))?;
 
         Ok((q_out, k_out))
     }
@@ -1228,9 +1301,9 @@ impl AttentionDispatch {
 
         // Write RoPE'd K / V rows into the KV cache at global positions.
         let kv_dim = self.num_kv_heads * self.head_dim;
-        let k_rows: Vec<f32> = candle_bridge::tensor_to_f32(&k_rope_t)
+        let k_rows: Vec<f32> = candle_bridge::tensor_to_f32_flat(&k_rope_t)
             .map_err(|e| DispatchError::Kernel(format!("k rows to f32: {e}")))?;
-        let v_rows: Vec<f32> = candle_bridge::tensor_to_f32(&v_t)
+        let v_rows: Vec<f32> = candle_bridge::tensor_to_f32_flat(&v_t)
             .map_err(|e| DispatchError::Kernel(format!("v rows to f32: {e}")))?;
         for pos in 0..seq_len {
             let global_pos = start_pos + pos;
@@ -1238,8 +1311,7 @@ impl AttentionDispatch {
                 .iter().map(|&x| half::f16::from_f32(x)).collect();
             let v_row: Vec<half::f16> = v_rows[pos * kv_dim..(pos + 1) * kv_dim]
                 .iter().map(|&x| half::f16::from_f32(x)).collect();
-            // Write each tensor into its OWN cache's OWN region only (see
-            // Kvcache::write_kv_at docs / kv_write_no_cross_contamination).
+            // Write each tensor into its OWN cache's OWN region only.
             key_cache.write_k_at(global_pos, &k_row).map_err(|e| {
                 DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}"))
             })?;
@@ -1248,101 +1320,223 @@ impl AttentionDispatch {
             })?;
         }
 
-        // Read the full K/V history back from the caches. Layout:
-        // [pos][kv_head][head_dim] for pos < max_seq, then the V region.
-        let head_stride = self.num_kv_heads * self.head_dim;
-        let k_buf = key_cache.buffer().as_slice()
-            .ok_or_else(|| DispatchError::Kernel("K cache buffer unavailable".into()))?;
-        let v_buf = value_cache.buffer().as_slice()
-            .ok_or_else(|| DispatchError::Kernel("V cache buffer unavailable".into()))?;
-        let k_hist: Vec<half::f16> = (0..cache_len)
-            .flat_map(|p| k_buf[p * head_stride..(p + 1) * head_stride].iter().copied())
-            .collect();
-        let v_hist: Vec<half::f16> = (0..cache_len)
-            .flat_map(|p| v_buf[p * head_stride..(p + 1) * head_stride].iter().copied())
-            .collect();
+        // Use fused attention kernel if available and we have enough context.
+        // The fused kernel requires seq_k >= 2 for proper causal masking.
+        #[cfg(feature = "cuda")]
+        if self.has_fused_kernel() && cache_len >= 2 {
+            return self.forward_gpu_fused(
+                ctx, &q_rope_t, key_cache, value_cache, batch_size, seq_len, start_pos, scale,
+            );
+        }
 
-        let k_t2 = candle_bridge::f16_to_tensor(&k_hist, &[1, cache_len, self.num_kv_heads, self.head_dim], None)
-            .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k_hist): {e}")))?;
-        let v_t2 = candle_bridge::f16_to_tensor(&v_hist, &[1, cache_len, self.num_kv_heads, self.head_dim], None)
-            .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(v_hist): {e}")))?;
+        // Fall back to manual per-head attention for small sequences or when fused kernel unavailable.
+        self.forward_gpu_manual(
+            ctx, &q_rope_t, key_cache, value_cache, batch_size, seq_len, start_pos, scale,
+        )
+    }
 
-        // GQA: expand KV heads so every query head has its group's KV head.
-        // Query heads are grouped contiguously (head h → kv head h / g), so
-        // concat [k0 repeated g, k1 repeated g, ...] along the head dim.
+    /// GPU-accelerated attention using the fused RoPE+attention kernel.
+    #[cfg(feature = "cuda")]
+    fn forward_gpu_fused(
+        &self,
+        ctx: &DispatchContext,
+        q_rope_t: &Tensor,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
+        batch_size: usize,
+        seq_len: usize,
+        start_pos: usize,
+        scale: f32,
+    ) -> Result<Vec<f32>, DispatchError> {
+        let embed_dim = self.num_heads * self.head_dim;
+        let cache_len = start_pos + seq_len;
+
+        // Extract Q values from RoPE'd tensor.
+        let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
+            .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
+
+        // For GQA, expand K/V to match Q's head count for the fused kernel.
         let g = self.num_heads / self.num_kv_heads;
-        let mut k_parts: Vec<Tensor> = Vec::with_capacity(self.num_kv_heads * g);
-        let mut v_parts: Vec<Tensor> = Vec::with_capacity(self.num_kv_heads * g);
-        for kv_h in 0..self.num_kv_heads {
-            let k_g = k_t2
-                .narrow(2, kv_h, 1)
-                .map_err(|e| DispatchError::Kernel(format!("k narrow: {e}")))?;
-            let v_g = v_t2
-                .narrow(2, kv_h, 1)
-                .map_err(|e| DispatchError::Kernel(format!("v narrow: {e}")))?;
-            for _ in 0..g {
-                k_parts.push(k_g.clone());
-                v_parts.push(v_g.clone());
+        
+        // Allocate output buffer on host.
+        let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
+
+        // Process each query position separately (fused kernel works per-query).
+        for b in 0..batch_size {
+            for pos in 0..seq_len {
+                // Extract Q row for this position: [num_heads, head_dim] -> f16
+                let q_offset = ((b * seq_len + pos) * self.num_heads) * self.head_dim;
+                let q_row_f32 = &q_f32[q_offset..q_offset + embed_dim];
+                let q_row_f16: Vec<half::f16> = q_row_f32.iter()
+                    .map(|&x| half::f16::from_f32(x)).collect();
+
+                // Build expanded K/V tensors for GQA (repeat each KV head g times).
+                let mut k_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * embed_dim);
+                let mut v_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * embed_dim);
+                
+                for j in 0..cache_len {
+                    // For each KV position, expand all heads to match Q's head count.
+                    for h in 0..self.num_heads {
+                        let kv_h = h / g;
+                        let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                        let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                        k_expanded.extend_from_slice(&k_slice);
+                        v_expanded.extend_from_slice(&v_slice);
+                    }
+                }
+
+                // Allocate device buffers for Q, K, V, and output.
+                let q_bytes = std::mem::size_of_val(&q_row_f16[0]) * embed_dim;
+                let k_bytes = std::mem::size_of_val(&k_expanded[0]) * cache_len * embed_dim;
+                let v_bytes = std::mem::size_of_val(&v_expanded[0]) * cache_len * embed_dim;
+                let out_bytes = 4 * embed_dim; // f32 output
+
+                let q_handle = ctx.memory.alloc(q_bytes)
+                    .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
+                let k_handle = ctx.memory.alloc(k_bytes)
+                    .map_err(|e| DispatchError::Memory(format!("alloc k: {e}")))?;
+                let v_handle = ctx.memory.alloc(v_bytes)
+                    .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
+                let out_handle = ctx.memory.alloc(out_bytes)
+                    .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
+
+                // Transfer Q, K, V to device.
+                let q_ptr = unsafe { std::ptr::addr_of!(q_row_f16[0]) as *const u8 };
+                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(q_ptr, q_bytes) }, q_handle)
+                    .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
+
+                let k_ptr = unsafe { std::ptr::addr_of!(k_expanded[0]) as *const u8 };
+                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(k_ptr, k_bytes) }, k_handle)
+                    .map_err(|e| DispatchError::Transfer(format!("H2D k: {e}")))?;
+
+                let v_ptr = unsafe { std::ptr::addr_of!(v_expanded[0]) as *const u8 };
+                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(v_ptr, v_bytes) }, v_handle)
+                    .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
+
+                // Launch fused attention kernel.
+                if let Some(ref kernel) = self.fused_kernel {
+                    kernel.launch(
+                        scale,
+                        q_ptr as u64,
+                        k_ptr as u64,
+                        v_ptr as u64,
+                        out_handle.as_ptr() as u64,
+                        1, // seq_q = 1 (single query position)
+                        cache_len,
+                        self.num_heads,
+                        self.head_dim,
+                        self.rope_base,
+                        cache_len,
+                    ).map_err(|e| DispatchError::Kernel(format!("fused kernel launch: {e}")))?;
+                }
+
+                // Synchronize and read back result.
+                ctx.memory.sync().map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+                
+                let mut out_f32 = vec![0.0f32; embed_dim];
+                let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
+                ctx.memory.d2h(out_handle, unsafe { std::slice::from_raw_parts_mut(out_ptr, out_bytes) })
+                    .map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
+
+                // Free device buffers.
+                let _ = ctx.memory.free(q_handle);
+                let _ = ctx.memory.free(k_handle);
+                let _ = ctx.memory.free(v_handle);
+                let _ = ctx.memory.free(out_handle);
+
+                // Output projection.
+                let wo_output = self.wo.forward(ctx, &out_f32, 1)?;
+                let out_start = (b * seq_len + pos) * embed_dim;
+                output[out_start..out_start + embed_dim].copy_from_slice(&wo_output);
             }
         }
-        let k_exp = Tensor::cat(&k_parts, 2)
-            .map_err(|e| DispatchError::Kernel(format!("k cat: {e}")))?;
-        let v_exp = Tensor::cat(&v_parts, 2)
-            .map_err(|e| DispatchError::Kernel(format!("v cat: {e}")))?;
 
-        // Causal mask offset by start_pos: query i (global start_pos+i) may
-        // attend to keys j <= start_pos+i. eye(cache_len)[i, j] = 1 iff
-        // i == j, so the top-left [seq_len, cache_len] window is 1 on the
-        // diagonal shifted right by start_pos — exactly the allowed set.
-        let eye = Tensor::eye(cache_len, candle_core::DType::F32, candle_bridge::bridge_device())
-            .map_err(|e| DispatchError::Kernel(format!("eye: {e}")))?;
-        let mask = eye
-            .narrow(0, 0, seq_len)
-            .and_then(|m| m.narrow(1, 0, cache_len))
-            .map_err(|e| DispatchError::Kernel(format!("mask narrow: {e}")))?;
-        let neg_inf = Tensor::full(
-            f32::NEG_INFINITY,
-            (seq_len, cache_len),
-            candle_bridge::bridge_device(),
-        )
-            .map_err(|e| DispatchError::Kernel(format!("neg_inf full: {e}")))?;
-        let zero = Tensor::new(0.0f32, candle_bridge::bridge_device())
-            .map_err(|e| DispatchError::Kernel(format!("zero new: {e}")))?;
-        let attn_mask = mask
-            .where_cond(&zero, &neg_inf)
-            .map_err(|e| DispatchError::Kernel(format!("where_cond: {e}")))?;
+        Ok(output)
+    }
 
-        // scores [1, seq_len, num_heads, cache_len] → softmax → @ V
-        let k_exp_t = k_exp
-            .transpose(2, 3)
-            .map_err(|e| DispatchError::Kernel(format!("k transpose: {e}")))?;
-        let scale_t = Tensor::new(scale, candle_bridge::bridge_device())
-            .map_err(|e| DispatchError::Kernel(format!("scale tensor: {e}")))?;
-        let scores = q_rope_t
-            .matmul(&k_exp_t)
-            .and_then(|s| s.broadcast_mul(&scale_t))
-            .map_err(|e| DispatchError::Kernel(format!("scores matmul: {e}")))?;
-        let mask_b = attn_mask
-            .unsqueeze(0)
-            .and_then(|m| m.unsqueeze(0))
-            .map_err(|e| DispatchError::Kernel(format!("mask unsqueeze: {e}")))?;
-        let attn = (&scores + &mask_b)
-            .and_then(|a| candle_nn::ops::softmax(&a, candle_core::D::Minus1))
-            .map_err(|e| DispatchError::Kernel(format!("softmax: {e}")))?;
-        let attn_out = attn
-            .matmul(&v_exp)
-            .map_err(|e| DispatchError::Kernel(format!("attn matmul: {e}")))?;
+    /// Manual per-head attention fallback for small sequences or when fused kernel unavailable.
+    fn forward_gpu_manual(
+        &self,
+        ctx: &DispatchContext,
+        q_rope_t: &Tensor,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
+        batch_size: usize,
+        seq_len: usize,
+        start_pos: usize,
+        scale: f32,
+    ) -> Result<Vec<f32>, DispatchError> {
+        let embed_dim = self.num_heads * self.head_dim;
+        let cache_len = start_pos + seq_len;
 
-        // Output projection: [seq_len, num_heads*head_dim] @ wo^T per position
-        let attn_f32 = candle_bridge::tensor_to_f32(&attn_out)
-            .map_err(|e| DispatchError::Kernel(format!("attn out to f32: {e}")))?;
+        // Extract RoPE'd Q values as f32 for manual per-head attention.
+        let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
+            .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
 
+        // Process each query position and head.
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
         for b in 0..batch_size {
             for pos in 0..seq_len {
-                let attn_start = (b * seq_len + pos) * self.num_heads * self.head_dim;
-                let attn_slice = &attn_f32[attn_start..attn_start + self.num_heads * self.head_dim];
-                let wo_output = self.wo.forward(ctx, attn_slice, 1)?;
+                // Compute attention for each query head at this position.
+                let mut attn_concat = Vec::with_capacity(self.num_heads);
+                for q_h in 0..self.num_heads {
+                    let kv_h = q_h / (self.num_heads / self.num_kv_heads);
+
+                    // Extract Q row for this head from RoPE'd tensor: [head_dim]
+                    let q_offset = ((b * seq_len + pos) * self.num_heads + q_h) * self.head_dim;
+                    let q_row = &q_f32[q_offset..q_offset + self.head_dim];
+
+                    // Compute Q @ K^T for this head against its KV group.
+                    let mut scores = vec![f32::NEG_INFINITY; cache_len];
+                    for j in 0..cache_len {
+                        let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                        if k_slice.len() == self.head_dim {
+                            let mut dot = 0.0f32;
+                            for d in 0..self.head_dim {
+                                dot += q_row[d] * k_slice[d].to_f32();
+                            }
+                            scores[j] = dot * scale;
+
+                            // Causal mask: can't attend to future positions.
+                            let global_q_pos = start_pos + pos;
+                            if j > global_q_pos {
+                                scores[j] = f32::NEG_INFINITY;
+                            }
+                        }
+                    }
+
+                    // Softmax over scores.
+                    let max_s = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exp_scores: Vec<f32> = scores.iter()
+                        .map(|&s| (s - max_s).exp())
+                        .collect();
+                    let sum_exp: f32 = exp_scores.iter().sum();
+                    let attn_weights: Vec<f32> = exp_scores.iter()
+                        .map(|&e| e / sum_exp)
+                        .collect();
+
+                    // Weighted sum of V values for this group.
+                    let mut out_row = vec![0.0f32; self.head_dim];
+                    for (j, &w) in attn_weights.iter().enumerate() {
+                        let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                        if !v_slice.is_empty() {
+                            for d in 0..self.head_dim {
+                                out_row[d] += w * v_slice[d].to_f32();
+                            }
+                        }
+                    }
+
+                    attn_concat.push(out_row);
+                }
+
+                // Flatten all heads back to [num_heads * head_dim].
+                let mut flat_attn = Vec::with_capacity(self.num_heads * self.head_dim);
+                for row in attn_concat {
+                    flat_attn.extend(row);
+                }
+
+                // Output projection.
+                let wo_output = self.wo.forward(ctx, &flat_attn, 1)?;
                 let out_start = (b * seq_len + pos) * embed_dim;
                 output[out_start..out_start + embed_dim].copy_from_slice(&wo_output);
             }
