@@ -110,9 +110,9 @@ pub fn tensor_to_f32_flat(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Erro
 /// ```
 ///
 /// # Arguments
-/// * `x` — Input tensor [batch, seq_len, hidden] or [batch, seq_len, heads, head_dim]
-/// * `cos` — Cosine embeddings [seq_len, dim//2]
-/// * `sin` — Sine embeddings [seq_len, dim//2]
+/// * `x` — Input tensor [batch, seq_len, heads, head_dim] or similar
+/// * `cos` — Cosine embeddings [seq_len, half_dim]
+/// * `sin` — Sine embeddings [seq_len, half_dim]
 /// * `offset` — Sequence offset for KV cache continuation
 pub fn apply_rope(
     x: &Tensor,
@@ -130,25 +130,31 @@ pub fn apply_rope(
 
     // Extract the appropriate row from cos/sin based on offset
     // cos/sin have shape [seq_len, half_dim]; we need the row at `offset`
-    let cos_row = cos.narrow(0, offset, 1)?;
-    let sin_row = sin.narrow(0, offset, 1)?;
+    let cos_row = cos.narrow(0, offset, 1)?;  // [1, half_dim]
+    let sin_row = sin.narrow(0, offset, 1)?;  // [1, half_dim]
 
-    // Reshape cos/sin to broadcast against x's shape.
-    // x has shape [..., last_dim]; after splitting, x0/x1 have [..., half_dim].
-    // We reshape cos/sin from [1, half_dim] to [1, 1, ..., 1, half_dim] so they
-    // broadcast correctly across batch/seq/head dimensions.
-    let mut reshape_dims: Vec<usize> = vec![1; dims.len() - 1];
-    reshape_dims.push(half_dim);
-    let cos_reshaped = cos_row.reshape(reshape_dims.clone())?;
-    let sin_reshaped = sin_row.reshape(reshape_dims)?;
+    // Reshape to match x's shape: unsqueeze for each dimension except last
+    // Build target shape with 1s in all dims except last which is half_dim
+    let mut cos_target_shape = Vec::with_capacity(dims.len());
+    for i in 0..dims.len() - 1 {
+        cos_target_shape.push(1);
+    }
+    cos_target_shape.push(half_dim);
+
+    let cos_expanded = cos_row.reshape(cos_target_shape)?;
+    let sin_expanded = sin_row.reshape(cos_target_shape)?;
+
+    // Now broadcast to match x0's shape
+    let cos_bcast = cos_expanded.broadcast_as(x0.shape())?;
+    let sin_bcast = sin_expanded.broadcast_as(x0.shape())?;
 
     // Apply rotation: x0 * cos - x1 * sin, x1 * cos + x0 * sin
-    let x0_cos = (&x0 * &cos_reshaped)?;
-    let x1_sin = (&x1 * &sin_reshaped)?;
+    let x0_cos = (&x0 * &cos_bcast)?;
+    let x1_sin = (&x1 * &sin_bcast)?;
     let part0 = (&x0_cos - &x1_sin)?;
 
-    let x1_cos = (&x1 * &cos_reshaped)?;
-    let x0_sin = (&x0 * &sin_reshaped)?;
+    let x1_cos = (&x1 * &cos_bcast)?;
+    let x0_sin = (&x0 * &sin_bcast)?;
     let part1 = (&x1_cos + &x0_sin)?;
 
     // Concatenate back together along the last dimension
