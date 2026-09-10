@@ -1197,7 +1197,8 @@ impl AttentionDispatch {
 
         // q/k layout is [batch, heads, seq, head_dim]. After chunking on last dim,
         // we get [batch, heads, seq, half]. We need to broadcast cos/sin [seq, half]
-        // to match. Build the target shape with 1s except for seq and half dims.
+        // to match. Use unsqueeze to add batch and head dimensions, then rely on
+        // candle-core broadcasting during multiplication.
         let q_chunks = q.chunk(2, q.dims().len() - 1)
             .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
         let k_chunks = k.chunk(2, k.dims().len() - 1)
@@ -1207,29 +1208,17 @@ impl AttentionDispatch {
         let k0 = k_chunks[0].clone();
         let k1 = k_chunks[1].clone();
 
-        // Determine broadcast shape from actual tensor layout: [batch, heads, seq, half]
-        let q_shape = q0.shape().dims();
-        let k_shape = k0.shape().dims();
-        assert_eq!(q_shape.len(), 4, "expected 4D tensor");
-        assert_eq!(k_shape.len(), 4, "expected 4D tensor");
+        // Add singleton dimensions for batch and heads: [seq, half] -> [1, 1, seq, half]
+        let cos_q = cos.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
+        let cos_q = cos_q.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q2: {e}")))?;
+        let sin_q = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
+        let sin_q = sin_q.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q2: {e}")))?;
 
-        // Build broadcast shape: [batch, heads, seq, half]
-        let cos_q_shape = vec![1, q_shape[1], q_shape[2], q_shape[3]];
-        let sin_q_shape = cos_q_shape.clone();
-        let cos_k_shape = vec![1, k_shape[1], k_shape[2], k_shape[3]];
-        let sin_k_shape = cos_k_shape.clone();
-
-        // Reshape and broadcast cos/sin to match Q shape
-        let cos_q = cos.reshape(&cos_q_shape)
-            .map_err(|e| DispatchError::Kernel(format!("cos reshape q: {e}")))?;
-        let sin_q = sin.reshape(&sin_q_shape)
-            .map_err(|e| DispatchError::Kernel(format!("sin reshape q: {e}")))?;
-
-        // Reshape and broadcast cos/sin to match K shape
-        let cos_k = cos.clone().reshape(&cos_k_shape)
-            .map_err(|e| DispatchError::Kernel(format!("cos reshape k: {e}")))?;
-        let sin_k = sin.clone().reshape(&sin_k_shape)
-            .map_err(|e| DispatchError::Kernel(format!("sin reshape k: {e}")))?;
+        // Same for K (clone cos/sin since we consumed them for Q)
+        let cos_k = cos.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
+        let cos_k = cos_k.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k2: {e}")))?;
+        let sin_k = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
+        let sin_k = sin_k.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k2: {e}")))?;
 
         // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
         let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
