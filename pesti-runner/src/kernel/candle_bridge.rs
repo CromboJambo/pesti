@@ -141,7 +141,7 @@ pub fn apply_rope(
     }
     cos_target_shape.push(half_dim);
 
-    let cos_expanded = cos_row.reshape(cos_target_shape)?;
+    let cos_expanded = cos_row.reshape(cos_target_shape.clone())?;
     let sin_expanded = sin_row.reshape(cos_target_shape)?;
 
     // Now broadcast to match x0's shape
