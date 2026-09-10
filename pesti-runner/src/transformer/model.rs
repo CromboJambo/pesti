@@ -576,6 +576,8 @@ impl LlamaModel {
             head_dim: layer.attention.head_dim,
             kv_dim: layer.attention.kv_dim,
             rope_base: layer.attention.rope.base,
+            #[cfg(feature = "cuda")]
+            fused_kernel: None, // Set later via set_fused_kernel() after CUDA init
         };
         let feed_forward = FeedForwardDispatch {
             w1: LinearDispatch::new(
@@ -1559,6 +1561,8 @@ impl LlamaModel {
                         head_dim: layer.attention.head_dim,
                         kv_dim: layer.attention.kv_dim,
                         rope_base: layer.attention.rope.base,
+                        #[cfg(feature = "cuda")]
+                        fused_kernel: None,
                     };
 
                     let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
@@ -1842,6 +1846,34 @@ impl LlamaModel {
         }
 
         Ok(generated)
+    }
+
+    /// Enable fused attention kernel on all layers.
+    #[cfg(feature = "cuda")]
+    pub fn enable_fused_attention(
+        &mut self,
+        context: &cudarc::driver::safe::CudaContext,
+        stream: &cudarc::driver::safe::CudaStream,
+    ) -> Result<(), Error> {
+        use crate::kernel::fused_attention_conformant::{
+            build_fused_attention_kernel_conformant, FusedAttentionArch,
+        };
+        use std::sync::Arc;
+
+        let kernel = build_fused_attention_kernel_conformant(
+            FusedAttentionArch::MmaSync,
+            Arc::new(context.clone()),
+            Arc::new(stream.clone()),
+        )
+        .map_err(|e| Error::Other(format!("failed to build fused attention kernel: {}", e)))?;
+
+        let kernel = Arc::new(kernel);
+
+        for layer in &mut self.layers {
+            layer.attn.fused_kernel = Some(Arc::clone(&kernel));
+        }
+
+        Ok(())
     }
 }
 
