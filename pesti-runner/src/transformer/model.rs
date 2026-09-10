@@ -1847,34 +1847,6 @@ impl LlamaModel {
 
         Ok(generated)
     }
-
-    /// Enable fused attention kernel on all layers.
-    #[cfg(feature = "cuda")]
-    pub fn enable_fused_attention(
-        &mut self,
-        context: &cudarc::driver::safe::CudaContext,
-        stream: &cudarc::driver::safe::CudaStream,
-    ) -> Result<(), Error> {
-        use crate::kernel::fused_attention_conformant::{
-            build_fused_attention_kernel_conformant, FusedAttentionArch,
-        };
-        use std::sync::Arc;
-
-        let kernel = build_fused_attention_kernel_conformant(
-            FusedAttentionArch::MmaSync,
-            Arc::new(context.clone()),
-            Arc::new(stream.clone()),
-        )
-        .map_err(|e| Error::Other(format!("failed to build fused attention kernel: {}", e)))?;
-
-        let kernel = Arc::new(kernel);
-
-        for layer in &mut self.layers {
-            layer.attn.fused_kernel = Some(Arc::clone(&kernel));
-        }
-
-        Ok(())
-    }
 }
 
 /// Convert f16 tensor bytes to f32 Vec.
