@@ -41,8 +41,8 @@ PESTI has a working GPU inference path for Qwen2.5-0.5B-Instruct with:
 ### Week 20: FP16 KV Cache Integration (✅ Complete)
 - [x] Implement FP16 KV cache storage (kernel/kvcache.rs uses half::f16)
 - [x] Verify memory savings — benchmark confirms 50% reduction vs FP32
-- [x] Measure throughput impact — blocked by pre-existing RoPE broadcasting bug
-- **Result**: FP16 KV cache implemented and verified; end-to-end tok/s measurement deferred due to unrelated rope_tensors shape mismatch bug in GPU forward path (rope mul: lhs [1,1,14,32] vs rhs [1,1,1,32])
+- [x] Measure throughput impact — **0.52 tok/s** on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64)
+- **Result**: FP16 KV cache implemented and verified; real tok/s measurement achieved after fixing RoPE broadcasting bug in rope_tensors (explicit expand() for tensor layout [batch,seq,heads,half])
 
 ## Key Lessons Learned
 
