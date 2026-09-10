@@ -1208,17 +1208,20 @@ impl AttentionDispatch {
         let k0 = k_chunks[0].clone();
         let k1 = k_chunks[1].clone();
 
-        // Add singleton dimensions for batch and heads: [seq, half] -> [1, 1, seq, half]
-        let cos_q = cos.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
-        let cos_q = cos_q.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q2: {e}")))?;
-        let sin_q = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
-        let sin_q = sin_q.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q2: {e}")))?;
+        // q/k layout is [batch, seq_len, heads, head_dim]. After chunking on last dim,
+        // we get [batch, seq_len, heads, half]. cos/sin are [seq_len, half] — need to
+        // broadcast to match. Insert singleton dims for batch (pos 0) and heads (pos 2):
+        //   [seq, half] -> unsqueeze(0) -> [1, seq, half] -> unsqueeze(2) -> [1, seq, 1, half]
+        let cos_q = cos.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q batch: {e}")))?;
+        let cos_q = cos_q.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q heads: {e}")))?;
+        let sin_q = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q batch: {e}")))?;
+        let sin_q = sin_q.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q heads: {e}")))?;
 
         // Same for K (clone cos/sin since we consumed them for Q)
-        let cos_k = cos.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
-        let cos_k = cos_k.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k2: {e}")))?;
-        let sin_k = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
-        let sin_k = sin_k.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k2: {e}")))?;
+        let cos_k = cos.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k batch: {e}")))?;
+        let cos_k = cos_k.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k heads: {e}")))?;
+        let sin_k = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k batch: {e}")))?;
+        let sin_k = sin_k.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k heads: {e}")))?;
 
         // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
         let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
