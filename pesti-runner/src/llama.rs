@@ -738,9 +738,10 @@ impl LlamaRunner {
         if config.repetition_penalty != 1.0 {
             samplers.push(LlamaSampler::penalties(
                 config.repeat_last_n,
+                0,
+                0.0,
+                0.0,
                 config.repetition_penalty as f32,
-                0.0,
-                0.0,
             ));
         }
 
