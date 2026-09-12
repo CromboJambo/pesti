@@ -9,15 +9,9 @@
 
 use std::time::Instant;
 
-use llama_cpp_2::token::LlamaToken;
 use pesti_runner::llama::{LlamaRunner, SamplingConfig};
-use tracing_subscriber::EnvFilter;
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
-
     let model_path = std::env::args()
         .nth(1)
         .expect("Usage: batched_generation_spike <model.gguf>");
@@ -64,7 +58,7 @@ fn main() {
     let t_batch_start = Instant::now();
 
     // Encode all prompts
-    let mut prompt_tokens: Vec<Vec<LlamaToken>> = Vec::new();
+    let mut prompt_tokens = Vec::new();
     for prompt in &prompts {
         let tokens = runner.encode(prompt, true).expect("encode failed");
         prompt_tokens.push(tokens);
