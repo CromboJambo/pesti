@@ -31,7 +31,7 @@ Numerical conformance validated vs llama.cpp reference outputs.
 ## Upcoming Work
 
 ### Week 22: Debt and Spikes
-- [ ] Fix remaining clippy warnings (unused vars in stub code, missing Safety docs)
+- [x] Fix remaining clippy warnings (unused vars in stub code, missing Safety docs) — down from 193 to 136 warnings
 - [ ] Spike: batched generation for parallel prompts
 
 ### Week 23+: Optimization and Scale
