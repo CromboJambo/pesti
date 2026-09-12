@@ -64,9 +64,9 @@ impl SafetensorsWriter {
         writer.write_all(header_json.as_bytes())?;
 
         // 3. Write padding
-        for _ in 0..padding {
-            writer.write(&[0u8])?;
-        }
+        let pad_size = padding as usize;
+        let pad = vec![0u8; pad_size];
+        writer.write_all(&pad)?;
 
         // 4. Write tensor data
         for tensor in &self.tensors {
@@ -235,8 +235,6 @@ mod tests {
 
     #[test]
     fn test_round_trip_full_model() {
-        use std::collections::HashMap;
-
         let mut writer = SafetensorsWriter::new();
 
         // Simulate a complete model with multiple layers

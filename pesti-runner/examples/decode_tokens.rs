@@ -23,7 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pesti_runner::TokenizerBackend::MistralRs,
     )?;
 
-    let text = tokenizer.decode(&ids, true).map_err(|e| format!("decode error: {}", e))?;
+    let text = tokenizer
+        .decode(&ids, true)
+        .map_err(|e| format!("decode error: {}", e))?;
     println!("{}", text);
 
     Ok(())

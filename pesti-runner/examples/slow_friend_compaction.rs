@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use pesti_runner::kernel::slow_friend::{
-    divergence, DivergenceMetric, SlowFriendConfig, SlowFriendState, CompactionTrigger, reanchor,
+    CompactionTrigger, DivergenceMetric, SlowFriendConfig, SlowFriendState, divergence, reanchor,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,7 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
 
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
-    let (_, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
+    let (_, tokenizer) =
+        pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
 
     // Build deterministic long prompt by repeating seed
     let seed = "The quick brown fox jumps over the lazy dog. ";
@@ -42,7 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prompt_tokens.truncate(seq_len);
 
     let hidden_dim = model.config.embed_dim;
-    let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+    let sf_cfg = SlowFriendConfig {
+        dim: hidden_dim,
+        alpha: 0.95,
+    };
 
     // === Baseline: No compaction ===
     eprintln!("\n[baseline] Running without compaction...");
@@ -99,17 +103,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     let baseline_mean = baseline_scores.iter().sum::<f32>() / baseline_scores.len() as f32;
-    let baseline_max = baseline_scores.iter().cloned().fold(f32::MIN, |a, b| a.max(b));
+    let baseline_max = baseline_scores
+        .iter()
+        .cloned()
+        .fold(f32::MIN, |a, b| a.max(b));
     let baseline_tail = tail_mean(&baseline_scores);
 
     let comp_mean = compacted_scores.iter().sum::<f32>() / compacted_scores.len() as f32;
-    let comp_max = compacted_scores.iter().cloned().fold(f32::MIN, |a, b| a.max(b));
+    let comp_max = compacted_scores
+        .iter()
+        .cloned()
+        .fold(f32::MIN, |a, b| a.max(b));
     let comp_tail = tail_mean(&compacted_scores);
 
     println!("Condition     | mean_div   | max_div    | tail_mean  | reanchors");
     println!("--------------|------------|------------|------------|----------");
-    println!("baseline      | {:>10.6} | {:>10.6} | {:>10.6} | {}", baseline_mean, baseline_max, baseline_tail, 0);
-    println!("compacted     | {:>10.6} | {:>10.6} | {:>10.6} | {}", comp_mean, comp_max, comp_tail, reanchor_count);
+    println!(
+        "baseline      | {:>10.6} | {:>10.6} | {:>10.6} | {}",
+        baseline_mean, baseline_max, baseline_tail, 0
+    );
+    println!(
+        "compacted     | {:>10.6} | {:>10.6} | {:>10.6} | {}",
+        comp_mean, comp_max, comp_tail, reanchor_count
+    );
 
     let improvement = if baseline_mean > 0.0 {
         (baseline_mean - comp_mean) / baseline_mean * 100.0
@@ -122,9 +138,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // G6 Verdict
     println!("\nG6 Verdict:");
     if comp_tail < baseline_tail {
-        println!("PASS(G6): Compaction reduces final drift ({:.6} -> {:.6})", baseline_tail, comp_tail);
+        println!(
+            "PASS(G6): Compaction reduces final drift ({:.6} -> {:.6})",
+            baseline_tail, comp_tail
+        );
     } else {
-        println!("FAIL(G6): Compaction did not reduce final drift ({:.6} vs {:.6})", baseline_tail, comp_tail);
+        println!(
+            "FAIL(G6): Compaction did not reduce final drift ({:.6} vs {:.6})",
+            baseline_tail, comp_tail
+        );
     }
 
     eprintln!("\nBaseline elapsed: {:.3}s", baseline_elapsed.as_secs_f64());

@@ -76,10 +76,16 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![1.0, 2.0, 3.0];
         let score = divergence(DivergenceMetric::Cosine, &a, &b);
-        assert!((score.value - 0.0).abs() < 1e-6, "cosine should be 0 for identical vectors");
+        assert!(
+            (score.value - 0.0).abs() < 1e-6,
+            "cosine should be 0 for identical vectors"
+        );
 
         let score2 = divergence(DivergenceMetric::RelL2, &a, &b);
-        assert!((score2.value - 0.0).abs() < 1e-6, "relL2 should be 0 for identical vectors");
+        assert!(
+            (score2.value - 0.0).abs() < 1e-6,
+            "relL2 should be 0 for identical vectors"
+        );
     }
 
     #[test]
@@ -87,7 +93,10 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
         let score = divergence(DivergenceMetric::Cosine, &a, &b);
-        assert!((score.value - 1.0).abs() < 1e-6, "cosine distance for orthogonal should be 1");
+        assert!(
+            (score.value - 1.0).abs() < 1e-6,
+            "cosine distance for orthogonal should be 1"
+        );
     }
 
     #[test]
@@ -103,6 +112,9 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![4.0, 5.0, 6.0];
         let score = divergence(DivergenceMetric::RelL2, &a, &b);
-        assert!(score.value >= 0.0 && score.value <= 1.0, "relL2 must be in [0,1]");
+        assert!(
+            score.value >= 0.0 && score.value <= 1.0,
+            "relL2 must be in [0,1]"
+        );
     }
 }

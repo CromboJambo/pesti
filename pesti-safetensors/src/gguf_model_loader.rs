@@ -202,7 +202,6 @@ pub fn get_tensor_byte_range(header: &GgufHeader, tensor: &GgufTensorInfo) -> (u
 mod tests {
     use super::*;
     use pesti_gguf::types::{GgufKvPair, GgufKvValue, GgufValueType};
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn make_test_gguf_header() -> GgufHeader {
@@ -274,7 +273,7 @@ mod tests {
         let tensor = &header.tensors[0];
         let (offset, size) = get_tensor_byte_range(&header, tensor);
 
-        assert_eq!(offset, 1024 + 0); // data_section_start + tensor.offset
+        assert_eq!(offset, 1024); // data_section_start + tensor.offset
         assert_eq!(size, 4096 * 2); // 4096 elements * 2 bytes (F16)
     }
 

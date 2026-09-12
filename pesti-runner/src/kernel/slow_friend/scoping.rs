@@ -33,7 +33,11 @@ impl ExpertPrior {
                 .collect();
             projection.push(row);
         }
-        Self { num_experts, dim, projection }
+        Self {
+            num_experts,
+            dim,
+            projection,
+        }
     }
 
     /// Compute relevance scores for each expert slot from the stable state.

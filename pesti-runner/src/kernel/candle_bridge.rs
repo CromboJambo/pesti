@@ -121,7 +121,9 @@ pub fn apply_rope(
     offset: usize,
 ) -> Result<Tensor, candle_core::Error> {
     let dims = x.dims();
-    let last_dim = *dims.last().ok_or(candle_core::Error::Msg("x has no last dim".into()))?;
+    let last_dim = *dims
+        .last()
+        .ok_or(candle_core::Error::Msg("x has no last dim".into()))?;
     let half_dim = last_dim / 2;
 
     // Split x into two halves along the last dimension
@@ -130,8 +132,8 @@ pub fn apply_rope(
 
     // Extract the appropriate row from cos/sin based on offset
     // cos/sin have shape [seq_len, half_dim]; we need the row at `offset`
-    let cos_row = cos.narrow(0, offset, 1)?;  // [1, half_dim]
-    let sin_row = sin.narrow(0, offset, 1)?;  // [1, half_dim]
+    let cos_row = cos.narrow(0, offset, 1)?; // [1, half_dim]
+    let sin_row = sin.narrow(0, offset, 1)?; // [1, half_dim]
 
     // Reshape to match x's shape: unsqueeze for each dimension except last
     // Build target shape with 1s in all dims except last which is half_dim

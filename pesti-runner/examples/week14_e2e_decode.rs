@@ -31,6 +31,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
     println!("Built model in {:.2}s", t1.elapsed().as_secs_f32());
 
+    // Enable fused attention kernel for speed
+    #[cfg(feature = "cuda")]
+    {
+        use cudarc::driver::{Context, Stream};
+        let ctx = Context::current();
+        let stream = Stream::null_stream();
+        if let Err(e) = model.enable_fused_attention(&ctx, &stream) {
+            println!("Warning: fused attention not enabled: {}", e);
+        } else {
+            println!("Fused attention kernel enabled");
+        }
+    }
+
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
     let (tokenizer_config, tokenizer) =
         pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;

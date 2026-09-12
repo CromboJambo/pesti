@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use pesti_runner::kernel::slow_friend::{
-    divergence, DivergenceMetric, SessionLogger, SlowFriendConfig, SlowFriendState,
+    DivergenceMetric, SessionLogger, SlowFriendConfig, SlowFriendState, divergence,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,7 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
 
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
-    let (_, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
+    let (_, tokenizer) =
+        pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
 
     // Build deterministic prompt
     let seed = "The quick brown fox jumps over the lazy dog. ";
@@ -46,7 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     model.reset_cpu_kv_caches();
 
     let hidden_dim = model.config.embed_dim;
-    let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+    let sf_cfg = SlowFriendConfig {
+        dim: hidden_dim,
+        alpha: 0.95,
+    };
     let mut slow = SlowFriendState::new(&sf_cfg);
     let mut logger = SessionLogger::new();
 

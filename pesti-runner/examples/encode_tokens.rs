@@ -17,7 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Use encode() directly (same as cpu_e2e_generate)
-    let ids = tokenizer.encode(text.as_str(), true).map_err(|e| format!("encode error: {}", e))?.get_ids().to_vec();
+    let ids = tokenizer
+        .encode(text.as_str(), true)
+        .map_err(|e| format!("encode error: {}", e))?
+        .get_ids()
+        .to_vec();
     let id_strs: Vec<String> = ids.iter().map(|t| t.to_string()).collect();
     println!("{}", id_strs.join(","));
 

@@ -502,7 +502,7 @@ fn dequant_q6k_block(base: &[u8], limit: usize, out: &mut Vec<f32>) {
         for l in 0..32 {
             let is_ = l / 16;
             let lo1 = ql[ql_base + l] & 0x0F;
-            let hi1 = ((qh[qh_base + l] >> 0) & 0x03) << 4;
+            let hi1 = (qh[qh_base + l] & 0x03) << 4;
             let q1 = (lo1 | hi1) as i8 - 32;
             let lo2 = ql[ql_base + l + 32] & 0x0F;
             let hi2 = ((qh[qh_base + l] >> 2) & 0x03) << 4;
@@ -522,7 +522,11 @@ fn dequant_q6k_block(base: &[u8], limit: usize, out: &mut Vec<f32>) {
             buf[l + 64] = d * s4 * q3 as f32;
             buf[l + 96] = d * s6 * q4 as f32;
         }
-        let take = if limit > chunk_start { (limit - chunk_start).min(128) } else { 0 };
+        let take = if limit > chunk_start {
+            (limit - chunk_start).min(128)
+        } else {
+            0
+        };
         for v in buf.iter().take(take) {
             out.push(*v);
         }
@@ -722,11 +726,11 @@ pub fn convert_gguf_to_safetensors(
 
     let model_name = header
         .get_kv_str("general.name")
-        .unwrap_or(&"unknown".to_string())
+        .unwrap_or("unknown")
         .to_string();
     let base_model = header
         .get_kv_str("general.base_model")
-        .unwrap_or(&"unknown".to_string())
+        .unwrap_or("unknown")
         .to_string();
 
     eprintln!(

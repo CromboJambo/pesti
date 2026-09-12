@@ -425,7 +425,7 @@ fn dequantize_q3_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         let tmp = aux[2];
         aux[2] = ((aux[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
         aux[3] = ((aux[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
-        aux[0] = (aux[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux[0] = (aux[0] & kmask2) | ((tmp & kmask1) << 4);
         aux[1] = (aux[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
         let mut scales = [0i8; 16];
         for i in 0..4 {
@@ -628,7 +628,7 @@ fn dequantize_q6_k(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
             for l in 0..32 {
                 let is = l / 16;
                 let q1 =
-                    ((ql[ql_base + l] & 0x0F) | (((qh[qh_base + l] >> 0) & 0x03) << 4)) as i8 - 32;
+                    ((ql[ql_base + l] & 0x0F) | ((qh[qh_base + l] & 0x03) << 4)) as i8 - 32;
                 let q2 = ((ql[ql_base + l + 32] & 0x0F) | (((qh[qh_base + l] >> 2) & 0x03) << 4))
                     as i8
                     - 32;
@@ -769,7 +769,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
         // Dequantize: each byte contains two 4-bit values (0-15)
         for i in 0..16 {
             let q = if i % 2 == 0 {
-                (qs[i / 2] >> 0) & 0x0F
+                qs[i / 2] & 0x0F
             } else {
                 (qs[i / 2] >> 4) & 0x0F
             };
@@ -793,7 +793,7 @@ fn dequantize_q4_0(data: &[u8], element_count: usize) -> Result<Vec<f32>> {
 
         for i in 0..remaining {
             let q = if i % 2 == 0 {
-                (qs[i / 2] >> 0) & 0x0F
+                qs[i / 2] & 0x0F
             } else {
                 (qs[i / 2] >> 4) & 0x0F
             };

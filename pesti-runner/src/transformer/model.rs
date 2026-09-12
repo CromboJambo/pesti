@@ -1760,7 +1760,14 @@ impl LlamaModel {
         rng: &mut rand::rngs::StdRng,
         stop_tokens: &[u32],
     ) -> Result<Vec<u32>> {
-        self.generate_with_hook(prompt, max_tokens, sampling_config, rng, stop_tokens, |_, _| {})
+        self.generate_with_hook(
+            prompt,
+            max_tokens,
+            sampling_config,
+            rng,
+            stop_tokens,
+            |_, _| {},
+        )
     }
 
     /// Generate tokens with an optional per-step hook for the slow-friend substrate.

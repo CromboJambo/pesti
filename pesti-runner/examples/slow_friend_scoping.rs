@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use pesti_runner::kernel::slow_friend::{
-    apply_scoping, activation_pattern, ExpertPrior, SlowFriendConfig, SlowFriendState,
+    ExpertPrior, SlowFriendConfig, SlowFriendState, activation_pattern, apply_scoping,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,7 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(s) => s.clone(),
         None => std::env::var("PESTI_SLOW_SEQS").unwrap_or_else(|_| "256,512,1024".into()),
     };
-    let seq_lens: Vec<usize> = seq_lens_str.split(',').map(|s| s.trim().parse())
+    let seq_lens: Vec<usize> = seq_lens_str
+        .split(',')
+        .map(|s| s.trim().parse())
         .collect::<Result<Vec<usize>, _>>()?;
 
     if seq_lens.len() < 2 {
@@ -38,14 +40,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("======================================");
     println!("model: {}", model_path);
     println!("seq_lengths: {:?}", seq_lens);
-    println!("synthetic_experts: {} (hidden-state region partitioning)", num_experts);
+    println!(
+        "synthetic_experts: {} (hidden-state region partitioning)",
+        num_experts
+    );
 
     // Load model and tokenizer using the same pattern as G1 drift probe
     let weights = pesti_runner::load_gguf_weights(Path::new(model_path))?;
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
 
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
-    let (_, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
+    let (_, tokenizer) =
+        pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
 
     // Seed sentence for deterministic long prompts
     let seed = "The quick brown fox jumps over the lazy dog. ";
@@ -69,7 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.reset_cpu_kv_caches();
 
         let hidden_dim = model.config.embed_dim;
-        let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+        let sf_cfg = SlowFriendConfig {
+            dim: hidden_dim,
+            alpha: 0.95,
+        };
         let mut slow = SlowFriendState::new(&sf_cfg);
 
         let t_start = Instant::now();
@@ -87,7 +96,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let elapsed = t_start.elapsed();
-        eprintln!("[seq={},scoped=false] done in {:.3}s", ref_seq_len, elapsed.as_secs_f64());
+        eprintln!(
+            "[seq={},scoped=false] done in {:.3}s",
+            ref_seq_len,
+            elapsed.as_secs_f64()
+        );
         last_pattern
     };
     println!("Reference activation pattern: {:?}", ref_pattern);
@@ -102,7 +115,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model.reset_cpu_kv_caches();
 
             let hidden_dim = model.config.embed_dim;
-            let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+            let sf_cfg = SlowFriendConfig {
+                dim: hidden_dim,
+                alpha: 0.95,
+            };
             let mut slow = SlowFriendState::new(&sf_cfg);
 
             let t_start = Instant::now();
@@ -120,7 +136,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let elapsed = t_start.elapsed();
-            eprintln!("[seq={},scoped=false] done in {:.3}s", seq_len, elapsed.as_secs_f64());
+            eprintln!(
+                "[seq={},scoped=false] done in {:.3}s",
+                seq_len,
+                elapsed.as_secs_f64()
+            );
             last_pattern
         };
         let free_jaccard = jaccard_similarity(&ref_pattern, &free_pattern);
@@ -133,7 +153,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model.reset_cpu_kv_caches();
 
             let hidden_dim = model.config.embed_dim;
-            let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+            let sf_cfg = SlowFriendConfig {
+                dim: hidden_dim,
+                alpha: 0.95,
+            };
             let mut slow = SlowFriendState::new(&sf_cfg);
             let prior = ExpertPrior::new(hidden_dim, num_experts);
 
@@ -161,7 +184,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let elapsed = t_start.elapsed();
-            eprintln!("[seq={},scoped=true] done in {:.3}s", seq_len, elapsed.as_secs_f64());
+            eprintln!(
+                "[seq={},scoped=true] done in {:.3}s",
+                seq_len,
+                elapsed.as_secs_f64()
+            );
             last_pattern
         };
         let scoped_jaccard = jaccard_similarity(&ref_pattern, &scoped_pattern);

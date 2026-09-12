@@ -5,8 +5,8 @@
 //! replayed with priority ordering and resident tensor references.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 /// Priority level for computational demand.
 /// Higher values = higher priority (executed first during replay).
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
     /// Critical: must execute before GPU returns if possible
     Critical = 3,
@@ -24,15 +24,6 @@ pub enum Priority {
     Normal = 1,
     /// Low: can be dropped under backpressure
     Low = 0,
-}
-
-impl Eq for Priority {}
-
-impl Ord for Priority {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse ordering: higher priority comes first in queue
-        other.cmp(self)
-    }
 }
 
 impl serde::Serialize for Priority {

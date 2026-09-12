@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use pesti_runner::kernel::slow_friend::{
-    divergence, DivergenceMetric, SlowFriendConfig, SlowFriendState,
+    DivergenceMetric, SlowFriendConfig, SlowFriendState, divergence,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,18 +50,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gen_start = Instant::now();
     let baseline_tokens = generate_baseline(&mut model, &input_tokens, max_tokens)?;
     let gen_time = gen_start.elapsed().as_secs_f64();
-    println!("Baseline generated {} tokens in {:.1}s", baseline_tokens.len(), gen_time);
+    println!(
+        "Baseline generated {} tokens in {:.1}s",
+        baseline_tokens.len(),
+        gen_time
+    );
 
     // Decode baseline text
     let baseline_text = tokenizer.decode(&baseline_tokens)?;
-    println!("Baseline text: {}", &baseline_text[..std::cmp::min(80, baseline_text.len())]);
+    println!(
+        "Baseline text: {}",
+        &baseline_text[..std::cmp::min(80, baseline_text.len())]
+    );
     println!();
 
     // === Test 2: Generation with slow-friend hook (observational) ===
     println!("=== Test 2: Slow-Friend Integrated Generation ===");
 
     let hidden_dim = model.config.embed_dim;
-    let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+    let sf_cfg = SlowFriendConfig {
+        dim: hidden_dim,
+        alpha: 0.95,
+    };
     let mut sf_state = SlowFriendState::new(&sf_cfg);
     let mut divergence_scores = Vec::new();
 
@@ -75,13 +85,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut divergence_scores,
     )?;
     let gen_time = gen_start.elapsed().as_secs_f64();
-    println!("Slow-friend generated {} tokens in {:.1}s", sf_tokens.len(), gen_time);
+    println!(
+        "Slow-friend generated {} tokens in {:.1}s",
+        sf_tokens.len(),
+        gen_time
+    );
 
     // === Non-interference check: tokens must be identical ===
     println!();
     println!("=== Non-Interference Check ===");
     if baseline_tokens == sf_tokens {
-        println!("PASS(G7-1): Token sequences are bit-identical ({} tokens)", baseline_tokens.len());
+        println!(
+            "PASS(G7-1): Token sequences are bit-identical ({} tokens)",
+            baseline_tokens.len()
+        );
     } else {
         // Find first divergence point
         let mut first_diff = 0;
@@ -91,7 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
         }
-        println!("FAIL(G7-1): Token sequences differ at position {}", first_diff);
+        println!(
+            "FAIL(G7-1): Token sequences differ at position {}",
+            first_diff
+        );
     }
 
     // === Divergence score analysis ===
@@ -100,8 +120,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !divergence_scores.is_empty() {
         let sum: f32 = divergence_scores.iter().sum();
         let mean = sum / divergence_scores.len() as f32;
-        let max = divergence_scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let min = divergence_scores.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max = divergence_scores
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min = divergence_scores
+            .iter()
+            .cloned()
+            .fold(f32::INFINITY, f32::min);
 
         println!("Divergence scores computed: {}", divergence_scores.len());
         println!("  Mean: {:.6}", mean);
@@ -140,27 +166,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Compare divergence during perturbation window vs baseline
-    let baseline_window: Vec<f32> = divergence_scores[perturbation_step..std::cmp::min(perturbation_step + 10, divergence_scores.len())].to_vec();
-    let perturbed_window: Vec<f32> = perturbed_divergences.iter()
+    let baseline_window: Vec<f32> = divergence_scores
+        [perturbation_step..std::cmp::min(perturbation_step + 10, divergence_scores.len())]
+        .to_vec();
+    let perturbed_window: Vec<f32> = perturbed_divergences
+        .iter()
         .filter(|(p, _)| *p >= perturbation_step && *p < perturbation_step + 10)
         .map(|(_, v)| *v)
         .collect();
 
     if !baseline_window.is_empty() && !perturbed_window.is_empty() {
         let baseline_mean: f32 = baseline_window.iter().sum::<f32>() / baseline_window.len() as f32;
-        let perturbed_mean: f32 = perturbed_window.iter().sum::<f32>() / perturbed_window.len() as f32;
+        let perturbed_mean: f32 =
+            perturbed_window.iter().sum::<f32>() / perturbed_window.len() as f32;
 
-        println!("Baseline divergence (steps {}-{}): {:.6}",
-                 perturbation_step, perturbation_step + 10, baseline_mean);
-        println!("Perturbed divergence (steps {}-{}): {:.6}",
-                 perturbation_step, perturbation_step + 10, perturbed_mean);
+        println!(
+            "Baseline divergence (steps {}-{}): {:.6}",
+            perturbation_step,
+            perturbation_step + 10,
+            baseline_mean
+        );
+        println!(
+            "Perturbed divergence (steps {}-{}): {:.6}",
+            perturbation_step,
+            perturbation_step + 10,
+            perturbed_mean
+        );
 
         if perturbed_mean > baseline_mean * 2.0 {
-            println!("PASS(G7-3): Perturbation detected - {:.1}x higher divergence",
-                     perturbed_mean / baseline_mean);
+            println!(
+                "PASS(G7-3): Perturbation detected - {:.1}x higher divergence",
+                perturbed_mean / baseline_mean
+            );
         } else {
-            println!("FAIL(G7-3): Perturbation not clearly detected ({:.1}x baseline)",
-                     perturbed_mean / baseline_mean);
+            println!(
+                "FAIL(G7-3): Perturbation not clearly detected ({:.1}x baseline)",
+                perturbed_mean / baseline_mean
+            );
         }
     } else {
         println!("FAIL(G7-3): Insufficient divergence data for perturbation test");
@@ -171,16 +213,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== G7 Verdict ===");
     let pass_1 = baseline_tokens == sf_tokens;
     let pass_2 = !divergence_scores.is_empty();
-    let pass_3 = perturbed_window.iter().sum::<f32>() / perturbed_window.len() as f32 >
-                baseline_window.iter().sum::<f32>() / baseline_window.len() as f32 * 2.0;
+    let pass_3 = perturbed_window.iter().sum::<f32>() / perturbed_window.len() as f32
+        > baseline_window.iter().sum::<f32>() / baseline_window.len() as f32 * 2.0;
 
     if pass_1 && pass_2 && pass_3 {
         println!("PASS(G7): All E2E integration criteria met");
     } else {
         println!("FAIL(G7): Some criteria not met");
-        if !pass_1 { println!("  - Non-interference violated"); }
-        if !pass_2 { println!("  - No divergence scores computed"); }
-        if !pass_3 { println!("  - Perturbation not detected"); }
+        if !pass_1 {
+            println!("  - Non-interference violated");
+        }
+        if !pass_2 {
+            println!("  - No divergence scores computed");
+        }
+        if !pass_3 {
+            println!("  - Perturbation not detected");
+        }
     }
 
     Ok(())
@@ -215,7 +263,9 @@ fn generate_baseline(
         let next_token = argmax(&logits);
         generated.push(next_token);
 
-        if next_token == 151645 { break; } // EOS token for Qwen2.5
+        if next_token == 151645 {
+            break;
+        } // EOS token for Qwen2.5
         last_token = next_token;
     }
 
@@ -263,7 +313,9 @@ fn generate_with_sf_hook(
         let next_token = argmax(&logits);
         generated.push(next_token);
 
-        if next_token == 151645 { break; } // EOS token for Qwen2.5
+        if next_token == 151645 {
+            break;
+        } // EOS token for Qwen2.5
         last_token = next_token;
     }
 
@@ -313,7 +365,9 @@ fn generate_with_perturbation(
         let logits = model.apply_output_head(&h)?;
         let next_token = argmax(&logits);
 
-        if next_token == 151645 { break; } // EOS token for Qwen2.5
+        if next_token == 151645 {
+            break;
+        } // EOS token for Qwen2.5
         last_token = next_token;
     }
 

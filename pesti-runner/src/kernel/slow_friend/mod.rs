@@ -3,14 +3,14 @@
 //! Maintains a cheap, always-on, stable summary of the model's hidden states
 //! and measures how far the precise path drifts from it as context grows.
 
-pub mod state;
-pub mod divergence;
-pub mod scoping;
-pub mod logging;
 pub mod compaction;
+pub mod divergence;
+pub mod logging;
+pub mod scoping;
+pub mod state;
 
-pub use state::{SlowFriendConfig, SlowFriendState};
-pub use divergence::{DivergenceMetric, DivergenceScore, divergence};
-pub use scoping::{ExpertPrior, apply_scoping, activation_pattern, jaccard_similarity};
-pub use logging::SessionLogger;
 pub use compaction::{CompactionTrigger, reanchor};
+pub use divergence::{DivergenceMetric, DivergenceScore, divergence};
+pub use logging::SessionLogger;
+pub use scoping::{ExpertPrior, activation_pattern, apply_scoping, jaccard_similarity};
+pub use state::{SlowFriendConfig, SlowFriendState};

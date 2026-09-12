@@ -44,12 +44,12 @@ use crate::kernel::candle_bridge;
 use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::kernel::fused_attention_conformant::{
-    build_fused_attention_kernel_conformant, FusedAttentionArch,
+    FusedAttentionArch, build_fused_attention_kernel_conformant,
 };
 #[cfg(feature = "cuda")]
 use crate::kernel::gemm::{GemmArch, GemmKernel};
 #[cfg(not(feature = "cuda"))]
-use crate::kernel::gemm_stub::{GemmArch, GemmKernel};
+use crate::kernel::gemm_stub::GemmArch;
 #[cfg(feature = "cuda")]
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
@@ -239,7 +239,7 @@ impl DispatchContext {
     }
 
     /// Build memory manager from an existing engine (mirrors build_memory logic).
-    fn build_memory_from_engine(engine: &InferenceEngine) -> MemoryManager {
+    fn build_memory_from_engine(_engine: &InferenceEngine) -> MemoryManager {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
@@ -495,14 +495,19 @@ impl DispatchContext {
             && self.gpu_available()
             && crate::kernel::candle_bridge::bridge_is_cuda()
         {
-            let a_t = Tensor::from_vec(x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(), (m, k), crate::kernel::candle_bridge::bridge_device())
-                .map_err(|e| DispatchError::Kernel(format!("x tensor: {e}")))?;
+            let a_t = Tensor::from_vec(
+                x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(),
+                (m, k),
+                crate::kernel::candle_bridge::bridge_device(),
+            )
+            .map_err(|e| DispatchError::Kernel(format!("x tensor: {e}")))?;
             // Cached transposed weight tensor (built once at model
             // construction) — skips the per-call host transpose + weight
             // re-upload.
             if let Some(b_t) = weight_t_gpu {
-                candle_bridge::gemm_with_tensors(&a_t, b_t, None, m, k, n, 1.0, 0.0)
-                    .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm_with_tensors: {e}")))
+                candle_bridge::gemm_with_tensors(&a_t, b_t, None, m, k, n, 1.0, 0.0).map_err(|e| {
+                    DispatchError::Kernel(format!("candle_bridge::gemm_with_tensors: {e}"))
+                })
             } else {
                 // Transpose weights: W is [out, in], need [in, out] for GEMM
                 // W^T[i,j] = W[j,i]
@@ -936,7 +941,10 @@ impl AttentionDispatch {
 
     /// Set the fused attention kernel for GPU acceleration.
     #[cfg(feature = "cuda")]
-    pub fn set_fused_kernel(&mut self, kernel: crate::kernel::fused_attention_conformant::FusedAttentionKernel) {
+    pub fn set_fused_kernel(
+        &mut self,
+        kernel: crate::kernel::fused_attention_conformant::FusedAttentionKernel,
+    ) {
         self.fused_kernel = Some(kernel);
     }
 
@@ -1192,15 +1200,21 @@ impl AttentionDispatch {
 
         // rope_embeddings returns [seq_len, half] in f32. Match q/k dtype.
         let dt = q.dtype();
-        let cos = cos.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
-        let sin = sin.to_dtype(dt).map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
+        let cos = cos
+            .to_dtype(dt)
+            .map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
+        let sin = sin
+            .to_dtype(dt)
+            .map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
 
         // q/k layout is [batch, seq_len, heads, head_dim]. After chunking on last dim,
         // we get [batch, seq_len, heads, half]. cos/sin are [seq_len, half] — need to
         // broadcast to match. Use expand instead of relying on implicit broadcasting.
-        let q_chunks = q.chunk(2, q.dims().len() - 1)
+        let q_chunks = q
+            .chunk(2, q.dims().len() - 1)
             .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
-        let k_chunks = k.chunk(2, k.dims().len() - 1)
+        let k_chunks = k
+            .chunk(2, k.dims().len() - 1)
             .map_err(|e| DispatchError::Kernel(format!("k chunk: {e}")))?;
         let q0 = q_chunks[0].clone();
         let q1 = q_chunks[1].clone();
@@ -1214,18 +1228,35 @@ impl AttentionDispatch {
         let heads_q = q_shape[2];
 
         // cos/sin: [seq, half] -> unsqueeze(0) -> [1, seq, half]
-        let cos_q = cos.unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
+        let cos_q = cos
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
         // Expand to [batch, seq, half]
-        let cos_q = cos_q.expand(&[batch_q, seq_q, half]).map_err(|e| DispatchError::Kernel(format!("cos expand q batch/seq: {e}")))?;
+        let cos_q = cos_q
+            .expand(&[batch_q, seq_q, half])
+            .map_err(|e| DispatchError::Kernel(format!("cos expand q batch/seq: {e}")))?;
         // Unsqueeze for heads dim: [batch, seq, 1, half]
-        let cos_q = cos_q.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q heads: {e}")))?;
+        let cos_q = cos_q
+            .unsqueeze(2)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q heads: {e}")))?;
         // Expand to match all heads: [batch, seq, heads, half]
-        let cos_q = cos_q.expand(&[batch_q, seq_q, heads_q, half]).map_err(|e| DispatchError::Kernel(format!("cos expand q heads: {e}")))?;
+        let cos_q = cos_q
+            .expand(&[batch_q, seq_q, heads_q, half])
+            .map_err(|e| DispatchError::Kernel(format!("cos expand q heads: {e}")))?;
 
-        let sin_q = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
-        let sin_q = sin_q.expand(&[batch_q, seq_q, half]).map_err(|e| DispatchError::Kernel(format!("sin expand q batch/seq: {e}")))?;
-        let sin_q = sin_q.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q heads: {e}")))?;
-        let sin_q = sin_q.expand(&[batch_q, seq_q, heads_q, half]).map_err(|e| DispatchError::Kernel(format!("sin expand q heads: {e}")))?;
+        let sin_q = sin
+            .clone()
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
+        let sin_q = sin_q
+            .expand(&[batch_q, seq_q, half])
+            .map_err(|e| DispatchError::Kernel(format!("sin expand q batch/seq: {e}")))?;
+        let sin_q = sin_q
+            .unsqueeze(2)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q heads: {e}")))?;
+        let sin_q = sin_q
+            .expand(&[batch_q, seq_q, heads_q, half])
+            .map_err(|e| DispatchError::Kernel(format!("sin expand q heads: {e}")))?;
 
         // Same for K (different head count)
         let k_shape = k.dims();
@@ -1233,30 +1264,52 @@ impl AttentionDispatch {
         let seq_k = k_shape[1];
         let heads_k = k_shape[2];
 
-        let cos_k = cos.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
-        let cos_k = cos_k.expand(&[batch_k, seq_k, half]).map_err(|e| DispatchError::Kernel(format!("cos expand k batch/seq: {e}")))?;
-        let cos_k = cos_k.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k heads: {e}")))?;
-        let cos_k = cos_k.expand(&[batch_k, seq_k, heads_k, half]).map_err(|e| DispatchError::Kernel(format!("cos expand k heads: {e}")))?;
+        let cos_k = cos
+            .clone()
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
+        let cos_k = cos_k
+            .expand(&[batch_k, seq_k, half])
+            .map_err(|e| DispatchError::Kernel(format!("cos expand k batch/seq: {e}")))?;
+        let cos_k = cos_k
+            .unsqueeze(2)
+            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k heads: {e}")))?;
+        let cos_k = cos_k
+            .expand(&[batch_k, seq_k, heads_k, half])
+            .map_err(|e| DispatchError::Kernel(format!("cos expand k heads: {e}")))?;
 
-        let sin_k = sin.clone().unsqueeze(0).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
-        let sin_k = sin_k.expand(&[batch_k, seq_k, half]).map_err(|e| DispatchError::Kernel(format!("sin expand k batch/seq: {e}")))?;
-        let sin_k = sin_k.unsqueeze(2).map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k heads: {e}")))?;
-        let sin_k = sin_k.expand(&[batch_k, seq_k, heads_k, half]).map_err(|e| DispatchError::Kernel(format!("sin expand k heads: {e}")))?;
+        let sin_k = sin
+            .clone()
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
+        let sin_k = sin_k
+            .expand(&[batch_k, seq_k, half])
+            .map_err(|e| DispatchError::Kernel(format!("sin expand k batch/seq: {e}")))?;
+        let sin_k = sin_k
+            .unsqueeze(2)
+            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k heads: {e}")))?;
+        let sin_k = sin_k
+            .expand(&[batch_k, seq_k, heads_k, half])
+            .map_err(|e| DispatchError::Kernel(format!("sin expand k heads: {e}")))?;
 
         // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
         let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
         let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
         let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
-        let q1c = (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
-        let q0s = (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
+        let q1c =
+            (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
+        let q0s =
+            (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
         let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
 
         // Apply RoPE to K
         let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
         let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
         let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
-        let k1c = (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
-        let k0s = (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
+        let k1c =
+            (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
+        let k0s =
+            (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
         let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
 
         let last_dim = q.dims().len() - 1;
@@ -1290,19 +1343,25 @@ impl AttentionDispatch {
 
         // Q/K/V as tensors: [1, seq_len, heads, head_dim]
         let q_t = candle_bridge::f16_to_tensor(
-            &q.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &q.iter()
+                .map(|&x| half::f16::from_f32(x))
+                .collect::<Vec<_>>(),
             &[1, seq_len, self.num_heads, self.head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(q): {e}")))?;
         let k_t = candle_bridge::f16_to_tensor(
-            &k.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &k.iter()
+                .map(|&x| half::f16::from_f32(x))
+                .collect::<Vec<_>>(),
             &[1, seq_len, self.num_kv_heads, self.head_dim],
             None,
         )
         .map_err(|e| DispatchError::Kernel(format!("f16_to_tensor(k): {e}")))?;
         let v_t = candle_bridge::f16_to_tensor(
-            &v.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+            &v.iter()
+                .map(|&x| half::f16::from_f32(x))
+                .collect::<Vec<_>>(),
             &[1, seq_len, self.num_kv_heads, self.head_dim],
             None,
         )
@@ -1320,9 +1379,13 @@ impl AttentionDispatch {
         for pos in 0..seq_len {
             let global_pos = start_pos + pos;
             let k_row: Vec<half::f16> = k_rows[pos * kv_dim..(pos + 1) * kv_dim]
-                .iter().map(|&x| half::f16::from_f32(x)).collect();
+                .iter()
+                .map(|&x| half::f16::from_f32(x))
+                .collect();
             let v_row: Vec<half::f16> = v_rows[pos * kv_dim..(pos + 1) * kv_dim]
-                .iter().map(|&x| half::f16::from_f32(x)).collect();
+                .iter()
+                .map(|&x| half::f16::from_f32(x))
+                .collect();
             // Write each tensor into its OWN cache's OWN region only.
             key_cache.write_k_at(global_pos, &k_row).map_err(|e| {
                 DispatchError::Kernel(format!("KV cache K write at pos {global_pos}: {e}"))
@@ -1337,13 +1400,27 @@ impl AttentionDispatch {
         #[cfg(feature = "cuda")]
         if self.has_fused_kernel() && cache_len >= 2 {
             return self.forward_gpu_fused(
-                ctx, &q_rope_t, key_cache, value_cache, batch_size, seq_len, start_pos, scale,
+                ctx,
+                &q_rope_t,
+                key_cache,
+                value_cache,
+                batch_size,
+                seq_len,
+                start_pos,
+                scale,
             );
         }
 
         // Fall back to manual per-head attention for small sequences or when fused kernel unavailable.
         self.forward_gpu_manual(
-            ctx, &q_rope_t, key_cache, value_cache, batch_size, seq_len, start_pos, scale,
+            ctx,
+            &q_rope_t,
+            key_cache,
+            value_cache,
+            batch_size,
+            seq_len,
+            start_pos,
+            scale,
         )
     }
 
@@ -1369,7 +1446,7 @@ impl AttentionDispatch {
 
         // For GQA, expand K/V to match Q's head count for the fused kernel.
         let g = self.num_heads / self.num_kv_heads;
-        
+
         // Allocate output buffer on host.
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
 
@@ -1379,19 +1456,21 @@ impl AttentionDispatch {
                 // Extract Q row for this position: [num_heads, head_dim] -> f16
                 let q_offset = ((b * seq_len + pos) * self.num_heads) * self.head_dim;
                 let q_row_f32 = &q_f32[q_offset..q_offset + embed_dim];
-                let q_row_f16: Vec<half::f16> = q_row_f32.iter()
-                    .map(|&x| half::f16::from_f32(x)).collect();
+                let q_row_f16: Vec<half::f16> =
+                    q_row_f32.iter().map(|&x| half::f16::from_f32(x)).collect();
 
                 // Build expanded K/V tensors for GQA (repeat each KV head g times).
                 let mut k_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * embed_dim);
                 let mut v_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * embed_dim);
-                
+
                 for j in 0..cache_len {
                     // For each KV position, expand all heads to match Q's head count.
                     for h in 0..self.num_heads {
                         let kv_h = h / g;
-                        let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
-                        let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                        let k_slice =
+                            Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                        let v_slice =
+                            Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
                         k_expanded.extend_from_slice(&k_slice);
                         v_expanded.extend_from_slice(&v_slice);
                     }
@@ -1403,51 +1482,78 @@ impl AttentionDispatch {
                 let v_bytes = std::mem::size_of_val(&v_expanded[0]) * cache_len * embed_dim;
                 let out_bytes = 4 * embed_dim; // f32 output
 
-                let q_handle = ctx.memory.alloc(q_bytes)
+                let q_handle = ctx
+                    .memory
+                    .alloc(q_bytes)
                     .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
-                let k_handle = ctx.memory.alloc(k_bytes)
+                let k_handle = ctx
+                    .memory
+                    .alloc(k_bytes)
                     .map_err(|e| DispatchError::Memory(format!("alloc k: {e}")))?;
-                let v_handle = ctx.memory.alloc(v_bytes)
+                let v_handle = ctx
+                    .memory
+                    .alloc(v_bytes)
                     .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
-                let out_handle = ctx.memory.alloc(out_bytes)
+                let out_handle = ctx
+                    .memory
+                    .alloc(out_bytes)
                     .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
 
                 // Transfer Q, K, V to device.
                 let q_ptr = unsafe { std::ptr::addr_of!(q_row_f16[0]) as *const u8 };
-                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(q_ptr, q_bytes) }, q_handle)
+                ctx.memory
+                    .h2d(
+                        unsafe { std::slice::from_raw_parts(q_ptr, q_bytes) },
+                        q_handle,
+                    )
                     .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
 
                 let k_ptr = unsafe { std::ptr::addr_of!(k_expanded[0]) as *const u8 };
-                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(k_ptr, k_bytes) }, k_handle)
+                ctx.memory
+                    .h2d(
+                        unsafe { std::slice::from_raw_parts(k_ptr, k_bytes) },
+                        k_handle,
+                    )
                     .map_err(|e| DispatchError::Transfer(format!("H2D k: {e}")))?;
 
                 let v_ptr = unsafe { std::ptr::addr_of!(v_expanded[0]) as *const u8 };
-                ctx.memory.h2d(unsafe { std::slice::from_raw_parts(v_ptr, v_bytes) }, v_handle)
+                ctx.memory
+                    .h2d(
+                        unsafe { std::slice::from_raw_parts(v_ptr, v_bytes) },
+                        v_handle,
+                    )
                     .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
 
                 // Launch fused attention kernel.
                 if let Some(ref kernel) = self.fused_kernel {
-                    kernel.launch(
-                        scale,
-                        q_ptr as u64,
-                        k_ptr as u64,
-                        v_ptr as u64,
-                        out_handle.as_ptr() as u64,
-                        1, // seq_q = 1 (single query position)
-                        cache_len,
-                        self.num_heads,
-                        self.head_dim,
-                        self.rope_base,
-                        cache_len,
-                    ).map_err(|e| DispatchError::Kernel(format!("fused kernel launch: {e}")))?;
+                    kernel
+                        .launch(
+                            scale,
+                            q_ptr as u64,
+                            k_ptr as u64,
+                            v_ptr as u64,
+                            out_handle.as_ptr() as u64,
+                            1, // seq_q = 1 (single query position)
+                            cache_len,
+                            self.num_heads,
+                            self.head_dim,
+                            self.rope_base,
+                            cache_len,
+                        )
+                        .map_err(|e| DispatchError::Kernel(format!("fused kernel launch: {e}")))?;
                 }
 
                 // Synchronize and read back result.
-                ctx.memory.sync().map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
-                
+                ctx.memory
+                    .sync()
+                    .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+
                 let mut out_f32 = vec![0.0f32; embed_dim];
                 let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
-                ctx.memory.d2h(out_handle, unsafe { std::slice::from_raw_parts_mut(out_ptr, out_bytes) })
+                ctx.memory
+                    .d2h(out_handle, unsafe {
+                        std::slice::from_raw_parts_mut(out_ptr, out_bytes)
+                    })
                     .map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
 
                 // Free device buffers.
@@ -1501,7 +1607,8 @@ impl AttentionDispatch {
                     // Compute Q @ K^T for this head against its KV group.
                     let mut scores = vec![f32::NEG_INFINITY; cache_len];
                     for j in 0..cache_len {
-                        let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                        let k_slice =
+                            Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
                         if k_slice.len() == self.head_dim {
                             let mut dot = 0.0f32;
                             for d in 0..self.head_dim {
@@ -1519,18 +1626,15 @@ impl AttentionDispatch {
 
                     // Softmax over scores.
                     let max_s = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                    let exp_scores: Vec<f32> = scores.iter()
-                        .map(|&s| (s - max_s).exp())
-                        .collect();
+                    let exp_scores: Vec<f32> = scores.iter().map(|&s| (s - max_s).exp()).collect();
                     let sum_exp: f32 = exp_scores.iter().sum();
-                    let attn_weights: Vec<f32> = exp_scores.iter()
-                        .map(|&e| e / sum_exp)
-                        .collect();
+                    let attn_weights: Vec<f32> = exp_scores.iter().map(|&e| e / sum_exp).collect();
 
                     // Weighted sum of V values for this group.
                     let mut out_row = vec![0.0f32; self.head_dim];
                     for (j, &w) in attn_weights.iter().enumerate() {
-                        let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                        let v_slice =
+                            Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
                         if !v_slice.is_empty() {
                             for d in 0..self.head_dim {
                                 out_row[d] += w * v_slice[d].to_f32();
@@ -1556,7 +1660,6 @@ impl AttentionDispatch {
 
         Ok(output)
     }
-
 }
 
 // ── LayerDispatch: GPU-aware transformer layer ─────────────────────────────

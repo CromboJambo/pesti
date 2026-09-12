@@ -11,7 +11,10 @@ pub struct SlowFriendConfig {
 
 impl Default for SlowFriendConfig {
     fn default() -> Self {
-        Self { dim: 896, alpha: 0.95 }
+        Self {
+            dim: 896,
+            alpha: 0.95,
+        }
     }
 }
 
@@ -86,7 +89,10 @@ mod tests {
 
     #[test]
     fn boundedness_over_many_steps() {
-        let cfg = SlowFriendConfig { dim: 8, alpha: 0.99 };
+        let cfg = SlowFriendConfig {
+            dim: 8,
+            alpha: 0.99,
+        };
         let mut sf = SlowFriendState::new(&cfg);
         let bounded_input = vec![1.0; 8];
         for _ in 0..10_000 {

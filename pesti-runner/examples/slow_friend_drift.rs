@@ -10,7 +10,9 @@
 use std::path::Path;
 use std::time::Instant;
 
-use pesti_runner::kernel::slow_friend::{divergence, DivergenceMetric, SlowFriendConfig, SlowFriendState};
+use pesti_runner::kernel::slow_friend::{
+    DivergenceMetric, SlowFriendConfig, SlowFriendState, divergence,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -25,7 +27,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(s) => s.clone(),
         None => std::env::var("PESTI_SLOW_SEQS").unwrap_or_else(|_| "512,1024,2048".into()),
     };
-    let seq_lens: Vec<usize> = seq_lens_str.split(',').map(|s| s.trim().parse())
+    let seq_lens: Vec<usize> = seq_lens_str
+        .split(',')
+        .map(|s| s.trim().parse())
         .collect::<Result<Vec<usize>, _>>()?;
 
     eprintln!("model: {}", model_path);
@@ -36,7 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = pesti_runner::transformer::LlamaModel::from_gguf_weights(weights)?;
 
     let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
-    let (_, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
+    let (_, tokenizer) =
+        pesti_runner::transformer::load_tokenizer_from_gguf(Path::new(model_path), backend)?;
 
     // Seed sentence for deterministic long prompts
     let seed = "The quick brown fox jumps over the lazy dog. ";
@@ -61,7 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.reset_cpu_kv_caches();
 
         let hidden_dim = model.config.embed_dim;
-        let sf_cfg = SlowFriendConfig { dim: hidden_dim, alpha: 0.95 };
+        let sf_cfg = SlowFriendConfig {
+            dim: hidden_dim,
+            alpha: 0.95,
+        };
         let mut slow = SlowFriendState::new(&sf_cfg);
 
         let mut div_scores: Vec<f32> = Vec::new();
@@ -113,7 +121,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         eprintln!(
             "[seq={}] done in {:.3}s ({} steps, avg {:.2}us/step for slow-friend ops)",
-            seq_len, elapsed.as_secs_f64(), div_scores.len(), sf_avg_us
+            seq_len,
+            elapsed.as_secs_f64(),
+            div_scores.len(),
+            sf_avg_us
         );
     }
 
