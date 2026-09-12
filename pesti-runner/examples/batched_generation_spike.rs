@@ -65,7 +65,10 @@ fn main() {
     let max_seq_len = prompt_tokens.iter().map(|t| t.len()).max().unwrap();
 
     // Create batch with n_seq_max = number of prompts (parallel sequences)
-    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(max_seq_len, prompts.len());
+    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(
+        max_seq_len,
+        prompts.len().try_into().unwrap(),
+    );
 
     for (seq_id, tokens) in prompt_tokens.iter().enumerate() {
         for (pos, tok) in tokens.iter().enumerate() {
