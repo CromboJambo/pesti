@@ -9,6 +9,7 @@
 
 use std::time::Instant;
 
+use llama_cpp_2::token::LlamaToken;
 use pesti_runner::llama::{LlamaRunner, SamplingConfig};
 use tracing_subscriber::EnvFilter;
 
@@ -17,7 +18,9 @@ fn main() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
-    let model_path = std::env::args().nth(1).expect("Usage: batched_generation_spike <model.gguf>");
+    let model_path = std::env::args()
+        .nth(1)
+        .expect("Usage: batched_generation_spike <model.gguf>");
 
     // Load runner with larger context to fit multiple sequences
     let runner = LlamaRunner::builder(&model_path)
@@ -44,7 +47,12 @@ fn main() {
     let t_seq_start = Instant::now();
     for (i, prompt) in prompts.iter().enumerate() {
         let result = runner.generate(prompt, &config).expect("generation failed");
-        println!("[{}] Generated {} tokens: {}", i, result.generated_tokens, result.text.trim());
+        println!(
+            "[{}] Generated {} tokens: {}",
+            i,
+            result.generated_tokens,
+            result.text.trim()
+        );
     }
     let seq_time = t_seq_start.elapsed().as_secs_f64();
     println!("Sequential total: {:.2}s", seq_time);
@@ -56,7 +64,7 @@ fn main() {
     let t_batch_start = Instant::now();
 
     // Encode all prompts
-    let mut prompt_tokens: Vec<Vec<i32>> = Vec::new();
+    let mut prompt_tokens: Vec<Vec<LlamaToken>> = Vec::new();
     for prompt in &prompts {
         let tokens = runner.encode(prompt, true).expect("encode failed");
         prompt_tokens.push(tokens);
@@ -73,7 +81,7 @@ fn main() {
     for (seq_id, tokens) in prompt_tokens.iter().enumerate() {
         for (pos, tok) in tokens.iter().enumerate() {
             batch
-                .add(llama_cpp_2::token::LlamaToken(*tok), pos as i32, &[seq_id as i32], true)
+                .add(*tok, pos as i32, &[seq_id as i32], true)
                 .expect("batch add failed");
         }
     }
