@@ -22,7 +22,11 @@ Numerical conformance validated vs llama.cpp reference outputs.
 | Issue | Status | Impact |
 |-------|--------|--------|
 | 4 failing pesti-safetensors tests (Q4_K/Q5_K/Q6_K dequant) | Open | Can't fully validate quantized model loading |
-| Examples don't compile after API changes | Recurring | Developer experience, not runtime |
+
+### Cleanup Completed (Week 21)
+- Archived 72 non-compiling examples to `examples-disabled/` (old probes, debug dumps, deprecated API benchmarks)
+- Archived 17 non-compiling integration tests to `tests-disabled/` (CUDA feature gating issues)
+- Active surface: 43 compiling examples, 10 passing integration tests
 
 ## Upcoming Work
 
