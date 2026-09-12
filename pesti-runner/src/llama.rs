@@ -273,6 +273,11 @@ impl LlamaRunner {
         }
     }
 
+    /// Get raw access to the LlamaContext for advanced operations.
+    pub fn context(&self) -> &Rc<RefCell<LlamaContext<'static>>> {
+        &self.context
+    }
+
     /// Get the model's BOS, EOS, and NL token IDs.
     pub fn special_tokens(&self) -> (LlamaToken, LlamaToken, LlamaToken) {
         (

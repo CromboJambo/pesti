@@ -17,7 +17,9 @@ fn main() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
-    let model_path = std::env::args().nth(1).expect("Usage: batched_generation_spike <model.gguf>");
+    let model_path = std::env::args()
+        .nth(1)
+        .expect("Usage: batched_generation_spike <model.gguf>");
 
     // Load runner with larger context to fit multiple sequences
     let runner = LlamaRunner::builder(&model_path)
@@ -46,7 +48,9 @@ fn main() {
         let result = runner.generate(prompt, &config).expect("generation failed");
         println!(
             "[{}] Generated {} tokens: {}",
-            i, result.generated_tokens, result.text.trim()
+            i,
+            result.generated_tokens,
+            result.text.trim()
         );
     }
     let seq_time = t_seq_start.elapsed().as_secs_f64();
@@ -85,7 +89,7 @@ fn main() {
     runner.decode(&mut batch).expect("prefill decode failed");
 
     // Sample for each sequence independently using greedy decoding
-    let ctx = runner.context.borrow_mut();
+    let ctx = runner.context().borrow_mut();
     let mut sampled_tokens: Vec<i32> = Vec::new();
     for seq_id in 0..prompts.len() {
         let logits = ctx.get_logits_ith(seq_id as i32);
