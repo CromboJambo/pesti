@@ -1,10 +1,9 @@
 //! Profile attention kernel time breakdown: GEMM vs softmax vs transfers.
-//!
-//! Uses CUDA events to measure each phase of the attention forward pass.
+//! Uses real model weights from Qwen2.5-0.5B-Instruct to measure actual decode step costs.
 
 use std::time::Instant;
 
-use pesti_runner::kernel::{CudaGemmKernel, GemmArch};
+use pesti_runner::kernel::gemm::{CudaGemmKernel, GemmArch};
 use pesti_runner::kernel::attention::{AttentionConfig, AttentionArch};
 use pesti_runner::kernel::softmax::{SoftmaxKernelBuilder, SoftmaxBackend};
 use pesti_runner::cuda_runtime::{init_cuda, CudaRuntime};
