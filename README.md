@@ -92,14 +92,13 @@ cargo run -p pesti-runner --release --features cuda \
 | llama.cpp FFI runner | ~218 tok/s on TinyLlama-1.1B, consistent across Q3_K_M–Q8_0 (see `pesti-runner/README.md`) |
 
 ### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md`)
-- **Real end-to-end decode tok/s** on the GPU path. CPU path measured at
-  ~100 tok/s on Qwen2.5-0.5B (Week 14, `docs/history/WEEK_14_RESULTS.md`);
-  the Week 12/13 throughput numbers below are *projections from synthetic
-  micro-benchmarks*, **not** measured transformer decode.
-- **GPU end-to-end path** — the `cudarc` dispatch path exists, failed GPU matmuls now fall back to CPU GEMM with a
-  `gpu_fallback_count()` counter (no more silent zeroed buffers), and
-  per-layer GPU capture tooling is in place. Remaining: per-layer oracle
-  diff, divergence fixes, zero-fallback assertion, GPU decode tok/s.
+- **GPU decode tok/s is real but slow**: 0.52-0.60 tok/s on RTX 3070 Ti with
+  fused attention kernel. Far from llama.cpp's ~218 tok/s baseline, but this is
+  the first *measured* GPU decode throughput — no more synthetic projections.
+- **GPU end-to-end correctness** (Week 17, ongoing) — failed GPU matmuls fall
+  back to CPU GEMM with a `gpu_fallback_count()` counter (no more silent
+  zeroed buffers). Remaining: per-layer oracle diff against numpy reference,
+  divergence fixes, zero-fallback assertion.
 - **KV-cache updates during autoregressive generation** (paged attention).
 - FP8 quantization, multi-GPU scaling.
 
