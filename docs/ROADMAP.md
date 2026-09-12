@@ -44,6 +44,18 @@ PESTI has a working GPU inference path for Qwen2.5-0.5B-Instruct with:
 - [x] Measure throughput impact — **0.52 tok/s** on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64)
 - **Result**: FP16 KV cache implemented and verified; real tok/s measurement achieved after fixing RoPE broadcasting bug in rope_tensors (explicit expand() for tensor layout [batch,seq,heads,half])
 
+### Week 21: Cleanup and Stabilization (✅ Complete)
+- [x] Fix llama-cpp-2 API compatibility (`penalties()` signature change, `decode()` argument)
+- [x] Fix unsafe write amount in pesti-safetensors writer (byte-by-byte → write_all)
+- [x] Clean up clippy errors across workspace (redundant ops, unused imports, Ord impl)
+- [x] Run cargo fmt on entire workspace
+- **Result**: Build passes cleanly, all clippy errors resolved. Commit a4dd72c.
+
+### Week 22: Remaining Debt (Planned)
+- [ ] Fix 4 failing pesti-safetensors tests (Q4_K/Q5_K/Q6_K dequant + config extraction)
+- [ ] Address remaining clippy warnings (unused vars in stub code, missing Safety docs)
+- [ ] Spike: batched generation for parallel prompts (validate feasibility before committing)
+
 ## Key Lessons Learned
 
 ### CUDA Gotchas
