@@ -34,6 +34,7 @@ pub mod sampler;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use llama_cpp_2::{
