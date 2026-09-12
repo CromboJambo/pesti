@@ -84,13 +84,9 @@ impl InferenceEngine {
             // own cudarc-backed `CudaRuntime`, so we initialize directly. The
             // `device` arg only supplies the ordinal hint.
             let (cuda_runtime, stream) = if is_available() {
-                let ordinal = match &device {
-                    Device::Cuda(cuda_dev) => match cuda_dev.location() {
-                        candle_core::DeviceLocation::Cuda { gpu_id } => gpu_id,
-                        _ => 0,
-                    },
-                    _ => 0,
-                };
+                // Always use default GPU (ordinal 0) — candle-core's Device enum
+                // doesn't carry CUDA ordinal info when built without cuda feature.
+                let ordinal = 0;
                 match CudaRuntime::new(ordinal) {
                     Ok(rt) => {
                         let rt = Arc::new(rt);
