@@ -133,7 +133,7 @@ fn test_cross_entropy_loss_high() {
 
 #[test]
 fn test_kl_divergence_loss() {
-    let loss_fn = KLDivergenceLoss::default();
+    let loss_fn = KLDivergenceLoss;
 
     // KL divergence with one-hot targets reduces to cross-entropy
     let logits = vec![2.0, 1.0, 0.0, 1.0, 2.0, 0.0];

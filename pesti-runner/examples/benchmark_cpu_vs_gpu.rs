@@ -38,9 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("   Backend: {}", cpu_engine.backend_description());
     println!(
-        "   GEMM: {}, Attention: {}",
-        cpu_engine.gemm_available(),
-        true // Attention is always available via CPU fallback
+        "   GEMM: {}, Attention: true",
+        cpu_engine.gemm_available() // Attention is always available via CPU fallback
     );
 
     let gpu_metrics = if let Ok(gpu_device) = Device::cuda_if_available(0) {
@@ -57,10 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("   Backend: {}", gpu_engine.backend_description());
         println!(
-            "   GPU available: {}, GEMM: {}, Attention: {}",
+            "   GPU available: {}, GEMM: {}, Attention: true",
             gpu_engine.gpu_available(),
-            gpu_engine.gemm_available(),
-            true // Attention is always available via CPU fallback
+            gpu_engine.gemm_available() // Attention is always available via CPU fallback
         );
 
         if let Ok(info) = gpu_engine.full_device_info() {

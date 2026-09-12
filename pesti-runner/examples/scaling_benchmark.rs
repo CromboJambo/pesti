@@ -2,7 +2,7 @@
 
 use half::f16;
 use pesti_runner::cpu_optimized_ndarray::reference_with_ndarray;
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy)]
@@ -142,7 +142,7 @@ fn main() {
     println!("{}", "-".repeat(80));
 
     for config in &configs {
-        let (time_ms, throughput_mops) = run_benchmark(&config);
+        let (time_ms, throughput_mops) = run_benchmark(config);
 
         let total_ops = config.seq_q as f64
             * config.seq_k as f64

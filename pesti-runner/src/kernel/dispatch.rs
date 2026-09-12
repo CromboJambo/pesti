@@ -188,7 +188,7 @@ impl DispatchContext {
     }
 
     /// Build a memory manager that matches the engine's backend.
-    fn build_memory(engine: &InferenceEngine) -> MemoryManager {
+    fn build_memory(_engine: &InferenceEngine) -> MemoryManager {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
@@ -221,7 +221,7 @@ impl DispatchContext {
     }
 
     /// Create from an existing inference engine.
-    pub fn from_engine(mut engine: InferenceEngine) -> Self {
+    pub fn from_engine(engine: InferenceEngine) -> Self {
         let prefer_gpu = engine.gpu_available();
         tracing::info!(gpu = %prefer_gpu, "DispatchContext::from_engine initialized");
 
@@ -781,7 +781,9 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
+        #[allow(unused_variables)]
         let k = in_features;
+        #[allow(unused_variables)]
         let n = out_features;
         Self {
             #[cfg(feature = "cuda")]
@@ -1338,7 +1340,9 @@ impl AttentionDispatch {
         value_cache: &mut Kvcache,
         scale: f32,
     ) -> Result<Vec<f32>, DispatchError> {
+        #[allow(unused_variables)]
         let embed_dim = self.num_heads * self.head_dim;
+        #[allow(unused_variables)]
         let cache_len = start_pos + seq_len;
 
         // Q/K/V as tensors: [1, seq_len, heads, head_dim]

@@ -514,7 +514,7 @@ impl CpuModel {
             .encode(text, true)
             .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e)))?;
 
-        Ok(encoding.get_ids().iter().copied().collect())
+        Ok(encoding.get_ids().to_vec())
     }
 
     /// Decode token IDs to text.

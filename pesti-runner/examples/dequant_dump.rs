@@ -32,7 +32,7 @@ fn main() {
 
     let element_count = deq.len() / 4;
 
-    std::fs::write(format!("{}.raw", out_prefix), &raw).expect("write raw");
+    std::fs::write(format!("{}.raw", out_prefix), raw).expect("write raw");
     std::fs::write(format!("{}.f32", out_prefix), deq).expect("write f32");
 
     println!("{}", element_count);

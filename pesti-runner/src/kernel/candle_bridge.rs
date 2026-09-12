@@ -138,7 +138,7 @@ pub fn apply_rope(
     // Reshape to match x's shape: unsqueeze for each dimension except last
     // Build target shape with 1s in all dims except last which is half_dim
     let mut cos_target_shape = Vec::with_capacity(dims.len());
-    for i in 0..dims.len() - 1 {
+    for _ in 0..dims.len() - 1 {
         cos_target_shape.push(1);
     }
     cos_target_shape.push(half_dim);

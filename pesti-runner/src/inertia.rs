@@ -547,12 +547,12 @@ mod tests {
         assert_eq!(stats.total_submitted, 30);
         assert_eq!(stats.total_executed, 10); // First phase
         assert!(stats.total_deferred > 0); // Second phase logged some
-        assert!(stats.total_dropped >= 0); // May have dropped some due to backpressure
+        let _ = stats.total_dropped; // May have dropped some due to backpressure
 
         // Phase 3: GPU returns + replay
         let pending = manager.get_pending_for_execution();
         let total_from_queue = pending.len() as u64;
-        let total_deferred = stats.total_deferred;
+        let _total_deferred = stats.total_deferred;
         assert_eq!(total_from_queue + stats.total_dropped, 20); // Total deferred = pending + dropped
     }
 

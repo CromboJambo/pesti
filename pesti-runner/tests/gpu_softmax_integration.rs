@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     // Import directly from the module (not through kernel re-export which is feature-gated)
-    use pesti_runner::kernel::softmax::{SoftmaxKernel, SoftmaxKernelBuilder};
+    use pesti_runner::kernel::softmax::{SoftmaxKernelBuilder};
 
     #[test]
     fn test_cpu_softmax_basic() {

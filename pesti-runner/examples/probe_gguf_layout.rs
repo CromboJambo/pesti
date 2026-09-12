@@ -62,7 +62,7 @@ fn main() {
     println!("\n=== ARCH KV (sample) ===");
     let arch = header.architecture().unwrap_or("llama");
     for pair in &header.kv_pairs {
-        if pair.key.starts_with(&arch) {
+        if pair.key.starts_with(arch) {
             println!("  {} = {}", pair.key, kv_str(&pair.value));
         }
     }

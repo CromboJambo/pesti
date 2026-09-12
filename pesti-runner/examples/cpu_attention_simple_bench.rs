@@ -3,7 +3,6 @@
 use half::f16;
 use pesti_runner::kernel::device_buf::DeviceBuffer;
 use pesti_runner::kernel::{AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel};
-use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== CPU Attention + Softmax Benchmark ===\n");

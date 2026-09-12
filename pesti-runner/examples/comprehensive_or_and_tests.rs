@@ -2,7 +2,7 @@
 
 use pesti_runner::cpu_optimized::reference_raw_scores_optimized;
 use pesti_runner::cpu_optimized_ndarray::{reference_with_ndarray, reference_with_ndarray_manual};
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 fn main() {

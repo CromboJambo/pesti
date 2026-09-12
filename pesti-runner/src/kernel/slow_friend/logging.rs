@@ -5,7 +5,7 @@
 //! training-data generation.
 
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 /// Per-step log entry capturing routing-relevant signals.
 #[derive(Debug)]
@@ -21,6 +21,12 @@ pub struct StepLog {
 pub struct SessionLogger {
     entries: Vec<StepLog>,
     step: u64,
+}
+
+impl Default for SessionLogger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionLogger {

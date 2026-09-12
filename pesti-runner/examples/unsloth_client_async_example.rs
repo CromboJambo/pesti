@@ -28,23 +28,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Concurrent model calls (3 models running in parallel)
     println!("--- Example 1: Concurrent Model Calls ---");
-    let prompts = vec![
-        "Explain Rust ownership in one sentence.",
+    let prompts = ["Explain Rust ownership in one sentence.",
         "What makes Rust memory-safe?",
-        "How does async/await work in Rust?",
-    ];
+        "How does async/await work in Rust?"];
 
     // Run all 3 models concurrently (tokio::join!)
     let results = tokio::join!(
-        client.run_model(&prompts[0], &config),
-        client.run_model(&prompts[1], &config),
-        client.run_model(&prompts[2], &config),
+        client.run_model(prompts[0], &config),
+        client.run_model(prompts[1], &config),
+        client.run_model(prompts[2], &config),
     );
 
     // Results from join! is a tuple, not an iterable
     let results_tuple = (results.0, results.1, results.2);
 
-    for (i, result) in [
+    for (_i, result) in [
         (&results_tuple.0, 1usize),
         (&results_tuple.1, 2usize),
         (&results_tuple.2, 3usize),

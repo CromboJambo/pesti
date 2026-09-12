@@ -2,7 +2,7 @@
 
 use pesti_runner::cpu_optimized::reference_raw_scores_optimized;
 use pesti_runner::cpu_optimized_ndarray::{reference_with_ndarray, reference_with_ndarray_manual};
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 fn main() {
@@ -70,7 +70,7 @@ fn main() {
     // Benchmark 3: Ndarray + manual dot products
     println!("\n3. Ndarray + manual dot products:");
     let start = Instant::now();
-    let result3 = reference_with_ndarray_manual(
+    let _result3 = reference_with_ndarray_manual(
         &q_h, &k_h, &v_h, seq_q, seq_k, num_heads, head_dim, rope_base, scale,
     );
     let duration3 = start.elapsed();

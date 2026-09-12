@@ -30,7 +30,7 @@ fn main() {
     }
 
     // New path: f32 stays on device for softmax computation, only final D2H as f32
-    let mut new_path_result = test_values.clone();
+    let new_path_result = test_values.clone();
     println!("\nNew path (f32→softmax(f32)→D2H):");
     for (i, (&orig, &converted)) in test_values.iter().zip(new_path_result.iter()).enumerate() {
         let diff = (orig - converted).abs();

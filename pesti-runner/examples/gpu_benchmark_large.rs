@@ -4,7 +4,7 @@
 
 use half::f16;
 use pesti_runner::cpu_optimized_ndarray::reference_with_ndarray;
-use pesti_runner::memory_pool::{MemoryPool, PooledBuffer};
+use pesti_runner::memory_pool::MemoryPool;
 use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
@@ -27,7 +27,7 @@ impl BenchmarkConfig {
 
 fn run_benchmark(
     config: &BenchmarkConfig,
-    pool: &MemoryPool,
+    _pool: &MemoryPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rope_base = 10_000.0;
     let scale = 1.0 / (config.head_dim as f32).sqrt();

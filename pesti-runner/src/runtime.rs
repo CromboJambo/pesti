@@ -501,6 +501,6 @@ impl Runtime {
     pub fn device_preference(&self) {
         // Stub - actual implementation only exists with CUDA
         self.config.device_preference;
-        ()
+        
     }
 }

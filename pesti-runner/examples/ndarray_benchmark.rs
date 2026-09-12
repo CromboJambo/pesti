@@ -2,7 +2,7 @@
 
 use half::f16;
 use pesti_runner::cpu_optimized_ndarray::reference_with_ndarray;
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 fn main() {

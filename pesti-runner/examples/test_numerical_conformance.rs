@@ -44,7 +44,7 @@ async fn main() -> pesti_runner::error::Result<()> {
     println!("Time: {} ms", result.eval_ms);
     println!(
         "Throughput: {:.1} tok/s",
-        result.generated_tokens as f64 / (result.eval_ms as f64 / 1000.0)
+        result.generated_tokens as f64 / (result.eval_ms / 1000.0)
     );
 
     // Decode tokens to text

@@ -33,18 +33,27 @@ pub mod stub {
         }
     }
 
-    /// Dummy memory module
+    /// Dummy memory module for CPU builds (always errors or no-ops).
     pub mod memory {
         use super::sys::CUdeviceptr;
 
+        /// Stub: always fails. Caller must not reach this on non-CUDA builds.
+        /// # Safety
+        /// No actual CUDA operations performed; safe to call with any arguments.
         pub unsafe fn malloc_async(_stream: u64, _bytes: usize) -> Result<CUdeviceptr, ()> {
             Err(())
         }
 
+        /// Stub: no-op free.
+        /// # Safety
+        /// No actual CUDA operations performed; safe to call with any arguments.
         pub unsafe fn free_async(_ptr: CUdeviceptr, _stream: u64) -> Result<(), ()> {
             Ok(())
         }
 
+        /// Stub: no-op H2D copy.
+        /// # Safety
+        /// No actual CUDA operations performed; safe to call with any arguments.
         pub unsafe fn memcpy_htod_async<T>(
             _dst: CUdeviceptr,
             _src: *const T,
@@ -54,6 +63,9 @@ pub mod stub {
             Ok(())
         }
 
+        /// Stub: no-op D2H copy.
+        /// # Safety
+        /// No actual CUDA operations performed; safe to call with any arguments.
         pub unsafe fn memcpy_dtoh_async<T>(
             _dst: *mut T,
             _src: CUdeviceptr,
@@ -63,6 +75,9 @@ pub mod stub {
             Ok(())
         }
 
+        /// Stub: no-op D2D copy.
+        /// # Safety
+        /// No actual CUDA operations performed; safe to call with any arguments.
         pub unsafe fn memcpy_dtod_async(
             _dst: CUdeviceptr,
             _src: CUdeviceptr,

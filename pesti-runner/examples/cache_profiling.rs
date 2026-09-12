@@ -2,7 +2,7 @@
 
 use half::f16;
 use pesti_runner::cpu_optimized_ndarray::reference_with_ndarray;
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::time::Instant;
 
 #[derive(Debug)]
@@ -78,14 +78,14 @@ impl CacheProfiler {
         if _stride < 64 {
             self.metrics.l1_hits += 1;
         } else if _stride < 256 {
-            if (_address % 5) != 0 {
+            if !_address.is_multiple_of(5) {
                 self.metrics.l2_hits += 1;
             } else {
                 self.metrics.l2_misses += 1;
                 self.metrics.l3_hits += 1;
             }
         } else {
-            if (_address % 10) != 0 {
+            if !_address.is_multiple_of(10) {
                 self.metrics.l3_misses += 1;
             } else {
                 self.metrics.l3_hits += 1;
