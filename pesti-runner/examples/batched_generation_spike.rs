@@ -44,10 +44,7 @@ fn main() {
     let t_seq_start = Instant::now();
     for (i, prompt) in prompts.iter().enumerate() {
         let result = runner.generate(prompt, &config).expect("generation failed");
-        println!(
-            "[{}] Generated {} tokens: {}",
-            i, result.generated_tokens, result.text.trim()
-        );
+        println!("[{}] Generated {} tokens: {}", i, result.generated_tokens, result.text.trim());
     }
     let seq_time = t_seq_start.elapsed().as_secs_f64();
     println!("Sequential total: {:.2}s", seq_time);
@@ -73,7 +70,7 @@ fn main() {
     for (seq_id, tokens) in prompt_tokens.iter().enumerate() {
         for (pos, tok) in tokens.iter().enumerate() {
             batch
-                .add(*tok, pos as i32, &[seq_id as i32], true)
+                .add(llama_cpp_2::token::LlamaToken(*tok), pos as i32, &[seq_id as i32], true)
                 .expect("batch add failed");
         }
     }
@@ -101,10 +98,7 @@ fn main() {
 
     let batch_time = t_batch_start.elapsed().as_secs_f64();
     println!("Batched total: {:.2}s", batch_time);
-    println!(
-        "Speedup: {:.2}x",
-        seq_time / batch_time.max(0.001)
-    );
+    println!("Speedup: {:.2}x", seq_time / batch_time.max(0.001));
 
     println!("\n=== Spike Results ===");
     println!(
