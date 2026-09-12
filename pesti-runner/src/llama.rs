@@ -352,53 +352,61 @@ impl LlamaRunner {
         let mut sampler = self.build_sampler(config);
 
         // Encode prompt
+        let t_encode_start = Instant::now();
         let prompt_tokens = self.encode(prompt, true)?;
         let prompt_len = prompt_tokens.len();
+        let encode_time = t_encode_start.elapsed().as_secs_f64() * 1000.0;
 
-        info!("Prompt: {} tokens", prompt_len);
+        info!(
+            "Prompt: {} tokens (encode {:.2}ms)",
+            prompt_len, encode_time
+        );
 
         // Create batch for prompt
-        // NOTE: second arg is n_seq_max (max sequences per token), NOT a
-        // position. Passing 0 allocates zero-sized seq_id slots, and `add()`
-        // always writes seq_id[..][0] → heap corruption. Must be >= 1.
         let mut batch = LlamaBatch::new(prompt_len, 1);
         for (i, tok) in prompt_tokens.iter().enumerate() {
             batch.add(*tok, i as i32, &[0], true)?;
         }
 
         // Prefill
-        let t_start = Instant::now();
+        let t_prefill_start = Instant::now();
         self.decode(&mut batch)?;
-        let prompt_time = t_start.elapsed().as_secs_f64() * 1000.0;
+        let prefill_time = t_prefill_start.elapsed().as_secs_f64() * 1000.0;
+        info!(
+            "Prefill: {:.2}ms ({:.2} tok/s)",
+            prefill_time,
+            prompt_len as f64 / (prefill_time / 1000.0)
+        );
 
         // Sample first token
+        let t_first_sample = Instant::now();
         let mut tokens: Vec<LlamaToken> = vec![];
         let mut token = {
-            // Scope the borrow: it must be released before the decode loop
-            // below, which calls `decode()` (another borrow_mut).
             let ctx = self.context.borrow_mut();
             let _logits = ctx.get_logits_ith((prompt_len - 1) as i32);
             sampler.sample(&ctx, (prompt_len - 1) as i32)
         };
         tokens.push(token);
+        let first_sample_time = t_first_sample.elapsed().as_secs_f64() * 1000.0;
+        info!("First token sampled in {:.2}ms", first_sample_time);
 
-        info!("First token sampled: {:?}", token);
-
-        // Decode loop
+        // Decode loop with per-token timing
         let t_gen_start = Instant::now();
         let mut gen_count = 0;
+        let mut total_decode_time: f64 = 0.0;
+        let mut total_sample_time: f64 = 0.0;
 
         for pos in prompt_len..(prompt_len + config.max_tokens as usize) {
-            // Create new batch for single token (n_seq_max=1, one sequence).
-            // logits=true so get_logits_ith() below is initialized.
+            let t_step_start = Instant::now();
+
+            // Create new batch for single token
             let mut new_batch = LlamaBatch::new(1, 1);
             new_batch.add(token, pos as i32, &[0], true)?;
 
             // Decode
             self.decode(&mut new_batch)?;
 
-            // Sample next token. get_logits_ith/sample take the batch index:
-            // each iteration uses a fresh 1-token batch, so the index is 0.
+            // Sample next token
             let _logits = self.get_logits_ith(0)?;
             let ctx = self.context.borrow();
             let next_token = sampler.sample(&ctx, 0);
@@ -408,10 +416,13 @@ impl LlamaRunner {
             tokens.push(token);
             gen_count += 1;
 
+            let step_time = t_step_start.elapsed().as_secs_f64() * 1000.0;
+            total_decode_time += step_time;
+
             // Check for EOS
             if self.model.is_eog_token(token) {
                 info!(
-                    "EOS token reached at position {}, generated {} tokens",
+                    "EOS at position {}, generated {} tokens",
                     pos + 1,
                     gen_count
                 );
@@ -420,6 +431,11 @@ impl LlamaRunner {
         }
 
         let gen_time = t_gen_start.elapsed().as_secs_f64() * 1000.0;
+        let avg_step_ms = if gen_count > 0 {
+            total_decode_time / gen_count as f64
+        } else {
+            0.0
+        };
 
         // Decode tokens to text
         let text: String = tokens
@@ -436,14 +452,15 @@ impl LlamaRunner {
         drop(ctx);
 
         info!(
-            "Generation complete: {} tokens in {:.2}ms ({:.2} tok/s)",
+            "Generation complete: {} tokens in {:.2}ms ({:.2} tok/s), avg step {:.2}ms",
             gen_count,
             gen_time,
             if gen_time > 0.0 {
                 gen_count as f64 / gen_time * 1000.0
             } else {
                 0.0
-            }
+            },
+            avg_step_ms
         );
 
         Ok(GenerationResult {
@@ -452,7 +469,7 @@ impl LlamaRunner {
             prompt_tokens: prompt_len,
             generated_tokens: gen_count,
             load_time_ms: timings.t_load_ms(),
-            prompt_eval_ms: prompt_time,
+            prompt_eval_ms: prefill_time,
             eval_ms: gen_time,
         })
     }
