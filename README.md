@@ -17,7 +17,7 @@
 
 **Portable Execution Substrate for Transformer Inference**
 *A learning-first Rust substrate for GGUF inference: parse, dequantize, and run
-transformer forward passes from scratch — with a numpy conformance oracle to prove it.*
+transformer forward passes from scratch (**with a numpy conformance oracle to prove it**)
 
 ---
 
@@ -91,13 +91,12 @@ cargo run -p pesti-runner --release --features cuda \
 | Library test suite | **62/62** lib unit tests pass (`--features cuda --lib`) |
 | llama.cpp FFI runner | ~218 tok/s on TinyLlama-1.1B, consistent across Q3_K_M–Q8_0 (see `pesti-runner/README.md`) |
 
-### ⚠️ Frontier (not yet done — tracked in `ROADMAP.md`)
+### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md`)
 - **Real end-to-end decode tok/s** on the GPU path. CPU path measured at
   ~100 tok/s on Qwen2.5-0.5B (Week 14, `docs/history/WEEK_14_RESULTS.md`);
   the Week 12/13 throughput numbers below are *projections from synthetic
   micro-benchmarks*, **not** measured transformer decode.
-- **GPU end-to-end path** (Week 17, in progress) — the `cudarc` dispatch
-  path exists, failed GPU matmuls now fall back to CPU GEMM with a
+- **GPU end-to-end path** — the `cudarc` dispatch path exists, failed GPU matmuls now fall back to CPU GEMM with a
   `gpu_fallback_count()` counter (no more silent zeroed buffers), and
   per-layer GPU capture tooling is in place. Remaining: per-layer oracle
   diff, divergence fixes, zero-fallback assertion, GPU decode tok/s.
@@ -265,6 +264,12 @@ pesti/
 │   ├── compare_all_layers.py
 │   ├── compare_full_vectors.py
 │   └── CONFORMANCE.md
+├── docs/                  # Design docs, benchmarks, roadmap
+│   ├── ROADMAP.md         #   Upcoming work, known issues, failure modes
+│   ├── benchmarks/        #   Weekly benchmark reports
+│   └── history/           #   Archived week results
+├── scripts/               # Benchmark and setup scripts
+├── tests/                 # Standalone test files
 └── examples-disabled/     # quarantined broken examples (git-tracked, not deleted)
 ```
 
@@ -291,7 +296,7 @@ pesti/
 ## Roadmap
 
 For the full milestone-by-milestone plan (including engineering lessons and
-known gaps), see [`ROADMAP.md`](ROADMAP.md).
+known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Completed
 - [x] GGUF v3 parsing + byte-exact K-family dequantization
@@ -301,8 +306,8 @@ known gaps), see [`ROADMAP.md`](ROADMAP.md).
 - [x] Conformance tooling (numpy oracle + full-vector diffs)
 
 ### Next (frontier)
-- [ ] GPU end-to-end correctness + decode tok/s (Week 17, in progress)
-- [ ] Measured llama.cpp baseline on same model/prompt/hardware (Week 14 remainder)
+- [ ] GPU end-to-end correctness + decode tok/s
+- [ ] Measured llama.cpp baseline on same model/prompt/hardware
 - [ ] KV-cache updates during autoregressive generation (paged attention)
 - [ ] FP8 quantization, multi-GPU scaling
 - [ ] Contribute back to llama.cpp / candle / burn
@@ -316,5 +321,5 @@ known gaps), see [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
-*Last updated: August 25, 2026 (Week 13/14 reconciled; Week 17 GPU e2e correctness in progress)*
+*Last updated: September 11, 2026 (Week 21 — cleanup complete, roadmap restructured)*
 *This README will change as I learn more. If it looks perfect, it's lying.*
