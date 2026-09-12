@@ -17,9 +17,7 @@ fn main() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
-    let model_path = std::env::args()
-        .nth(1)
-        .expect("Usage: batched_generation_spike <model.gguf>");
+    let model_path = std::env::args().nth(1).expect("Usage: batched_generation_spike <model.gguf>");
 
     // Load runner with larger context to fit multiple sequences
     let runner = LlamaRunner::builder(&model_path)
@@ -46,12 +44,7 @@ fn main() {
     let t_seq_start = Instant::now();
     for (i, prompt) in prompts.iter().enumerate() {
         let result = runner.generate(prompt, &config).expect("generation failed");
-        println!(
-            "[{}] Generated {} tokens: {}",
-            i,
-            result.generated_tokens,
-            result.text.trim()
-        );
+        println!("[{}] Generated {} tokens: {}", i, result.generated_tokens, result.text.trim());
     }
     let seq_time = t_seq_start.elapsed().as_secs_f64();
     println!("Sequential total: {:.2}s", seq_time);
@@ -72,16 +65,11 @@ fn main() {
     let max_seq_len = prompt_tokens.iter().map(|t| t.len()).max().unwrap();
 
     // Create batch with n_seq_max = number of prompts (parallel sequences)
-    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(
-        max_seq_len,
-        prompts.len().try_into().unwrap(),
-    );
+    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(max_seq_len, prompts.len());
 
     for (seq_id, tokens) in prompt_tokens.iter().enumerate() {
         for (pos, tok) in tokens.iter().enumerate() {
-            batch
-                .add(*tok, pos as i32, &[seq_id as i32], true)
-                .expect("batch add failed");
+            batch.add(*tok, pos as i32, &[seq_id as i32], true).expect("batch add failed");
         }
     }
 
@@ -94,12 +82,7 @@ fn main() {
     for seq_id in 0..prompts.len() {
         let logits = ctx.get_logits_ith(seq_id as i32);
         // Use greedy sampling for simplicity in this spike
-        let best = logits
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .unwrap()
-            .0;
+        let best = logits.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
         sampled_tokens.push(best as i32);
     }
     drop(ctx);
@@ -108,18 +91,9 @@ fn main() {
 
     let batch_time = t_batch_start.elapsed().as_secs_f64();
     println!("Batched total: {:.2}s", batch_time);
-    println!(
-        "Speedup: {:.2}x",
-        seq_time / batch_time.max(0.001)
-    );
+    println!("Speedup: {:.2}x", seq_time / batch_time.max(0.001));
 
     println!("\n=== Spike Results ===");
-    println!(
-        "Sequential throughput: {:.2} tok/s (total)",
-        prompts.len() as f64 * 50.0 / seq_time
-    );
-    println!(
-        "Batched throughput: {:.2} tok/s (total)",
-        prompts.len() as f64 * 50.0 / batch_time.max(0.001)
-    );
+    println!("Sequential throughput: {:.2} tok/s (total)", prompts.len() as f64 * 50.0 / seq_time);
+    println!("Batched throughput: {:.2} tok/s (total)", prompts.len() as f64 * 50.0 / batch_time.max(0.001));
 }
