@@ -28,9 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Concurrent model calls (3 models running in parallel)
     println!("--- Example 1: Concurrent Model Calls ---");
-    let prompts = ["Explain Rust ownership in one sentence.",
+    let prompts = [
+        "Explain Rust ownership in one sentence.",
         "What makes Rust memory-safe?",
-        "How does async/await work in Rust?"];
+        "How does async/await work in Rust?",
+    ];
 
     // Run all 3 models concurrently (tokio::join!)
     let results = tokio::join!(

@@ -357,7 +357,7 @@ impl LlamaRunner {
         let prompt_len = prompt_tokens.len();
         let encode_time = t_encode_start.elapsed().as_secs_f64() * 1000.0;
 
-        info!(
+        eprintln!(
             "Prompt: {} tokens (encode {:.2}ms)",
             prompt_len, encode_time
         );

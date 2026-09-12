@@ -105,9 +105,10 @@ impl Linear {
                 }
             }
             if let Some(ref b) = self.bias
-                && row < b.len() {
-                    *out_val += b[row];
-                }
+                && row < b.len()
+            {
+                *out_val += b[row];
+            }
         }
         y
     }
@@ -172,14 +173,12 @@ pub struct GgufTokenizerConfig {
 }
 
 /// Stub tokenizer backend enum (mirrors real TokenizerBackend from transformer/tokenizer.rs)
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum TokenizerBackend {
     #[default]
     MistralRs,
     Qwen2Bpe,
 }
-
 
 impl GgufTokenizerConfig {
     /// Build tokenizer config from GGUF header (stub - uses defaults)
