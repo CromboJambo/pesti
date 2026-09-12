@@ -1,87 +1,61 @@
-# PESTI Roadmap — Evidence-Based (September 2026)
+# PESTI Roadmap
 
-## Current State
+**Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 
-PESTI has a working GPU inference path for Qwen2.5-0.5B-Instruct with:
-- Fused attention kernel passing numerical conformance vs llama.cpp
+## Current State (Week 21)
+
+Working GPU inference path for Qwen2.5-0.5B-Instruct:
+- Fused attention kernel passes numerical conformance vs llama.cpp
 - KV cache autoregressive validation suite
 - Real tokenizer integration (qwen2-bpe crate, 50k vocab)
 - Long sequence support verified to seq=4096
 
-**Known broken:** Several examples don't compile after recent API changes. pesti-safetensors has 4 failing tests (Q4_K/Q5_K/Q6_K dequant + config extraction).
+**Throughput:** 0.52 tok/s on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64). Baseline: llama.cpp achieves 77.1 tok/s on TinyLlama Q8 (RTX 4070 Ti SUPER) — different model/hardware, not directly comparable yet.
 
-## Completed Milestones
+## Upcoming Work
 
-### GPU Kernel Integration
-- [x] CUDA dispatch system with LayerDispatch routing
-- [x] Fused attention kernel via candle_bridge
-- [x] Numerical stability fixes for long sequences (softmax overflow)
-- [x] KV cache conformance validation suite
-- [x] Weight conversion and decode-step profiling examples
-
-### Tokenizer
-- [x] Real qwen2-bpe tokenizer integrated from GGUF metadata
-- [x] Fallback tokenizer for non-GGUF models
-- [x] Feature flag `rust-tokenizer` for optional BPE support
-
-## Remaining Work
-
-### Week 18: Stabilize and Measure (✅ Complete)
-- [x] Fix broken examples (`tokenize.rs`, `encode_tokens.rs`, `decode_tokens.rs`) — commit 1651549
-- [x] Establish CPU vs GPU throughput benchmarks — llama.cpp baseline: 77.1 tok/s on TinyLlama Q8 (RTX 4070 Ti SUPER)
-- [x] Document VRAM usage characteristics (docs/benchmarks/VRAM-USAGE.md)
-- [x] Decide on pesti-safetensors failing tests — accept as known issues; mostly pass
-
-### Week 19: Optimization Pass (✅ Complete)
-- [x] Profile attention kernels — results in docs/benchmarks/WEEK19-OPTIMIZATION-REPORT.md
-- [x] Measure GEMM vs naive implementation speedup — documented with concrete numbers
-- [x] Identify memory bandwidth bottlenecks — KV cache identified as primary bottleneck
-- [x] Document optimization opportunities with concrete numbers
-
-### Week 20: FP16 KV Cache Integration (✅ Complete)
-- [x] Implement FP16 KV cache storage (kernel/kvcache.rs uses half::f16)
-- [x] Verify memory savings — benchmark confirms 50% reduction vs FP32
-- [x] Measure throughput impact — **0.52 tok/s** on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64)
-- **Result**: FP16 KV cache implemented and verified; real tok/s measurement achieved after fixing RoPE broadcasting bug in rope_tensors (explicit expand() for tensor layout [batch,seq,heads,half])
-
-### Week 21: Cleanup and Stabilization (✅ Complete)
-- [x] Fix llama-cpp-2 API compatibility (`penalties()` signature change, `decode()` argument)
-- [x] Fix unsafe write amount in pesti-safetensors writer (byte-by-byte → write_all)
-- [x] Clean up clippy errors across workspace (redundant ops, unused imports, Ord impl)
-- [x] Run cargo fmt on entire workspace
-- **Result**: Build passes cleanly, all clippy errors resolved. Commit a4dd72c.
-
-### Week 22: Remaining Debt (Planned)
+### Week 22: Remaining Debt
 - [ ] Fix 4 failing pesti-safetensors tests (Q4_K/Q5_K/Q6_K dequant + config extraction)
 - [ ] Address remaining clippy warnings (unused vars in stub code, missing Safety docs)
-- [ ] Spike: batched generation for parallel prompts (validate feasibility before committing)
+- [ ] Spike: batched generation for parallel prompts
 
-## Key Lessons Learned
+### Week 23+: Optimization and Scale
+- [ ] Establish comparable tok/s benchmark against llama.cpp on same model/hardware
+- [ ] Profile GEMM vs attention kernel time split at production sequence lengths
+- [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
+- [ ] Spike: TMA descriptors for async prefetching
 
-### CUDA Gotchas
-- **cuStreamSynchronize is a no-op** under CU_CTX_SCHED_AUTO — always sync via cuda_shim::stream_synchronize (event-based) or context_synchronize for legacy-default-stream work
-- Stack array sizes in kernels are bounds, not dynamic allocation — `MAX_SEQ = 512` as stack size but indexing past it causes silent corruption
-- Dynamic GPU memory allocation (`cudaMalloc`) is cheap; don't over-optimize by avoiding it
+## Known Issues / Debt
 
-### Development Process
-- Examples rot quickly after API changes — treat example compilation as part of the test suite
-- Conformance testing must be done incrementally: kernel → layer → model, not end-to-end only
-- Numerical stability issues (softmax overflow) only manifest at long sequences — test with seq=4096+
+| Issue | Status | Impact |
+|-------|--------|--------|
+| pesti-safetensors: 4 failing tests (Q4_K/Q5_K/Q6_K dequant + config) | Open | Can't fully validate quantized model loading |
+| Examples don't compile after API changes | Recurring | Developer experience, not runtime |
+| RoPE broadcasting required explicit expand() | Fixed | Caught by conformance testing |
 
-### Architecture Decisions Validated
-- Candle bridge approach works for GPU inference without writing raw CUDA kernels
-- KV cache validation via autoregressive generation catches subtle bugs that unit tests miss
-- Real tokenizer integration is straightforward once GGUF metadata parsing works
+## Failure Modes (Reference)
 
-## Future Considerations (Unvalidated)
+When heading toward these patterns, expect trouble:
 
-These are potential directions not yet explored:
-- Batched generation for parallel prompts
-- KV cache quantization (Q4_K)
-- TMA descriptors for async prefetching
-- Structured logging for dispatch decisions
+**CUDA synchronization:** `cuStreamSynchronize` is a no-op under `CU_CTX_SCHED_AUTO`. Always sync via `cuda_shim::stream_synchronize` (event-based) or `context_synchronize` for legacy-default-stream work. This will silently produce wrong results, not crash.
 
-Each should be validated with a spike before committing to implementation.
+**Kernel stack arrays:** Stack array sizes in kernels are bounds, not dynamic allocation. Indexing past `MAX_SEQ = 512` causes silent corruption, not bounds check failure.
+
+**Numerical stability at scale:** Softmax overflow only manifests at long sequences (seq=4096+). Short-sequence tests pass; production fails. Always test with seq=4096+.
+
+**Examples rot fast:** After API changes, examples break before tests do. Treat example compilation as part of the test suite, not documentation.
+
+**GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
+
+## Completed Milestones (Summary)
+
+- **Weeks 15-17:** GPU kernel integration — CUDA dispatch system, fused attention kernel, KV cache validation suite
+- **Week 18:** Stabilize and measure — fixed examples, established benchmarks, documented VRAM usage
+- **Week 19:** Optimization pass — profiled kernels, measured GEMM speedup, identified memory bandwidth bottleneck
+- **Week 20:** FP16 KV cache integration — implemented and verified; real tok/s measurement achieved
+- **Week 21:** Cleanup — llama-cpp-2 API compatibility, clippy errors resolved, workspace formatted
+
+Detailed logs in git history. Key commits: `b844f4b` (week 20 results), `a4dd72c` (week 21 cleanup).
 
 ---
-*Updated: September 8, 2026 — based on git history and test results, not planning documents*
+*Updated: September 11, 2026 — based on git history and test results, not planning documents*
