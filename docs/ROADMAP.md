@@ -2,6 +2,16 @@
 
 **Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 
+## Current State (Week 21)
+
+Working GPU inference path for Qwen2.5-0.5B-Instruct:
+- Fused attention kernel passes numerical conformance vs llama.cpp
+- KV cache autoregressive validation suite
+- Real tokenizer integration (qwen2-bpe crate, 50k vocab)
+- Long sequence support verified to seq=4096
+
+**Throughput:** 0.52 tok/s on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64). Baseline: llama.cpp achieves 77.1 tok/s on TinyLlama Q8 (RTX 4070 Ti SUPER) — different model/hardware, not directly comparable yet.
+
 ## Upcoming Work
 
 ### Week 22: Remaining Debt
