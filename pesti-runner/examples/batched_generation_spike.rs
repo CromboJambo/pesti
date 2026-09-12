@@ -16,7 +16,9 @@ fn main() {
         .nth(1)
         .expect("Usage: batched_generation_spike <model.gguf>");
 
-    // Load runner with larger context to fit multiple sequences
+    // === BATCHED GENERATION (run first on fresh context) ===
+    println!("=== Batched Generation (n_seq_max=4) ===");
+
     let runner = LlamaRunner::builder(&model_path)
         .n_ctx(8192)
         .n_batch(1024)
@@ -36,26 +38,6 @@ fn main() {
         temperature: 0.7,
         ..Default::default()
     };
-
-    println!("=== Sequential Generation (baseline) ===");
-    let t_seq_start = Instant::now();
-    for (i, prompt) in prompts.iter().enumerate() {
-        let result = runner.generate(prompt, &config).expect("generation failed");
-        println!(
-            "[{}] Generated {} tokens: {}",
-            i,
-            result.generated_tokens,
-            result.text.trim()
-        );
-    }
-    let seq_time = t_seq_start.elapsed().as_secs_f64();
-    println!("Sequential total: {:.2}s", seq_time);
-
-    // Reset KV cache for batched run
-    runner.clear_kv_cache().expect("failed to clear KV cache");
-
-    println!("\n=== Batched Generation (n_seq_max={}) ===", prompts.len());
-    let t_batch_start = Instant::now();
 
     // Encode all prompts
     let mut prompt_tokens = Vec::new();
@@ -80,6 +62,8 @@ fn main() {
         }
     }
 
+    let t_batch_start = Instant::now();
+
     // Prefill all sequences at once
     runner.decode(&mut batch).expect("prefill decode failed");
 
@@ -103,8 +87,31 @@ fn main() {
 
     let batch_time = t_batch_start.elapsed().as_secs_f64();
     println!("Batched total: {:.2}s", batch_time);
-    println!("Speedup: {:.2}x", seq_time / batch_time.max(0.001));
 
+    // === SEQUENTIAL GENERATION (baseline, on same runner after clear) ===
+    drop(runner);
+
+    let runner = LlamaRunner::builder(&model_path)
+        .n_ctx(8192)
+        .n_batch(1024)
+        .build()
+        .expect("Failed to build runner");
+
+    println!("\n=== Sequential Generation (baseline) ===");
+    let t_seq_start = Instant::now();
+    for (i, prompt) in prompts.iter().enumerate() {
+        let result = runner.generate(prompt, &config).expect("generation failed");
+        println!(
+            "[{}] Generated {} tokens: {}",
+            i,
+            result.generated_tokens,
+            result.text.trim()
+        );
+    }
+    let seq_time = t_seq_start.elapsed().as_secs_f64();
+    println!("Sequential total: {:.2}s", seq_time);
+
+    // Results
     println!("\n=== Spike Results ===");
     println!(
         "Sequential throughput: {:.2} tok/s (total)",
@@ -114,4 +121,5 @@ fn main() {
         "Batched throughput: {:.2} tok/s (total)",
         prompts.len() as f64 * 50.0 / batch_time.max(0.001)
     );
+    println!("Speedup: {:.2}x", seq_time / batch_time.max(0.001));
 }
