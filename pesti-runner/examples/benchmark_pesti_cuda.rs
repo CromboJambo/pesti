@@ -3,7 +3,6 @@
 //!
 //! Usage: cargo run --release --features cuda --example benchmark_pesti_cuda
 
-use pesti_runner::kernel::dispatch::{DispatchContext, InferenceEngine};
 use pesti_runner::{LlamaModel, SamplingConfig};
 use std::path::Path;
 use std::time::Instant;
@@ -25,43 +24,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Architecture: {:?}", model.config.arch);
     println!("  Layers: {}", model.config.num_layers);
     println!("  Embed dim: {}", model.config.embed_dim);
-    println!("  Heads: {} (KV: {})", model.config.num_heads, model.config.num_kv_heads);
     println!();
-
-    // Initialize CUDA dispatch context
-    let ctx = DispatchContext::from_engine(InferenceEngine::Cuda);
-    if !ctx.gpu_available() {
-        return Err("CUDA not available".into());
-    }
-    println!("✓ CUDA initialized: {}", ctx.device_info());
-
-    // Build and set fused attention kernel on each layer's dispatch
-    let head_dim = model.config.head_dim as i32;
-    let num_heads = model.config.num_heads as i32;
-    let num_kv_heads = model.config.num_kv_heads as i32;
-
-    println!("Building fused attention kernel...");
-    let start = Instant::now();
-    let fused_kernel = pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
-        head_dim, num_heads, num_kv_heads, 4096, None,
-    )?;
-    println!("✓ Fused attention kernel built in {:.2}s", start.elapsed().as_secs_f64());
-
-    // Set fused kernel on each layer's dispatch
-    if let Some(dispatch_layers) = model.dispatch_layers.as_mut() {
-        for (i, layer_dispatch) in dispatch_layers.iter_mut().enumerate() {
-            layer_dispatch.attention.set_fused_kernel(fused_kernel.clone(), head_dim, num_heads, num_kv_heads);
-            if i == 0 {
-                println!("✓ Fused kernel set on layer {} (total: {})", i, model.config.num_layers);
-            }
-        }
-    }
 
     // Tokenize prompt using pesti-runner's tokenizer
     let start = Instant::now();
-    let (_config, tokenizer) = pesti_runner::transformer::tokenizer::load_tokenizer_from_gguf(
+    let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
         Path::new(model_path),
-        pesti_runner::transformer::tokenizer::TokenizerBackend::Pesti,
+        pesti_runner::TokenizerBackend::MistralRs,
     )?;
     println!("✓ Tokenizer loaded in {:.2}s", start.elapsed().as_secs_f64());
 
@@ -70,22 +39,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Prompt: {} tokens", tokens.len());
     println!();
 
-    // Reset KV caches for clean benchmark
-    model.reset_cpu_kv_caches();
-
     // Run generation through pesti-runner's own stack
     let sampling = SamplingConfig {
         temperature: 0.7,
-        top_k: 40,
-        top_p: 0.95,
-        max_tokens: 128,
+        top_k: Some(40),
+        top_p: Some(0.95),
         ..Default::default()
     };
 
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     println!("Generating response through pesti-runner CUDA kernels...");
     let start = Instant::now();
-    let generated = model.generate(&tokens, 128, &sampling, &mut rng, &[0])?;
+    let generated = model.generate(&tokens, 128, &sampling)?;
     let total_time = start.elapsed().as_secs_f64();
 
     // Decode output
