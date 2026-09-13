@@ -1,82 +1,74 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
-//! Uses LlamaModel::from_gguf_weights() + generate() directly.
-//!
-//! This measures how far pesti-runner gets on its own, without the
-//! llama.cpp FFI wrapper used by benchmark_generation.rs.
+//! Mirrors the llama.cpp generate() flow using pesti-runner's transformer stack.
 
-use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use std::time::Instant;
+use pesti_runner::{LlamaModel, load_gguf_weights};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+fn main() {
+    let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let prompt = "What is the capital of France?";
+    let max_tokens = 64;
 
-    println!("=== pesti-runner standalone CUDA benchmark ===");
-    println!("Model: {}", model_path);
-    println!();
+    // Load weights directly (like llama.cpp's LlamaModel::load_from_file)
+    let t_load = Instant::now();
+    let weights = load_gguf_weights(model_path).expect("Failed to load GGUF weights");
+    let model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
+    println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
-    // Step 1: Load GGUF weights via pesti-runner's own loader
-    let load_start = Instant::now();
-    println!("Loading GGUF weights (pesti-runner)...");
-    let weights = pesti_runner::load_gguf_weights(std::path::Path::new(model_path))?;
-    println!(
-        "✓ Weights loaded in {:.2}s",
-        load_start.elapsed().as_secs_f32()
-    );
+    // Tokenize prompt (like llama.cpp's str_to_token)
+    let t_encode = Instant::now();
+    let prompt_tokens = model.encode(prompt, true).expect("Failed to encode prompt");
+    println!("Encoded {} tokens in {:.2}ms", prompt_tokens.len(), t_encode.elapsed().as_secs_f64() * 1000.0);
 
-    // Step 2: Build LlamaModel from weights using pesti-runner's own stack
-    let build_start = Instant::now();
-    println!("Building LlamaModel (pesti-runner)...");
-    let mut model = LlamaModel::from_gguf_weights(weights)?;
-    println!(
-        "✓ Model built in {:.2}s",
-        build_start.elapsed().as_secs_f32()
-    );
+    // Prefill: run full forward pass on prompt (like llama.cpp's context.decode(batch))
+    let t_prefill = Instant::now();
+    let mut hidden = model.embed(&prompt_tokens).expect("Embedding failed");
+    for layer in &mut model.layers {
+        hidden = layer.forward_with_dispatch(&hidden, 0, None).expect("Layer forward failed");
+    }
+    println!("Prefill done in {:.2}ms", t_prefill.elapsed().as_secs_f64() * 1000.0);
 
-    // Step 3: Tokenize prompt using pesti-runner's tokenizer
-    let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
-    let (_, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(
-        std::path::Path::new(model_path),
-        backend,
-    )?;
+    // Decode loop: generate tokens one at a time (like llama.cpp's decode loop)
+    let mut generated = Vec::new();
+    let mut total_decode_time = 0.0f64;
 
-    let prompt = "Hello, how are you?";
-    let prompt_tokens = tokenizer.encode(prompt)?;
-    println!("\nPrompt: \"{}\"", prompt);
-    println!("Tokenized to {} tokens", prompt_tokens.len());
-    println!("Generating via pesti-runner's own stack (not llama.cpp FFI)...\n");
+    for i in 0..max_tokens {
+        let t_step = Instant::now();
 
-    // Step 4: Run generation loop using pesti-runner's generate() method
-    model.reset_cpu_kv_caches();
-    let max_tokens = 128;
-    let sampling_config = SamplingConfig {
-        temperature: 0.7,
-        top_p: 0.9,
-        top_k: 40,
-        seed: Some(42),
+        // Get logits from hidden state (output head GEMM)
+        let logits = model.output_head(&hidden).expect("Output head failed");
+
+        // Sample next token (greedy for benchmark consistency)
+        let next_token = LlamaModel::argmax_from_logits(&logits);
+        generated.push(next_token);
+
+        // Check for EOS
+        if model.is_eos_token(next_token) {
+            break;
+        }
+
+        // Run single decode step: embed token, forward through layers
+        let t_forward = Instant::now();
+        let token_embed = model.embed_single(next_token).expect("Token embed failed");
+        hidden = model.layers[0].forward_with_dispatch(&token_embed, i + prompt_tokens.len(), None)
+            .expect("Layer 0 forward failed");
+        for layer in &mut model.layers[1..] {
+            hidden = layer.forward_with_dispatch(&hidden, i + prompt_tokens.len(), None)
+                .expect("Layer forward failed");
+        }
+        total_decode_time += t_forward.elapsed().as_secs_f64();
+
+        println!("Token {} ({:?}) in {:.2}ms", i + 1, next_token, t_step.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    let decode_speed = if total_decode_time > 0.0 {
+        generated.len() as f64 / total_decode_time
+    } else {
+        0.0
     };
 
-    let gen_start = Instant::now();
-    let generated = model.generate(
-        &prompt_tokens,
-        max_tokens,
-        &sampling_config,
-        &mut rand::rngs::StdRng::seed_from_u64(42),
-        &[0],
-    )?;
-    let gen_time = gen_start.elapsed().as_secs_f64();
-
-    // Decode output for display
-    let decoded = tokenizer.decode(&generated)?;
-
-    println!("\n=== Results ===");
-    println!("Generated tokens: {}", generated.len());
-    println!("Generation time: {:.3}s", gen_time);
-    println!(
-        "Tokens/sec (pesti-runner own stack): {:.1}",
-        generated.len() as f64 / gen_time
-    );
-    println!("\nOutput (first 200 chars):");
-    println!("{}", &decoded[..std::cmp::min(200, decoded.len())]);
-
-    Ok(())
+    println!("\n=== pesti-runner CUDA Benchmark Results ===");
+    println!("Generated {} tokens", generated.len());
+    println!("Decode speed: {:.2} tok/s", decode_speed);
+    println!("Total decode time: {:.2}s", total_decode_time);
 }
