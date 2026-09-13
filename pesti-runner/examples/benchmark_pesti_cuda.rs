@@ -3,7 +3,9 @@
 //!
 //! Usage: cargo run --release --features cuda --example benchmark_pesti_cuda
 
-use pesti_runner::{LlamaModel, SamplingConfig};
+use pesti_runner::{LlamaModel, load_gguf_weights};
+use pesti_runner::transformer::sampling::{SamplingConfig, sample};
+use pesti_runner::transformer::tokenizer;
 use std::path::Path;
 use std::time::Instant;
 
@@ -17,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load weights through pesti-runner's own stack
     let start = Instant::now();
-    let weights = pesti_runner::load_gguf_weights(Path::new(model_path))?;
+    let weights = load_gguf_weights(Path::new(model_path))?;
     let mut model = LlamaModel::from_gguf_weights(weights)?;
     let load_time = start.elapsed().as_secs_f64();
     println!("✓ Model loaded in {:.2}s", load_time);
@@ -28,9 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Tokenize prompt using pesti-runner's tokenizer
     let start = Instant::now();
-    let (_config, tokenizer) = pesti_runner::load_tokenizer_from_gguf(
+    let (_config, tokenizer) = tokenizer::load_tokenizer_from_gguf(
         Path::new(model_path),
-        pesti_runner::TokenizerBackend::MistralRs,
+        tokenizer::TokenizerBackend::MistralRs,
     )?;
     println!("✓ Tokenizer loaded in {:.2}s", start.elapsed().as_secs_f64());
 
@@ -42,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run generation through pesti-runner's own stack
     let sampling = SamplingConfig {
         temperature: 0.7,
-        top_k: Some(40),
-        top_p: Some(0.95),
-        ..Default::default()
+        top_k: 40,
+        top_p: 0.95,
+        seed: Some(42),
     };
 
     println!("Generating response through pesti-runner CUDA kernels...");
