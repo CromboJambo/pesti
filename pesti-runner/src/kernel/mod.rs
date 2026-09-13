@@ -108,6 +108,8 @@ pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 #[cfg(feature = "cuda")]
 pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
 #[cfg(feature = "cuda")]
+pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
+#[cfg(feature = "cuda")]
 pub mod rope;
 pub mod slow_friend;
 pub mod softmax;
@@ -155,6 +157,8 @@ pub use gemm::{CudaGemmKernel, CudaGemmKernelBuilder};
 pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use kvcache::{KvError, Kvcache, KvcacheSlice};
+#[cfg(feature = "cuda")]
+pub use q4k_kvcache::Q4KVCache;
 #[cfg(not(feature = "cuda"))]
 pub use kvcache_stub::{KvError, Kvcache, KvcacheSlice, TmaDescriptor};
 #[cfg(feature = "cuda")]
