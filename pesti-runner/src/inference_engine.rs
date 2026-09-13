@@ -5,6 +5,7 @@
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use std::sync::Arc;
+use std::sync::Arc;
 use crate::error::{Result, RunnerError};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
