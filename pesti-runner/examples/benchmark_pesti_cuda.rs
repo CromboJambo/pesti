@@ -1,13 +1,12 @@
-//! Profile pesti-runner's own GPU inference path with fused attention enabled.
+//! Profile pesti-runner's own GPU inference path.
 //! Measures GEMM vs attention time split at production sequence lengths
 //! to identify the softmax host-transfer bottleneck.
 //!
-//! Uses LlamaModel::load_gguf() + set_fused_kernel() + forward_with_dispatch(),
+//! Uses LlamaModel::load_gguf() + forward_with_dispatch() directly,
 //! NOT llama.cpp FFI.
 
 use std::env;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 
 fn main() {
@@ -18,7 +17,7 @@ fn main() {
         "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"
     };
 
-    println!("=== pesti-runner GPU Inference Profile (fused attention) ===");
+    println!("=== pesti-runner GPU Inference Profile ===");
     println!("Model: {}", model_path);
     println!();
 
@@ -33,35 +32,6 @@ fn main() {
     };
     let load_time = load_start.elapsed();
     println!("Model loaded in {:.2}s", load_time.as_secs_f64());
-
-    // Enable fused attention kernel on all layers (same pattern as week20_real_benchmark)
-    #[cfg(feature = "cuda")]
-    {
-        use pesti_runner::kernel::fused_attention_conformant::{
-            FusedAttentionArch, build_fused_attention_kernel_conformant,
-        };
-
-        let ctx = pesti_runner::kernel::dispatch::DispatchContext::new();
-        if let Some(stream) = ctx.cuda_stream() {
-            match build_fused_attention_kernel_conformant(
-                FusedAttentionArch::MmaSync,
-                Arc::new(ctx.cuda_context().clone()),
-                Arc::new(stream.clone()),
-            ) {
-                Ok(kernel) => {
-                    for layer in &mut model.layers {
-                        layer.attention.set_fused_kernel(kernel);
-                    }
-                    println!("Fused attention kernel enabled on all {} layers", model.config.num_layers);
-                }
-                Err(e) => {
-                    eprintln!("Failed to build fused attention kernel: {}", e);
-                }
-            }
-        } else {
-            eprintln!("No CUDA stream available");
-        }
-    }
 
     // Tokenize prompt - returns (config, tokenizer) tuple
     let (_config, tokenizer) = match pesti_runner::transformer::tokenizer::load_tokenizer_from_gguf(
@@ -96,7 +66,7 @@ fn main() {
         let seq_len = all_tokens.len() - 1;
         let start_pos = seq_len;
 
-        // Forward pass through pesti-runner's own CUDA kernels with fused attention
+        // Forward pass through pesti-runner's own CUDA kernels
         let forward_start = Instant::now();
         let logits = match model.forward_with_dispatch(&all_tokens, start_pos) {
             Ok(l) => l,
