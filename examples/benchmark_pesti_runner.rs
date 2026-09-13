@@ -29,14 +29,12 @@ fn main() {
     let build_time = build_start.elapsed();
     println!("Model built in {:.2}s", build_time.as_secs_f64());
 
-    // Use pesti-runner's own tokenizer
+    // Use llama.cpp FFI for tokenization (pesti-runner's tokenizer needs network)
     let prompt = "The quick brown fox jumps over the lazy dog. ";
     
-    println!("Encoding prompt via pesti-runner tokenizer...");
-    let mut tokenizer = pesti_runner::Tokenizer::new("Qwen/Qwen2-1.5B-Instruct");
-    tokenizer.init_bpe().expect("Failed to init BPE");
-    
-    let input_ids = tokenizer.encode(prompt).expect("Failed to encode prompt");
+    println!("Encoding prompt via llama.cpp tokenizer...");
+    let ctx = unsafe { llama_cpp::LlamaContext::new(model_path).expect("Failed to load context for tokenization") };
+    let input_ids = ctx.encode(prompt, true).expect("Failed to encode prompt");
     println!("Encoded {} tokens", input_ids.len());
 
     // Warmup: process entire prompt through model layers with KV cache
@@ -77,8 +75,8 @@ fn main() {
         }
         last_token = best_idx_next as u32;
 
-        // Decode token to text via pesti-runner tokenizer
-        let piece = tokenizer.decode(&[last_token]).expect("Failed decode");
+        // Decode token to text via llama.cpp FFI
+        let piece = ctx.token_to_piece(last_token).expect("Failed decode");
         print!("{}", piece);
     }
     println!();
