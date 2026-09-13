@@ -1,6 +1,5 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
-//! Uses LlamaModel::forward(token, pos) directly — the simplest path through
-//! pesti-runner's transformer stack.
+//! Uses LlamaModel::forward_layers_with_cache() for autoregressive decoding.
 
 use std::path::Path;
 use std::time::Instant;
@@ -43,20 +42,13 @@ fn main() {
     let input_ids = ctx.encode(prompt, true).expect("Failed to encode prompt");
     println!("Encoded {} tokens", input_ids.len());
 
-    // Warmup: one forward pass with first token
+    // Warmup: process entire prompt through model layers with KV cache
     println!("Running warmup pass...");
-    let warmup_logits = model.forward(input_ids[0], 0).expect("Warmup forward failed");
-    println!("Warmup complete. Logits length: {}", warmup_logits.len());
-
-    // Find argmax of warmup logits
-    let mut best_idx = 0;
-    let mut best_val = f32::MIN;
-    for (i, &v) in warmup_logits.iter().enumerate() {
-        if v > best_val {
-            best_val = v;
-            best_idx = i;
-        }
+    for (i, &token_id) in input_ids.iter().enumerate() {
+        let emb = model.embed(token_id, i).expect("Failed embed");
+        let _hidden = model.forward_layers_with_cache(&emb, i).expect("Warmup forward failed");
     }
+    println!("Warmup complete.");
 
     // Benchmark: 10 decode steps using pesti-runner's forward pass
     let num_decode_steps = 10;
@@ -66,8 +58,16 @@ fn main() {
     let mut last_token = input_ids[0];
     
     for step in 0..num_decode_steps {
-        let pos = step + 1; // Position in sequence (after warmup)
-        let logits = model.forward(last_token, pos).expect("Forward failed");
+        let pos = input_ids.len() + step;
+
+        // Embed the token
+        let emb = model.embed(last_token, pos).expect("Failed embed");
+
+        // Forward through all layers with KV cache
+        let hidden = model.forward_layers_with_cache(&emb, pos).expect("Forward failed");
+
+        // Apply output head to get logits
+        let logits = model.apply_output_head(&hidden).expect("Logits failed");
 
         // Greedy decode: find argmax
         let mut best_idx_next = 0;
@@ -95,4 +95,7 @@ fn main() {
     println!("Total time: {:.3}s", bench_time.as_secs_f64());
     println!("Avg per token: {:.2}ms", avg_ms);
     println!("Throughput: {:.1} tok/s", tok_s);
+
+    // Cleanup KV caches
+    model.reset_cpu_kv_caches();
 }
