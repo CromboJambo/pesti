@@ -1,5 +1,6 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
-//! Mirrors the llama.cpp generate() flow using pesti-runner's transformer stack.
+//! Uses LlamaModel::forward(token, pos) directly — the simplest path through
+//! pesti-runner's transformer stack.
 
 use std::path::Path;
 use std::time::Instant;
@@ -25,56 +26,50 @@ fn main() {
 
     println!("Building model from weights...");
     let build_start = Instant::now();
-    let model = pesti_runner::LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
+    let mut model = pesti_runner::LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
     let build_time = build_start.elapsed();
     println!("Model built in {:.2}s", build_time.as_secs_f64());
 
-    // Load tokenizer from same directory as model (tokenizer.json)
-    let model_dir = Path::new(model_path)
-        .parent()
-        .expect("Model has no parent dir");
-    let tokenizer_path = model_dir.join("tokenizer.json");
-    println!("Loading tokenizer from: {}", tokenizer_path.display());
-    let tokenizer = pesti_runner::PestiTokenizer::from_file(&tokenizer_path).expect("Failed to load tokenizer");
-
-    // Test prompt - same as llama.cpp benchmark
+    // Use the model's built-in tokenizer if available, otherwise fall back
     let prompt = "The quick brown fox jumps over the lazy dog. ";
-    println!("Encoding prompt...");
-    let input_ids = tokenizer.encode(prompt).expect("Failed to encode prompt");
+    
+    // Encode using llama.cpp FFI tokenizer (same as reference)
+    println!("Encoding prompt via llama.cpp FFI...");
+    let ctx = pesti_runner::llama::LlamaRunner::builder(model_path)
+        .n_ctx(512)
+        .build()
+        .expect("Failed to create llama context for tokenization");
+    
+    let input_ids = ctx.encode(prompt, true).expect("Failed to encode prompt");
     println!("Encoded {} tokens", input_ids.len());
 
-    // Warmup: one forward pass
+    // Warmup: one forward pass with first token
     println!("Running warmup pass...");
-    let mut hidden = model.embedding(&input_ids[0]).expect("Failed embedding");
-    for i in 1..input_ids.len() {
-        let _ = model.forward_layers_with_cache(&hidden, i as i32).expect("Forward failed");
-    }
-    let logits = model.apply_output_head(&hidden);
+    let warmup_logits = model.forward(input_ids[0], 0).expect("Warmup forward failed");
+    println!("Warmup complete. Logits length: {}", warmup_logits.len());
 
-    // Find argmax token
+    // Find argmax of warmup logits
     let mut best_idx = 0;
     let mut best_val = f32::MIN;
-    for (i, &v) in logits.iter().enumerate() {
+    for (i, &v) in warmup_logits.iter().enumerate() {
         if v > best_val {
             best_val = v;
             best_idx = i;
         }
     }
 
-    println!("Warmup complete. Next token: {}", best_idx);
-
-    // Benchmark: 10 decode steps
+    // Benchmark: 10 decode steps using pesti-runner's forward pass
     let num_decode_steps = 10;
     println!("\nBenchmarking {} decode steps...", num_decode_steps);
+    
     let bench_start = Instant::now();
-
+    let mut last_token = input_ids[0];
+    
     for step in 0..num_decode_steps {
-        let pos = input_ids.len() + step;
-        hidden = model.embedding(&best_idx).expect("Failed embedding");
-        hidden = model.forward_layers_with_cache(&hidden, pos as i32).expect("Forward failed");
-        let logits = model.apply_output_head(&hidden);
+        let pos = step + 1; // Position in sequence (after warmup)
+        let logits = model.forward(last_token, pos).expect("Forward failed");
 
-        // Greedy decode
+        // Greedy decode: find argmax
         let mut best_idx_next = 0;
         let mut best_val = f32::MIN;
         for (i, &v) in logits.iter().enumerate() {
@@ -83,10 +78,10 @@ fn main() {
                 best_idx_next = i;
             }
         }
-        best_idx = best_idx_next;
+        last_token = best_idx_next as u32;
 
-        // Decode token to text
-        let piece = tokenizer.decode(&[best_idx]).expect("Failed decode");
+        // Decode token to text via llama.cpp FFI
+        let piece = ctx.token_to_piece(last_token).expect("Failed decode");
         print!("{}", piece);
     }
     println!();
@@ -100,7 +95,4 @@ fn main() {
     println!("Total time: {:.3}s", bench_time.as_secs_f64());
     println!("Avg per token: {:.2}ms", avg_ms);
     println!("Throughput: {:.1} tok/s", tok_s);
-
-    // Cleanup KV caches
-    model.reset_cpu_kv_caches();
 }
