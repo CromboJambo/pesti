@@ -5,7 +5,6 @@
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 use std::sync::Arc;
-use std::sync::Arc;
 use crate::error::{Result, RunnerError};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
@@ -80,7 +79,7 @@ impl InferenceEngine {
             // Initialize CUDA when the feature is on and a GPU is present.
             let (cuda_runtime, stream) = if is_available() {
                 let ordinal = match &device {
-                    Device::Cuda(cuda_dev) => cuda_dev.location().gpu_id,
+                    Device::Cuda(cuda_dev) => cuda_dev.ordinal,
                     _ => 0,
                 };
                 match CudaRuntime::new(ordinal) {
@@ -115,7 +114,9 @@ impl InferenceEngine {
                     tracing::info!("Detected datacenter Blackwell architecture, using tcgen05");
                     Some(GemmArch::Tcgen05)
                 } else if info.supports_adalovelace_tensor_cores() {
-                    tracing::info!("Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores");
+                    tracing::info!(
+                        "Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores"
+                    );
                     Some(GemmArch::Mma)
                 } else {
                     tracing::warn!("No tensor core support detected, using mma.sync fallback");

@@ -30,6 +30,7 @@
 //! let out = ctx.dispatch_linear_cpu(&input, &weights, batch_size)?;
 //! ```
 
+use std::sync::Arc;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
