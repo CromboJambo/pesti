@@ -65,9 +65,9 @@ hf-hub.workspace = true
 candle-core = { workspace = true, package = "candle-core" }
 candle-nn.workspace = true
 
-# Llama C++ FFI
-llama-cpp-2.workspace = true
-llama-cpp-sys-2.workspace = true
+# Llama C++ FFI (GPU offload via llama-cpp's CUDA backend)
+llama-cpp-2 = { workspace = true, features = ["cuda"] }
+llama-cpp-sys-2 = { workspace = true, features = ["cuda"] }
 
 # Encoding support
 encoding_rs.workspace = true

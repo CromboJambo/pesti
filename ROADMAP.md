@@ -21,7 +21,8 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel
 - ✅ Spike: batched generation for parallel prompts — ran on ftw3, measured ~1.0x speedup at seq=128 (expected: short sequences don't benefit; value appears at production lengths >512)
 
 ### Week 23: Optimization and Scale
-- ✅ Establish comparable tok/s benchmark against llama.cpp on same model/hardware — 6x gap identified
+- ✅ Establish comparable tok/s benchmark against llama.cpp on same model/hardw
+- are — 6x gap identified
 
 ## Upcoming Work
 
