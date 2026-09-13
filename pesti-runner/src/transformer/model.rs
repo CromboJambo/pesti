@@ -1562,7 +1562,7 @@ impl LlamaModel {
                         kv_dim: layer.attention.kv_dim,
                         rope_base: layer.attention.rope.base,
                         #[cfg(feature = "cuda")]
-                        fused_kernel: None,
+                        fused_kernel: None, // Set after construction via set_fused_kernel()
                     };
 
                     let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
