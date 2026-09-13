@@ -396,15 +396,18 @@ impl LlamaRunner {
         let mut total_decode_time: f64 = 0.0;
         let mut total_sample_time: f64 = 0.0;
 
+        // Reuse a single batch object for all decode steps to reduce FFI overhead
+        let mut decode_batch = LlamaBatch::new(1, 1);
+
         for pos in prompt_len..(prompt_len + config.max_tokens as usize) {
             let t_step_start = Instant::now();
 
-            // Create new batch for single token
-            let mut new_batch = LlamaBatch::new(1, 1);
-            new_batch.add(token, pos as i32, &[0], true)?;
+            // Clear previous batch entry and add new token
+            decode_batch.clear();
+            decode_batch.add(token, pos as i32, &[0], true)?;
 
             // Decode
-            self.decode(&mut new_batch)?;
+            self.decode(&mut decode_batch)?;
 
             // Sample next token
             let _logits = self.get_logits_ith(0)?;
@@ -559,14 +562,16 @@ impl LlamaRunner {
         let t_gen_start = Instant::now();
         let mut gen_count = 0;
 
+        // Reuse a single batch object for all decode steps to reduce FFI overhead
+        let mut decode_batch = LlamaBatch::new(1, 1);
+
         for pos in prompt_len..(prompt_len + config.max_tokens as usize) {
-            // Create new batch for single token (n_seq_max=1, one sequence).
-            // logits=true so get_logits_ith() below is initialized.
-            let mut new_batch = LlamaBatch::new(1, 1);
-            new_batch.add(token, pos as i32, &[0], true)?;
+            // Clear previous batch entry and add new token
+            decode_batch.clear();
+            decode_batch.add(token, pos as i32, &[0], true)?;
 
             // Decode
-            self.decode(&mut new_batch)?;
+            self.decode(&mut decode_batch)?;
 
             // Sample next token. get_logits_ith/sample take the batch index:
             // each iteration uses a fresh 1-token batch, so the index is 0.
