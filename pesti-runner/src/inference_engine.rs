@@ -79,7 +79,7 @@ impl InferenceEngine {
             // Initialize CUDA when the feature is on and a GPU is present.
             let (cuda_runtime, stream) = if is_available() {
                 let ordinal = match &device {
-                    Device::Cuda(cuda_dev) => cuda_dev.ordinal,
+                    Device::Cuda(cuda_dev) => *cuda_dev,
                     _ => 0,
                 };
                 match CudaRuntime::new(ordinal) {
@@ -264,7 +264,7 @@ impl InferenceEngine {
     }
 
     /// Get device info including CUDA details if available.
-    pub fn full_device_info(&self) -> Result<String, RunnerError> {
+    pub fn full_device_info(&self) -> Result<String> {
         let base = self.device_info()?;
         #[cfg(feature = "cuda")]
         if let Some(cuda) = &self.cuda_runtime {
@@ -294,7 +294,7 @@ impl InferenceEngine {
         m: usize,
         n: usize,
         k: usize,
-    ) -> Result<(), RunnerError> {
+    ) -> Result<()> {
         match self.gemm.matmul(alpha, a, b, beta, c, m, n, k) {
             Ok(()) => Ok(()),
             Err(crate::kernel::GemmError::NotAvailable) => {
@@ -339,14 +339,14 @@ impl InferenceEngine {
     }
 
     /// Run inference on a loaded model.
-    pub fn infer(&self, model: &impl Module, input: Tensor) -> Result<Tensor, RunnerError> {
+    pub fn infer(&self, model: &impl Module, input: Tensor) -> Result<Tensor> {
         model
             .forward(&input)
             .map_err(|e: candle_core::Error| RunnerError::Tensor(e.to_string()))
     }
 
     /// Get device info.
-    pub fn device_info(&self) -> Result<String, RunnerError> {
+    pub fn device_info(&self) -> Result<String> {
         Ok(match &self.device {
             Device::Cpu => "cpu".to_string(),
             #[cfg(feature = "cuda")]
@@ -358,7 +358,7 @@ impl InferenceEngine {
     }
 
     /// Get dtype info.
-    pub fn dtype_info(&self) -> Result<String, RunnerError> {
+    pub fn dtype_info(&self) -> Result<String> {
         Ok(match self.dtype {
             DType::F32 => "F32".to_string(),
             DType::F16 => "F16".to_string(),
@@ -390,7 +390,7 @@ impl InferenceEngine {
         value_cache: &crate::kernel::Kvcache,
         mask: Option<&crate::kernel::DeviceBuffer<f32>>,
         config: &crate::kernel::AttentionConfig,
-    ) -> Result<crate::kernel::DeviceBuffer<f32>, RunnerError> {
+    ) -> Result<crate::kernel::DeviceBuffer<f32>> {
         match self
             .attention
             .forward(query, key_cache, value_cache, mask, config)

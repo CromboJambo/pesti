@@ -105,19 +105,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Get attention weights (already dequantized)
         let wq_data = weights
             .tensors
-            .get(&format!("blk.{}.attn.q_proj.weight", layer_idx))
+            .get(&format!("blk.{}.attn_q.weight", layer_idx))
             .ok_or("Missing attn_q.weight")?;
         let wk_data = weights
             .tensors
-            .get(&format!("blk.{}.attn.k_proj.weight", layer_idx))
+            .get(&format!("blk.{}.attn_k.weight", layer_idx))
             .ok_or("Missing attn_k.weight")?;
         let wv_data = weights
             .tensors
-            .get(&format!("blk.{}.attn.v_proj.weight", layer_idx))
+            .get(&format!("blk.{}.attn_v.weight", layer_idx))
             .ok_or("Missing attn_v.weight")?;
         let wo_data = weights
             .tensors
-            .get(&format!("blk.{}.attn.o_proj.weight", layer_idx))
+            .get(&format!("blk.{}.attn_output.weight", layer_idx))
             .ok_or("Missing attn_output.weight")?;
 
         // Convert dequantized bytes to f32
