@@ -29,23 +29,20 @@ fn main() {
     let build_time = build_start.elapsed();
     println!("Model built in {:.2}s", build_time.as_secs_f64());
 
-    // Use the model's built-in tokenizer if available, otherwise fall back
+    // Use pesti-runner's own tokenizer
     let prompt = "The quick brown fox jumps over the lazy dog. ";
     
-    // Encode using llama.cpp FFI tokenizer (same as reference)
-    println!("Encoding prompt via llama.cpp FFI...");
-    let ctx = pesti_runner::llama::LlamaRunner::builder(model_path)
-        .n_ctx(512)
-        .build()
-        .expect("Failed to create llama context for tokenization");
+    println!("Encoding prompt via pesti-runner tokenizer...");
+    let tokenizer = pesti_runner::Tokenizer::new("Qwen/Qwen2-1.5B-Instruct");
+    tokenizer.init_bpe().expect("Failed to init BPE");
     
-    let input_ids = ctx.encode(prompt, true).expect("Failed to encode prompt");
+    let input_ids = tokenizer.encode(prompt).expect("Failed to encode prompt");
     println!("Encoded {} tokens", input_ids.len());
 
     // Warmup: process entire prompt through model layers with KV cache
     println!("Running warmup pass...");
     for (i, token_id) in input_ids.iter().enumerate() {
-        let emb = model.embed(*token_id as u32, i).expect("Failed embed");
+        let emb = model.embed(*token_id, i).expect("Failed embed");
         let _hidden = model.forward_layers_with_cache(&emb, i).expect("Warmup forward failed");
     }
     println!("Warmup complete.");
@@ -55,13 +52,13 @@ fn main() {
     println!("\nBenchmarking {} decode steps...", num_decode_steps);
     
     let bench_start = Instant::now();
-    let mut last_token: pesti_runner::llama::LlamaToken = input_ids[0];
+    let mut last_token = input_ids[0];
     
     for step in 0..num_decode_steps {
         let pos = input_ids.len() + step;
 
         // Embed the token
-        let emb = model.embed(last_token as u32, pos).expect("Failed embed");
+        let emb = model.embed(last_token, pos).expect("Failed embed");
 
         // Forward through all layers with KV cache
         let hidden = model.forward_layers_with_cache(&emb, pos).expect("Forward failed");
@@ -78,10 +75,10 @@ fn main() {
                 best_idx_next = i;
             }
         }
-        last_token = best_idx_next as pesti_runner::llama::LlamaToken;
+        last_token = best_idx_next as u32;
 
-        // Decode token to text via llama.cpp FFI
-        let piece = ctx.token_to_piece(last_token).expect("Failed decode");
+        // Decode token to text via pesti-runner tokenizer
+        let piece = tokenizer.decode(&[last_token]).expect("Failed decode");
         print!("{}", piece);
     }
     println!();
