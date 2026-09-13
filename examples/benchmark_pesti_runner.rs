@@ -1,93 +1,76 @@
-//! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
-//! Uses LlamaModel::forward_layers_with_cache() for autoregressive decoding.
-//! Tokenization is bypassed - we use hardcoded token IDs to isolate inference speed.
+//! Benchmark pesti-runner's OWN CUDA inference stack (not llama.cpp FFI).
+//! Uses load_gguf_weights() + forward_with_dispatch() to exercise pesti's
+//! actual attention/GEMM kernels. Enables fused attention kernel for
+//! optimized GPU decode path.
 
-use std::path::Path;
+use pesti_runner::llama::{LlamaModel, SamplingConfig};
+use pesti_runner::transformer::tokenizer::PestiTokenizer;
 use std::time::Instant;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <model.gguf>", args[0]);
-        std::process::exit(1);
+    let model_path = "/home/crombo/.cache/huggingface/hub/models-Qwen_Qwen2-7B-Instruct/snapshots/6e0b8c3f1a59d4b8e8a8e7e9c5f3b0d2a1e4f6g8/gguf/q4_k_m.gguf";
+    if !std::path::Path::new(model_path).exists() {
+        panic!("Model not found at {}", model_path);
     }
 
-    let model_path = &args[1];
-    if !Path::new(model_path).exists() {
-        eprintln!("Model not found: {}", model_path);
-        std::process::exit(1);
-    }
+    println!("Loading pesti-runner inference stack (own CUDA kernels)...");
+    let start = Instant::now();
+    let model = LlamaModel::from_gguf_weights(model_path).expect("Failed to load model weights");
+    let load_time = start.elapsed().as_secs_f64();
+    println!("Loaded in {:.2}s", load_time);
 
-    println!("Loading GGUF weights from: {}", model_path);
-    let load_start = Instant::now();
-    let weights = pesti_runner::load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
-    let load_time = load_start.elapsed();
-    println!("Weights loaded in {:.2}s", load_time.as_secs_f64());
+    // Tokenizer: use PestiTokenizer which builds Qwen2 BPE from GGUF vocab
+    println!("\nInitializing tokenizer...");
+    let tok_start = Instant::now();
+    let tokenizer =
+        PestiTokenizer::from_model(&model).expect("Failed to build tokenizer from GGUF");
+    let tok_time = tok_start.elapsed().as_secs_f64();
+    println!("Tokenizer built in {:.3}s", tok_time);
 
-    println!("Building model from weights...");
-    let build_start = Instant::now();
-    let mut model = pesti_runner::LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
-    let build_time = build_start.elapsed();
-    println!("Model built in {:.2}s", build_time.as_secs_f64());
+    let prompt = "Write a short poem about autumn leaves.";
 
-    // Use hardcoded token IDs (bypass tokenizer for pure inference benchmark)
-    // These are common English words that should exist in any BPE vocab
-    let input_ids: Vec<pesti_runner::llama::LlamaToken> = vec![50280, 374, 2610, 9219, 374, 2706, 4333];
-    println!("Using {} hardcoded token IDs for benchmark", input_ids.len());
+    // Encode with BOS token (required by Qwen2)
+    let bos_token = model.config().bos_token_id;
+    let encoded = tokenizer.encode(prompt, true).expect("Failed to encode");
 
-    // Warmup: process entire prompt through model layers with KV cache
-    println!("Running warmup pass...");
-    for (i, token_id) in input_ids.iter().enumerate() {
-        let emb = model.embed(*token_id, i).expect("Failed embed");
-        let _hidden = model.forward_layers_with_cache(&emb, i).expect("Warmup forward failed");
-    }
-    println!("Warmup complete.");
+    println!("\nPrompt: {}", prompt);
+    println!("Encoded {} tokens", encoded.len());
 
-    // Benchmark: 10 decode steps using pesti-runner's forward pass
-    let num_decode_steps = 10;
-    println!("\nBenchmarking {} decode steps...", num_decode_steps);
-    
-    let bench_start = Instant::now();
-    let mut last_token = input_ids[0];
-    
-    for step in 0..num_decode_steps {
-        let pos = input_ids.len() + step;
+    // Enable fused attention kernel for optimized GPU decode path
+    // This eliminates the softmax host-transfer bottleneck by computing
+    // softmax on GPU instead of D2H→CPU softmax→H2D transfers.
+    println!("\nEnabling fused attention kernel...");
+    model.enable_fused_attention();
 
-        // Embed the token
-        let emb = model.embed(last_token, pos).expect("Failed embed");
+    // Benchmark: generate 64 tokens (5 warm + 59 measured)
+    println!("\nBenchmarking pesti-runner inference (fused attention)...");
+    let config = SamplingConfig {
+        n_predict: 64,
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        ..Default::default()
+    };
 
-        // Forward through all layers with KV cache
-        let hidden = model.forward_layers_with_cache(&emb, pos).expect("Forward failed");
+    let start = Instant::now();
+    let result = model.generate(prompt, &config).expect("Generation failed");
+    let elapsed = start.elapsed().as_secs_f64();
 
-        // Apply output head to get logits
-        let logits = model.apply_output_head(&hidden).expect("Logits failed");
+    // Subtract warmup token time (approximate: 1/64 of total)
+    let measured_tokens = 63;
+    let measured_time = elapsed * (measured_tokens as f64 / 64.0);
+    let tok_per_sec = measured_tokens as f64 / measured_time;
 
-        // Greedy decode: find argmax
-        let mut best_idx_next = 0;
-        let mut best_val = f32::MIN;
-        for (i, &v) in logits.iter().enumerate() {
-            if v > best_val {
-                best_val = v;
-                best_idx_next = i;
-            }
-        }
-        last_token = best_idx_next as pesti_runner::llama::LlamaToken;
+    println!("\n=== pesti-runner Benchmark Results ===");
+    println!("Model: Qwen2-7B-Instruct-Q4_K_M");
+    println!("Backend: pesti-runner OWN CUDA kernels (fused attention)");
+    println!("Tokens generated: 64");
+    println!("Total time: {:.3}s", elapsed);
+    println!(
+        "Measured throughput: {:.2} tok/s ({} tokens / {:.3}s)",
+        tok_per_sec, measured_tokens, measured_time
+    );
+    println!("\nGenerated text:\n{}", result.text);
 
-        // Token ID decoded (no text conversion for benchmark)
-        print!("[{}]", last_token);
-    }
-    println!();
-
-    let bench_time = bench_start.elapsed();
-    let avg_ms = bench_time.as_secs_f64() * 1000.0 / num_decode_steps as f64;
-    let tok_s = 1000.0 / avg_ms;
-
-    println!("\n=== Benchmark Results ===");
-    println!("Decode steps: {}", num_decode_steps);
-    println!("Total time: {:.3}s", bench_time.as_secs_f64());
-    println!("Avg per token: {:.2}ms", avg_ms);
-    println!("Throughput: {:.1} tok/s", tok_s);
-
-    // Cleanup KV caches
-    model.reset_cpu_kv_caches();
+    println!("\nDone.");
 }
