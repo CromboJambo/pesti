@@ -79,7 +79,7 @@ impl InferenceEngine {
             // Initialize CUDA when the feature is on and a GPU is present.
             let (cuda_runtime, stream) = if is_available() {
                 let ordinal = match &device {
-                    Device::Cuda(cuda_dev) => cuda_dev.ordinal as usize,
+                    Device::Cuda(cuda_dev) => cuda_dev.ordinal(),
                     _ => 0,
                 };
                 match CudaRuntime::new(ordinal) {
