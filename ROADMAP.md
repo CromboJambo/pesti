@@ -28,6 +28,7 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel
 
 ### Week 23: Optimization and Scale
 - ✅ Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
+- ✅ GPU decode tok/s benchmark on ftw3 (Week 14 deliverable) — pesti-runner achieves ~80 tok/s decode on Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti (CUDA path validated end-to-end)
 - [ ] Profile GEMM vs attention kernel time split at production sequence lengths — identify softmax host-transfer bottleneck
 - [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching
