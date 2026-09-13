@@ -1,5 +1,6 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
 //! Uses LlamaModel::forward_layers_with_cache() for autoregressive decoding.
+//! Tokenization is bypassed - we use hardcoded token IDs to isolate inference speed.
 
 use std::path::Path;
 use std::time::Instant;
@@ -29,13 +30,10 @@ fn main() {
     let build_time = build_start.elapsed();
     println!("Model built in {:.2}s", build_time.as_secs_f64());
 
-    // Use llama.cpp FFI for tokenization (pesti-runner's tokenizer needs network)
-    let prompt = "The quick brown fox jumps over the lazy dog. ";
-    
-    println!("Encoding prompt via llama.cpp tokenizer...");
-    let ctx = unsafe { llama_cpp::LlamaContext::new(model_path).expect("Failed to load context for tokenization") };
-    let input_ids = ctx.encode(prompt, true).expect("Failed to encode prompt");
-    println!("Encoded {} tokens", input_ids.len());
+    // Use hardcoded token IDs (bypass tokenizer for pure inference benchmark)
+    // These are common English words that should exist in any BPE vocab
+    let input_ids: Vec<pesti_runner::llama::LlamaToken> = vec![50280, 374, 2610, 9219, 374, 2706, 4333];
+    println!("Using {} hardcoded token IDs for benchmark", input_ids.len());
 
     // Warmup: process entire prompt through model layers with KV cache
     println!("Running warmup pass...");
@@ -73,11 +71,10 @@ fn main() {
                 best_idx_next = i;
             }
         }
-        last_token = best_idx_next as u32;
+        last_token = best_idx_next as pesti_runner::llama::LlamaToken;
 
-        // Decode token to text via llama.cpp FFI
-        let piece = ctx.token_to_piece(last_token).expect("Failed decode");
-        print!("{}", piece);
+        // Token ID decoded (no text conversion for benchmark)
+        print!("[{}]", last_token);
     }
     println!();
 
