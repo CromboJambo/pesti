@@ -19,10 +19,11 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct:
 - [ ] Address remaining clippy warnings (unused vars in stub code, missing Safety docs)
 - [ ] Spike: batched generation for parallel prompts
 
-### Week 23+: Optimization and Scale
+### Week 23: KV Cache Quantization (IN PROGRESS)
+- [x] Implement Q4_K quantized KV cache module (q4k_kvcache.rs)
+- [ ] Integrate Q4_K KV cache into model inference path (requires attention kernel modifications for on-the-fly dequantization)
+- [ ] Benchmark actual tok/s improvement with integrated Q4_K KV cache
 - [ ] Establish comparable tok/s benchmark against llama.cpp on same model/hardware
-- [ ] Profile GEMM vs attention kernel time split at production sequence lengths
-- [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching
 
 ## Known Issues / Debt
