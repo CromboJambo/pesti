@@ -4,7 +4,8 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use crate::error::RunnerError;
+use std::sync::Arc;
+use crate::error::{Result, RunnerError};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
@@ -72,22 +73,13 @@ impl InferenceEngine {
 
         #[cfg(feature = "cuda")]
         {
-            use crate::cuda_runtime::{CudaRuntime, is_available};
+            use crate::cuda_runtime::{is_available, CudaRuntime};
             use crate::kernel::{AttentionArch, CudaGemmKernelBuilder, GemmArch};
 
             // Initialize CUDA when the feature is on and a GPU is present.
-            //
-            // NOTE: we do NOT gate on `Device::Cuda` — candle-core is built
-            // without its `cuda` feature here, so `Device::Cuda` is never
-            // constructable and that branch was dead code. The engine uses its
-            // own cudarc-backed `CudaRuntime`, so we initialize directly. The
-            // `device` arg only supplies the ordinal hint.
             let (cuda_runtime, stream) = if is_available() {
                 let ordinal = match &device {
-                    Device::Cuda(cuda_dev) => match cuda_dev.location() {
-                        candle_core::DeviceLocation::Cuda { gpu_id } => gpu_id,
-                        _ => 0,
-                    },
+                    Device::Cuda(cuda_dev) => cuda_dev.location().gpu_id,
                     _ => 0,
                 };
                 match CudaRuntime::new(ordinal) {
@@ -113,33 +105,18 @@ impl InferenceEngine {
             // Initialize GEMM kernel first
             let mut gpu_gemm = false;
 
-            // Select architecture based on device capabilities:
-            // - WGMMA (sm_90a): Hopper/Blackwell datacenter GPUs
-            // - Tcgen05 (sm_10.x): Datacenter Blackwell B200/B300
-            // - Ada Lovelace (sm_8.9): Consumer RTX 40-series uses mma.sync tensor cores
-            // - Mma (default): All tensor core GPUs with mma.sync support
             let arch = if let Some(cuda_rt) = &cuda_runtime {
                 let info = cuda_rt.device_info();
-
-                // Check for WGMMA first (Hopper/Blackwell datacenter)
                 if info.supports_wgmma() {
                     tracing::info!("Detected Hopper/Blackwell architecture, using WGMMA");
                     Some(GemmArch::Wgmma)
-                }
-                // Check for tcgen05 (datacenter Blackwell B200/B300)
-                else if info.supports_tcgen05() {
+                } else if info.supports_tcgen05() {
                     tracing::info!("Detected datacenter Blackwell architecture, using tcgen05");
                     Some(GemmArch::Tcgen05)
-                }
-                // Check for Ada Lovelace (RTX 40-series consumer GPUs like your RTX 4070 Ti SUPER)
-                else if info.supports_adalovelace_tensor_cores() {
-                    tracing::info!(
-                        "Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores"
-                    );
-                    Some(GemmArch::Mma) // Use mma.sync for Ada Lovelace
-                }
-                // Fallback to mma.sync (classic warp-level GEMM)
-                else {
+                } else if info.supports_adalovelace_tensor_cores() {
+                    tracing::info!("Detected Ada Lovelace architecture (sm_8.9), using mma.sync tensor cores");
+                    Some(GemmArch::Mma)
+                } else {
                     tracing::warn!("No tensor core support detected, using mma.sync fallback");
                     Some(GemmArch::Mma)
                 }
@@ -161,7 +138,6 @@ impl InferenceEngine {
                 {
                     Ok(kernel) => {
                         gpu_gemm = true;
-                        // Keep a clone for attention kernel
                         let kernel_clone = kernel.clone();
                         (Box::new(kernel), Some(kernel_clone))
                     }
@@ -187,15 +163,13 @@ impl InferenceEngine {
                         crate::kernel::memory::CudaMemoryBackend::with_device_info(s.clone(), info),
                     );
 
-                    // Check if we should use Flash Attention (Option C) or GEMM-based (Option A)
                     #[cfg(feature = "flash-attention")]
                     {
-                        // Try to load Flash Attention kernel first
                         let flash_config = crate::kernel::FlashAttentionConfig::default();
                         match crate::kernel::FlashAttentionKernel::new(
                             cuda_rt.context().clone(),
                             s.clone(),
-                            (*backend).clone(), // Dereference Arc to get CudaMemoryBackend
+                            (*backend).clone(),
                             flash_config,
                         ) {
                             Ok(flash_kernel) => {
@@ -204,7 +178,6 @@ impl InferenceEngine {
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "Flash Attention failed, falling back to GEMM-based attention");
-                                // Fall through to GEMM-based attention below
                                 let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
                                     Box::new(crate::kernel::CpuSoftmaxKernel::new());
                                 let attention_kernel = GemmBasedAttentionKernel::new(
@@ -220,7 +193,6 @@ impl InferenceEngine {
 
                     #[cfg(not(feature = "flash-attention"))]
                     {
-                        // Default to GEMM-based attention when flash-attention feature is disabled
                         let softmax_kernel: Box<dyn crate::kernel::SoftmaxKernel> =
                             Box::new(crate::kernel::CpuSoftmaxKernel::new());
                         let attention_kernel = GemmBasedAttentionKernel::new(
@@ -260,7 +232,7 @@ impl InferenceEngine {
                 cpu_attention: crate::kernel::CpuAttentionKernel::new(AttentionArch::Cpu),
                 #[cfg(feature = "cuda")]
                 gpu_gemm,
-                inertia_manager: InertiaManager::new(1024), // default queue size
+                inertia_manager: InertiaManager::new(1024),
             }
         }
     }
@@ -278,9 +250,6 @@ impl InferenceEngine {
     }
 
     /// Get the CUDA stream used by the engine's kernels (None = CPU-only).
-    ///
-    /// Callers that allocate device buffers (e.g. `CudaMemoryBackend`) MUST use
-    /// this same stream, otherwise H2D/D2H copies race with kernel launches.
     #[cfg(feature = "cuda")]
     pub fn cuda_stream(&self) -> Option<&Arc<cudarc::driver::safe::CudaStream>> {
         self.stream.as_ref()

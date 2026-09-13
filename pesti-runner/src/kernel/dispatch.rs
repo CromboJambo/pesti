@@ -188,7 +188,7 @@ impl DispatchContext {
     }
 
     /// Build a memory manager that matches the engine's backend.
-    fn build_memory(_engine: &InferenceEngine) -> MemoryManager {
+    fn build_memory(engine: &InferenceEngine) -> MemoryManager {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
@@ -239,7 +239,7 @@ impl DispatchContext {
     }
 
     /// Build memory manager from an existing engine (mirrors build_memory logic).
-    fn build_memory_from_engine(_engine: &InferenceEngine) -> MemoryManager {
+    fn build_memory_from_engine(engine: &InferenceEngine) -> MemoryManager {
         #[cfg(feature = "cuda")]
         {
             if let (Some(stream), Some(info)) = (engine.cuda_stream(), engine.cuda_device_info()) {
