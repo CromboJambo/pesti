@@ -3,91 +3,104 @@
 
 use std::path::Path;
 use std::time::Instant;
-use pesti_runner::{load_gguf_weights, LlamaModel};
 
 fn main() {
-    let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
-    let prompt = "What is the capital of France?";
-
-    println!("Loading model from {}", model_path);
-    let t_load = Instant::now();
-    let weights = load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
-    let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
-    println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
-
-    // Tokenize prompt using the tokenizer directly
-    let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
-    let t_encode = Instant::now();
-    let prompt_tokens = tokenizer.encode(prompt).expect("Failed to encode prompt");
-    println!(
-        "Encoded {} tokens in {:.2}ms",
-        prompt_tokens.len(),
-        t_encode.elapsed().as_secs_f64() * 1000.0
-    );
-
-    // Prefill: run all prompt tokens through the model with KV cache
-    let t_prefill = Instant::now();
-    let mut hidden = model.embedding(&prompt_tokens[0]).expect("Embedding failed");
-    for (i, &token) in prompt_tokens.iter().enumerate().skip(1) {
-        hidden = model.forward_layers_with_cache(&hidden, i).expect("Forward pass failed");
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <model.gguf>", args[0]);
+        std::process::exit(1);
     }
-    println!(
-        "Prefill done in {:.2}ms",
-        t_prefill.elapsed().as_secs_f64() * 1000.0
-    );
 
-    // Decode loop: generate tokens one at a time (like llama.cpp's decode loop)
-    let mut generated = Vec::new();
-    let total_decode_time = Instant::now();
-    let max_tokens = 32;
+    let model_path = &args[1];
+    if !Path::new(model_path).exists() {
+        eprintln!("Model not found: {}", model_path);
+        std::process::exit(1);
+    }
 
-    for i in 0..max_tokens {
-        let t_step = Instant::now();
+    println!("Loading GGUF weights from: {}", model_path);
+    let load_start = Instant::now();
+    let weights = pesti_runner::load_gguf_weights(model_path).expect("Failed to load GGUF weights");
+    let load_time = load_start.elapsed();
+    println!("Weights loaded in {:.2}s", load_time.as_secs_f64());
 
-        // Get logits from hidden state (like llama.cpp's context.current_batch().next_token_logits())
-        let logits = model.apply_output_head(&hidden).expect("Logits failed");
+    println!("Building model from weights...");
+    let build_start = Instant::now();
+    let model = pesti_runner::LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
+    let build_time = build_start.elapsed();
+    println!("Model built in {:.2}s", build_time.as_secs_f64());
 
-        // Sample next token (greedy for benchmark)
-        let next_token = logits
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .unwrap()
-            .0 as u32;
+    // Load tokenizer from same directory as model (tokenizer.json)
+    let model_dir = Path::new(model_path)
+        .parent()
+        .expect("Model has no parent dir");
+    let tokenizer_path = model_dir.join("tokenizer.json");
+    println!("Loading tokenizer from: {}", tokenizer_path.display());
+    let tokenizer = pesti_runner::PestiTokenizer::from_file(&tokenizer_path).expect("Failed to load tokenizer");
 
-        // Check for EOS (like llama.cpp's model.is_eog_token())
-        let piece = tokenizer.decode(&[next_token]).expect("Failed to decode token");
-        if piece == "< |endoftext|>" {
-            println!("EOS reached at token {}", i + 1);
-            break;
+    // Test prompt - same as llama.cpp benchmark
+    let prompt = "The quick brown fox jumps over the lazy dog. ";
+    println!("Encoding prompt...");
+    let input_ids = tokenizer.encode(prompt).expect("Failed to encode prompt");
+    println!("Encoded {} tokens", input_ids.len());
+
+    // Warmup: one forward pass
+    println!("Running warmup pass...");
+    let mut hidden = model.embedding(&input_ids[0]).expect("Failed embedding");
+    for i in 1..input_ids.len() {
+        let _ = model.forward_layers_with_cache(&hidden, i as i32).expect("Forward failed");
+    }
+    let logits = model.apply_output_head(&hidden);
+
+    // Find argmax token
+    let mut best_idx = 0;
+    let mut best_val = f32::MIN;
+    for (i, &v) in logits.iter().enumerate() {
+        if v > best_val {
+            best_val = v;
+            best_idx = i;
         }
-
-        generated.push(next_token);
-
-        // Run single decode step: embed token, forward through layers with cache
-        let t_forward = Instant::now();
-        let token_embed = model.embedding(&[next_token]).expect("Token embed failed");
-        hidden = model
-            .forward_layers_with_cache(&token_embed, i + prompt_tokens.len())
-            .expect("Forward pass failed");
-        let _t_forward_elapsed = t_forward.elapsed().as_secs_f64();
-
-        println!(
-            "Token {} ({:?}) in {:.2}ms",
-            i + 1,
-            piece,
-            t_step.elapsed().as_secs_f64() * 1000.0
-        );
     }
 
-    let total_decode = total_decode_time.elapsed().as_secs_f64();
-    let decode_speed = if total_decode > 0.0 {
-        generated.len() as f64 / total_decode
-    } else {
-        0.0
-    };
+    println!("Warmup complete. Next token: {}", best_idx);
 
-    println!("Generated {} tokens", generated.len());
-    println!("Decode speed: {:.2} tok/s", decode_speed);
-    println!("Total decode time: {:.2}s", total_decode);
+    // Benchmark: 10 decode steps
+    let num_decode_steps = 10;
+    println!("\nBenchmarking {} decode steps...", num_decode_steps);
+    let bench_start = Instant::now();
+
+    for step in 0..num_decode_steps {
+        let pos = input_ids.len() + step;
+        hidden = model.embedding(&best_idx).expect("Failed embedding");
+        hidden = model.forward_layers_with_cache(&hidden, pos as i32).expect("Forward failed");
+        let logits = model.apply_output_head(&hidden);
+
+        // Greedy decode
+        let mut best_idx_next = 0;
+        let mut best_val = f32::MIN;
+        for (i, &v) in logits.iter().enumerate() {
+            if v > best_val {
+                best_val = v;
+                best_idx_next = i;
+            }
+        }
+        best_idx = best_idx_next;
+
+        // Decode token to text
+        let piece = tokenizer.decode(&[best_idx]).expect("Failed decode");
+        print!("{}", piece);
+    }
+    println!();
+
+    let bench_time = bench_start.elapsed();
+    let avg_ms = bench_time.as_secs_f64() * 1000.0 / num_decode_steps as f64;
+    let tok_s = 1000.0 / avg_ms;
+
+    println!("\n=== Benchmark Results ===");
+    println!("Decode steps: {}", num_decode_steps);
+    println!("Total time: {:.3}s", bench_time.as_secs_f64());
+    println!("Avg per token: {:.2}ms", avg_ms);
+    println!("Throughput: {:.1} tok/s", tok_s);
+
+    // Cleanup KV caches
+    model.reset_cpu_kv_caches();
 }
