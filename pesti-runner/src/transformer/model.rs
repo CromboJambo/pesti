@@ -577,7 +577,7 @@ impl LlamaModel {
             kv_dim: layer.attention.kv_dim,
             rope_base: layer.attention.rope.base,
             #[cfg(feature = "cuda")]
-            fused_kernel: None, // Set later via set_fused_kernel() after CUDA init
+            fused_kernel: None, // Set after CUDA context init via set_fused_kernel()
         };
         let feed_forward = FeedForwardDispatch {
             w1: LinearDispatch::new(
