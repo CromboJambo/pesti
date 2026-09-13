@@ -33,7 +33,7 @@ fn main() {
     let prompt = "The quick brown fox jumps over the lazy dog. ";
     
     println!("Encoding prompt via pesti-runner tokenizer...");
-    let tokenizer = pesti_runner::Tokenizer::new("Qwen/Qwen2-1.5B-Instruct");
+    let mut tokenizer = pesti_runner::Tokenizer::new("Qwen/Qwen2-1.5B-Instruct");
     tokenizer.init_bpe().expect("Failed to init BPE");
     
     let input_ids = tokenizer.encode(prompt).expect("Failed to encode prompt");
