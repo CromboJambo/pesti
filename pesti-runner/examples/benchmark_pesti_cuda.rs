@@ -1,101 +1,88 @@
-//! Profile pesti-runner's own GPU inference path.
-//! Measures GEMM vs attention time split at production sequence lengths
-//! to identify the softmax host-transfer bottleneck.
-//!
-//! Uses LlamaModel::load_gguf() + forward_with_dispatch() directly,
-//! NOT llama.cpp FFI.
+//! Week 20: Real tok/s benchmark with fused attention kernel enabled.
+//! Measures FP16 KV cache + fused attention throughput on RTX 4070 Ti SUPER.
+//! Adapted to pesti-runner's current API (September 2026).
 
-use std::env;
-use std::path::Path;
 use std::time::Instant;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let model_path = if args.len() > 1 {
-        &args[1]
-    } else {
-        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-    };
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
-    println!("=== pesti-runner GPU Inference Profile ===");
+    println!("=== Week 20: Real tok/s Benchmark (pesti-runner own kernels) ===");
     println!("Model: {}", model_path);
     println!();
 
-    // Load model through pesti-runner's own path (not llama.cpp FFI)
-    let load_start = Instant::now();
-    let mut model = match pesti_runner::transformer::model::LlamaModel::load_gguf(Path::new(model_path)) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Failed to load model: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let load_time = load_start.elapsed();
-    println!("Model loaded in {:.2}s", load_time.as_secs_f64());
+    // Load weights and build model through pesti-runner's own stack
+    let t0 = Instant::now();
+    let weights = pesti_runner::load_gguf_weights(std::path::Path::new(model_path))?;
+    let mut model = pesti_runner::transformer::model::LlamaModel::from_gguf_weights(weights)?;
+    println!("Loaded & built model in {:.2}s", t0.elapsed().as_secs_f64());
 
-    // Tokenize prompt - returns (config, tokenizer) tuple
-    let (_config, tokenizer) = match pesti_runner::transformer::tokenizer::load_tokenizer_from_gguf(
-        Path::new(model_path),
-        pesti_runner::transformer::tokenizer::TokenizerBackend::Pesti,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed to load tokenizer: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let prompt = "The quick brown fox jumps over the lazy dog. ";
-    let tokens = match tokenizer.encode(prompt) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed to encode: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    println!("Prompt: '{}'", prompt);
-    println!("Tokens: {} ({:?})", tokens.len(), tokens);
-    println!();
-
-    // Run generation loop manually to measure each step
-    let mut all_tokens = tokens.clone();
-    let max_new_tokens = 32;
-
-    for step in 0..max_new_tokens {
-        let seq_len = all_tokens.len() - 1;
-        let start_pos = seq_len;
-
-        // Forward pass through pesti-runner's own CUDA kernels
-        let forward_start = Instant::now();
-        let logits = match model.forward_with_dispatch(&all_tokens, start_pos) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("Forward failed at step {}: {}", step, e);
-                break;
+    // Enable fused attention kernel on all layers
+    #[cfg(feature = "cuda")]
+    {
+        use std::sync::Arc;
+        let ctx = pesti_runner::kernel::dispatch::DispatchContext::new();
+        if let Some(stream) = ctx.cuda_stream() {
+            match pesti_runner::kernel::fused_attention_conformant::build_fused_attention_kernel_conformant(
+                pesti_runner::kernel::fused_attention_conformant::FusedAttentionArch::MmaSync,
+                Arc::new(ctx.cuda_context().clone()),
+                Arc::new(stream.clone()),
+            ) {
+                Ok(kernel) => {
+                    for layer in &mut model.layers {
+                        layer.attention.set_fused_kernel(kernel);
+                    }
+                    println!("Fused attention kernel enabled on all {} layers", model.config.num_layers);
+                }
+                Err(e) => {
+                    eprintln!("Failed to build fused attention kernel: {}", e);
+                }
             }
-        };
-        let forward_ms = forward_start.elapsed().as_secs_f64() * 1000.0;
-
-        // Sample next token (argmax for determinism)
-        let last_logits = &logits[seq_len];
-        let next_token = pesti_runner::transformer::sampling::argmax(last_logits);
-
-        all_tokens.push(next_token);
-
-        if step < 3 || step >= max_new_tokens - 3 {
-            println!("Step {}: {:.1}ms", step, forward_ms);
+        } else {
+            eprintln!("No CUDA stream available");
         }
     }
 
-    // Decode output
-    let generated = match tokenizer.decode(&all_tokens) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed to decode: {}", e);
-            std::process::exit(1);
-        }
+    // Tokenize prompt
+    let backend = pesti_runner::transformer::TokenizerBackend::MistralRs;
+    let (_config, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(
+        std::path::Path::new(model_path),
+        backend,
+    )?;
+
+    let prompt = "The quick brown fox jumps over the lazy dog.";
+    let prompt_tokens = tokenizer.encode(prompt)?;
+    println!("Prompt: {} ({} tokens)", prompt, prompt_tokens.len());
+
+    // Generate with timing - use pesti-runner's own generate loop
+    model.reset_cpu_kv_caches();
+    let max_tokens = 64;
+    let sampling_config = pesti_runner::transformer::SamplingConfig {
+        temperature: 0.0,
+        top_p: 0.9,
+        top_k: 40,
+        seed: Some(42),
     };
 
-    println!("\nGenerated: '{}'", generated);
+    let t1 = Instant::now();
+    let generated = model.generate(
+        &prompt_tokens,
+        max_tokens,
+        &sampling_config,
+        &mut rand::rngs::StdRng::seed_from_u64(42),
+        &[0],
+    )?;
+    let gen_time = t1.elapsed().as_secs_f64();
+
+    println!("\n=== Results ===");
+    println!("Generated tokens: {}", generated.len());
+    println!("Generation time: {:.3}s", gen_time);
+    if gen_time > 0.0 {
+        println!("Throughput: {:.2} tok/s", generated.len() as f64 / gen_time);
+    }
+
+    let decoded = tokenizer.decode(&generated)?;
+    println!("\nOutput (first 100 chars): {}", &decoded[..std::cmp::min(100, decoded.len())]);
+
+    Ok(())
 }
