@@ -44,8 +44,8 @@ fn main() {
 
     // Warmup: process entire prompt through model layers with KV cache
     println!("Running warmup pass...");
-    for (i, &token_id) in input_ids.iter().enumerate() {
-        let emb = model.embed(token_id, i).expect("Failed embed");
+    for (i, token_id) in input_ids.iter().enumerate() {
+        let emb = model.embed(*token_id as u32, i).expect("Failed embed");
         let _hidden = model.forward_layers_with_cache(&emb, i).expect("Warmup forward failed");
     }
     println!("Warmup complete.");
@@ -55,13 +55,13 @@ fn main() {
     println!("\nBenchmarking {} decode steps...", num_decode_steps);
     
     let bench_start = Instant::now();
-    let mut last_token = input_ids[0];
+    let mut last_token: pesti_runner::llama::LlamaToken = input_ids[0];
     
     for step in 0..num_decode_steps {
         let pos = input_ids.len() + step;
 
         // Embed the token
-        let emb = model.embed(last_token, pos).expect("Failed embed");
+        let emb = model.embed(last_token as u32, pos).expect("Failed embed");
 
         // Forward through all layers with KV cache
         let hidden = model.forward_layers_with_cache(&emb, pos).expect("Forward failed");
@@ -78,7 +78,7 @@ fn main() {
                 best_idx_next = i;
             }
         }
-        last_token = best_idx_next as u32;
+        last_token = best_idx_next as pesti_runner::llama::LlamaToken;
 
         // Decode token to text via llama.cpp FFI
         let piece = ctx.token_to_piece(last_token).expect("Failed decode");
