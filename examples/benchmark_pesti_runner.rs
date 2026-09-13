@@ -19,7 +19,7 @@ fn main() {
 
     println!("Loading GGUF weights from: {}", model_path);
     let load_start = Instant::now();
-    let weights = pesti_runner::load_gguf_weights(model_path).expect("Failed to load GGUF weights");
+    let weights = pesti_runner::load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
     let load_time = load_start.elapsed();
     println!("Weights loaded in {:.2}s", load_time.as_secs_f64());
 
