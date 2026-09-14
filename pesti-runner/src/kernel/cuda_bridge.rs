@@ -1,17 +1,16 @@
-//! CUDA cuBLAS GEMM bridge using cudarc's safe CudaBlas API.
+//! CUDA cuBLAS GEMM bridge using cudarc's result API.
 //!
-//! Uses the safe CudaBlas type with GemmConfig, which internally calls cublasGemmEx
-//! with proper F16 input / F32 compute type settings. This achieves true F16 compute
-//! on GPU while maintaining F32 accumulation precision for numerical stability.
+//! Uses cudarc's result::hgemm which calls cublasHgemm directly via libloading,
+//! avoiding the gemm_ex parameter issues entirely.
 
 use std::sync::Arc;
-use cudarc::cublas::{CudaBlas, GemmConfig, Gemm};
+use cudarc::cublas::result::{create_handle, destroy_handle, hgemm};
 use cudarc::driver::{CudaContext, CudaStream};
 use half::f16;
 
-/// Direct cuBLAS F16 bridge using safe cudarc API.
+/// Direct cuBLAS F16 bridge using cudarc result API.
 pub struct CudaBridge {
-    handle: Arc<CudaBlas>,
+    handle: cudarc::cublas::sys::cublasHandle_t,
     stream: Option<Arc<CudaStream>>,
 }
 
@@ -21,10 +20,7 @@ impl CudaBridge {
         let ctx = CudaContext::new(0).map_err(|e| format!("Failed to init CUDA device: {}", e))?;
         let stream = ctx.default_stream();
 
-        let handle = Arc::new(
-            CudaBlas::new(stream.clone())
-                .map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?,
-        );
+        let handle = create_handle().map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?;
 
         Ok(Self {
             handle,
@@ -33,7 +29,7 @@ impl CudaBridge {
     }
 
     /// Perform F16 GEMM: C = A @ B where A is [m,k] F16, B is [k,n] F16, result is [m,n] F32.
-    /// Uses cublasGemmEx internally with CUBLAS_COMPUTE_32F for F32 accumulation precision.
+    /// Uses cublasHgemm directly for true F16 compute.
     pub fn gemm_f16f32(
         &self,
         a: &[f16],
@@ -59,27 +55,27 @@ impl CudaBridge {
             .map_err(|e| format!("Failed to allocate C: {}", e))?;
 
         // cuBLAS is column-major. For row-major A×B, compute (B^T × A^T)^T.
-        // cublasGemmEx with CUBLAS_OP_T for both operands gives us the right layout.
+        let alpha = f16::from_f32(1.0);
+        let beta = f16::from_f32(0.0);
+
         unsafe {
-            self.handle
-                .gemm(
-                    GemmConfig {
-                        transa: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                        transb: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                        m: n as i32,
-                        n: m as i32,
-                        k: k as i32,
-                        alpha: f16::from_f32(1.0),
-                        lda: n as i32,
-                        ldb: k as i32,
-                        beta: f16::from_f32(0.0),
-                        ldc: m as i32,
-                    },
-                    &b_dev,
-                    &a_dev,
-                    &mut c_dev,
-                )
-                .map_err(|e| format!("cublasGemmEx failed: {}", e))?;
+            hgemm(
+                self.handle,
+                cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
+                cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
+                n as i32,
+                m as i32,
+                k as i32,
+                &alpha,
+                b_dev.as_ptr(),
+                n as i32,
+                a_dev.as_ptr(),
+                k as i32,
+                &beta,
+                c_dev.as_mut_ptr(),
+                m as i32,
+            )
+            .map_err(|e| format!("cublasHgemm failed: {}", e))?;
         }
 
         // Sync and download result, convert F16→F32 on host
@@ -102,5 +98,13 @@ impl CudaBridge {
                 .map_err(|e| format!("sync failed: {}", e))?;
         }
         Ok(())
+    }
+}
+
+impl Drop for CudaBridge {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = destroy_handle(self.handle);
+        }
     }
 }
