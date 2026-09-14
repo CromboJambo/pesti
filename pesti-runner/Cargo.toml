@@ -75,4 +75,5 @@ encoding_rs.workspace = true
 [features]
 default = []
 cuda = ["cudarc"]
+llama_cpp_2_v156 = []
 rust-tokenizer = ["qwen2-bpe"]
