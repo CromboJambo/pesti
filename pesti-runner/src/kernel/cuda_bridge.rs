@@ -14,13 +14,14 @@ use half::f16;
 /// Direct cuBLAS F16 bridge.
 pub struct CudaBridge {
     blas: Arc<CudaBlas>,
+    stream: Arc<CudaStream>,
 }
 
 impl CudaBridge {
     /// Create a new CUDA bridge with cuBLAS handle on device 0.
     pub fn new() -> Result<Self, String> {
         let ctx = CudaContext::new(0).map_err(|e| format!("Failed to init CUDA device: {}", e))?;
-        let stream = ctx.default_stream();
+        let stream = Arc::new(ctx.default_stream());
 
         // Create cuBLAS handle via cudarc's safe API
         let blas = CudaBlas::new(stream.clone()).map_err(|e| {
@@ -29,6 +30,7 @@ impl CudaBridge {
 
         Ok(Self {
             blas: Arc::new(blas),
+            stream,
         })
     }
 
@@ -43,12 +45,12 @@ impl CudaBridge {
         k: usize,
     ) -> Result<Vec<f32>, String> {
         // Upload inputs to device
-        let a_dev = self.blas.stream().clone_htod(a).map_err(|e| format!("Failed to upload A: {:?}", e))?;
-        let b_dev = self.blas.stream().clone_htod(b).map_err(|e| format!("Failed to upload B: {:?}", e))?;
+        let a_dev = self.stream.clone_htod(a).map_err(|e| format!("Failed to upload A: {:?}", e))?;
+        let b_dev = self.stream.clone_htod(b).map_err(|e| format!("Failed to upload B: {:?}", e))?;
 
         // Allocate output on device (F16)
         let c_size = m * n;
-        let mut c_dev = self.blas.stream().alloc_zeros::<f16>(c_size).map_err(|e| {
+        let mut c_dev = self.stream.alloc_zeros::<f16>(c_size).map_err(|e| {
             format!("Failed to allocate C: {:?}", e)
         })?;
 
@@ -78,10 +80,10 @@ impl CudaBridge {
         }
 
         // Sync and download result (F16)
-        self.blas.stream().synchronize().map_err(|e| {
+        self.stream.synchronize().map_err(|e| {
             format!("sync failed: {:?}", e)
         })?;
-        let c_host = self.blas.stream().clone_dtoh(&c_dev).map_err(|e| {
+        let c_host = self.stream.clone_dtoh(&c_dev).map_err(|e| {
             format!("Failed to download C: {:?}", e)
         })?;
 
@@ -91,7 +93,7 @@ impl CudaBridge {
 
     /// Synchronize the CUDA stream.
     pub fn sync(&self) -> Result<(), String> {
-        self.blas.stream().synchronize().map_err(|e| {
+        self.stream.synchronize().map_err(|e| {
             format!("sync failed: {:?}", e)
         })
     }
