@@ -1,40 +1,38 @@
 //! Direct CUDA cuBLAS bridge for true F16 inference (Phase 1).
 //!
-//! Bypasses candle_core's internal F16→F32 conversion by calling cublasGemmEx
-//! directly with half-precision data types. This achieves true F16 compute on GPU,
-//! reducing memory footprint and eliminating conversion overhead.
+//! Uses cudarc's hgemm() wrapper which calls cublasHgemm directly.
+//! Bypasses candle_core's F16→F32 conversion overhead.
 
 use std::sync::Arc;
 
-use cudarc::cublas::{CudaBlas, Gemm, GemmConfig};
+use cudarc::cublas::{result, sys};
 use cudarc::driver::{CudaContext, CudaStream};
 use half::f16;
 
 /// Direct cuBLAS F16 bridge.
 pub struct CudaBridge {
-    handle: Arc<CudaBlas>,
-    stream: Option<Arc<CudaStream>>,
+    handle: sys::cublasHandle_t,
+    stream: Arc<CudaStream>,
 }
 
 impl CudaBridge {
     /// Create a new CUDA bridge with cuBLAS handle on device 0.
     pub fn new() -> Result<Self, String> {
         let ctx = CudaContext::new(0).map_err(|e| format!("Failed to init CUDA device: {}", e))?;
-        let stream = ctx.default_stream();
+        let stream = Arc::new(ctx.default_stream());
 
-        let handle = Arc::new(
-            CudaBlas::new(stream.clone())
-                .map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?,
-        );
+        // Create cuBLAS handle via cudarc's result API
+        let handle = result::create_handle().map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?;
 
-        Ok(Self {
-            handle,
-            stream: Some(stream),
-        })
+        // Set stream for async execution
+        let cu_stream = cudarc::driver::sys::CUstream_st::from(stream.as_raw());
+        result::set_stream(handle, cu_stream).map_err(|e| format!("Failed to set stream: {}", e))?;
+
+        Ok(Self { handle, stream })
     }
 
     /// Perform F16 GEMM: C = A @ B where A is [m,k] F16, B is [k,n] F16, result is [m,n] F32.
-    /// Uses cublasGemmEx internally with CUBLAS_COMPUTE_32F for F32 accumulation precision.
+    /// Uses cublasHgemm for true half-precision compute on GPU.
     pub fn gemm_f16f32(
         &self,
         a: &[f16],
@@ -43,49 +41,41 @@ impl CudaBridge {
         n: usize,
         k: usize,
     ) -> Result<Vec<f32>, String> {
-        let stream = self.stream.as_ref().ok_or("CUDA stream not initialized")?;
-
         // Upload inputs to device
-        let a_dev = stream
-            .clone_htod(a)
-            .map_err(|e| format!("Failed to upload A: {}", e))?;
-        let b_dev = stream
-            .clone_htod(b)
-            .map_err(|e| format!("Failed to upload B: {}", e))?;
+        let a_dev = self.stream.clone_htod(a).map_err(|e| format!("Failed to upload A: {}", e))?;
+        let b_dev = self.stream.clone_htod(b).map_err(|e| format!("Failed to upload B: {}", e))?;
 
-        // Allocate output on device (F16 for cublas Hgemm)
+        // Allocate output on device (F16 for cublas Hgemm, convert to F32 after)
         let c_size = m * n;
-        let mut c_dev = stream
-            .alloc_zeros::<f16>(c_size)
-            .map_err(|e| format!("Failed to allocate C: {}", e))?;
+        let mut c_dev = self.stream.alloc_zeros::<f16>(c_size).map_err(|e| format!("Failed to allocate C: {}", e))?;
 
         // cuBLAS is column-major. For row-major A×B, compute (B^T × A^T)^T.
-        // cublasGemmEx with CUBLAS_OP_T for both operands gives us the right layout.
+        // Use CUBLAS_OP_N with swapped operands and dimensions instead of transpose flags.
+        let alpha = f16::from_f32(1.0);
+        let beta = f16::from_f32(0.0);
+
         unsafe {
-            self.handle.gemm(
-                GemmConfig {
-                    transa: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                    transb: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                    m: n as i32,
-                    n: m as i32,
-                    k: k as i32,
-                    alpha: f16::from_f32(1.0),
-                    lda: n as i32,
-                    ldb: k as i32,
-                    beta: f16::from_f32(0.0),
-                    ldc: m as i32,
-                },
-                &b_dev,
-                &a_dev,
-                &mut c_dev,
-            ).map_err(|e| format!("cublasGemmEx failed: {}", e))?;
+            result::hgemm(
+                self.handle,
+                sys::cublasOperation_t::CUBLAS_OP_N,
+                sys::cublasOperation_t::CUBLAS_OP_N,
+                n as i32,  // m (swapped for column-major)
+                m as i32,  // n (swapped for column-major)
+                k as i32,
+                &alpha,
+                b_dev.as_ptr() as *const f16,
+                n as i32,  // lda (swapped)
+                a_dev.as_ptr() as *const f16,
+                k as i32,  // ldb
+                &beta,
+                c_dev.as_mut_ptr() as *mut f16,
+                n as i32,  // ldc (swapped)
+            ).map_err(|e| format!("cublasHgemm failed: {}", e))?;
         }
 
-        // Sync and download result, convert F16→F32 on host
-        stream.synchronize().map_err(|e| format!("sync failed: {}", e))?;
-        let c_host = stream
-            .clone_dtoh(&c_dev)
-            .map_err(|e| format!("Failed to download C: {}", e))?;
+        // Sync and download result (F16)
+        self.stream.synchronize().map_err(|e| format!("sync failed: {}", e))?;
+        let c_host = self.stream.clone_dtoh(&c_dev).map_err(|e| format!("Failed to download C: {}", e))?;
 
         // Convert F16 results back to F32 for the caller
         Ok(c_host.iter().map(|v| v.to_f32()).collect())
@@ -93,9 +83,15 @@ impl CudaBridge {
 
     /// Synchronize the CUDA stream.
     pub fn sync(&self) -> Result<(), String> {
-        if let Some(stream) = &self.stream {
-            stream.synchronize().map_err(|e| format!("sync failed: {}", e))?;
+        self.stream.synchronize().map_err(|e| format!("sync failed: {}", e))
+    }
+}
+
+impl Drop for CudaBridge {
+    fn drop(&mut self) {
+        // Destroy cuBLAS handle
+        unsafe {
+            result::destroy_handle(self.handle).ok();
         }
-        Ok(())
     }
 }
