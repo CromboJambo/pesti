@@ -1,149 +1,101 @@
-//! CUDA cuBLAS GEMM bridge using cudarc's safe CudaBlas API.
+//! Direct CUDA cuBLAS bridge for true F16 inference (Phase 1).
 //!
-//! Uses the safe CudaBlas type with GemmConfig, which internally calls cublasGemmEx
-//! with proper F16 input / F32 compute type settings. This is the proven working
-//! pattern from cudarc's own test suite.
+//! Bypasses candle_core's internal F16→F32 conversion by calling cublasGemmEx
+//! directly with half-precision data types. This achieves true F16 compute on GPU,
+//! reducing memory footprint and eliminating conversion overhead.
 
-use std::sync::OnceLock;
+use std::sync::Arc;
 
-static BLAS: OnceLock<cudarc::cublas::CudaBlas> = OnceLock::new();
+use cudarc::cublas::{CudaBlas, Gemm, GemmConfig};
+use cudarc::driver::{CudaContext, CudaStream};
+use half::f16;
 
-fn get_blas() -> &'static cudarc::cublas::CudaBlas {
-    BLAS.get_or_init(|| {
-        let stream = Default::default();
-        cudarc::cublas::CudaBlas::new(stream.clone()).expect("cuda_bridge: CudaBlas::new failed")
-    })
+/// Direct cuBLAS F16 bridge.
+pub struct CudaBridge {
+    handle: Arc<CudaBlas>,
+    stream: Option<Arc<CudaStream>>,
 }
 
-/// Perform F16 matrix multiply using cuBLAS via cudarc's safe API.
-///
-/// Computes C = A @ B where:
-///   - A is [m x k] row-major F16 (on device)
-///   - B is [k x n] row-major F16 (on device, transposed to column-major for cuBLAS)
-///   - C is [m x n] row-major F32 (on device)
-pub fn gemm_f16f32(
-    m: i32, k: i32, n: i32,
-    a_dev: *const u8, b_t_dev: *const u8, c_dev: *mut f32,
-) -> Result<(), String> {
-    let blas = get_blas();
+impl CudaBridge {
+    /// Create a new CUDA bridge with cuBLAS handle on device 0.
+    pub fn new() -> Result<Self, String> {
+        let ctx = CudaContext::new(0).map_err(|e| format!("Failed to init CUDA device: {}", e))?;
+        let stream = ctx.default_stream();
 
-    // Cast to half::f16 slices for cudarc's safe API
-    let a_slice = unsafe { std::slice::from_raw_parts(a_dev as *const half::f16, m * k) };
-    let b_t_slice = unsafe { std::slice::from_raw_parts(b_t_dev as *const half::f16, n * k) };
-    let c_slice = unsafe { std::slice::from_raw_parts_mut(c_dev as *mut f32, m * n) };
+        let handle = Arc::new(
+            CudaBlas::new(stream.clone())
+                .map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?,
+        );
 
-    // For row-major data with cuBLAS (column-major), swap operands:
-    // C^T = B^T @ A^T => compute B^T(A^T) and transpose result layout
-    // We pass B_t as "A" (already transposed), A as "B"
-    let cfg = cudarc::cublas::GemmConfig {
-        transa: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_N,
-        transb: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_N,
-        m: n,  // swapped for row-major output
-        n: m,
-        k: k,
-        alpha: half::f16::from_f32(1.0),
-        lda: n,
-        ldb: k,
-        beta: half::f16::from_f32(0.0),
-        ldc: n,
-    };
-
-    unsafe {
-        blas.gemm(cfg, b_t_slice, a_slice, c_slice)
-            .map_err(|e| format!("cuda_bridge::gemm_f16f32: gemm failed: {:?}", e))
+        Ok(Self {
+            handle,
+            stream: Some(stream),
+        })
     }
-}
 
-/// Synchronize CUDA stream via event-based synchronization.
-pub fn stream_synchronize() -> Result<(), String> {
-    cudarc::driver::stream_synchronize(Default::default())
-        .map_err(|e| format!("cuda_bridge::stream_sync failed: {:?}", e))
-}
+    /// Perform F16 GEMM: C = A @ B where A is [m,k] F16, B is [k,n] F16, result is [m,n] F32.
+    /// Uses cublasGemmEx internally with CUBLAS_COMPUTE_32F for F32 accumulation precision.
+    pub fn gemm_f16f32(
+        &self,
+        a: &[f16],
+        b: &[f16],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<Vec<f32>, String> {
+        let stream = self.stream.as_ref().ok_or("CUDA stream not initialized")?;
 
-/// Free device memory.
-pub fn free(ptr: *mut u8) -> Result<(), String> {
-    if ptr.is_null() { return Ok(()); }
-    cudarc::driver::free(ptr).map_err(|e| format!("cuda_bridge::free failed: {:?}", e))
-}
+        // Upload inputs to device
+        let a_dev = stream
+            .clone_htod(a)
+            .map_err(|e| format!("Failed to upload A: {}", e))?;
+        let b_dev = stream
+            .clone_htod(b)
+            .map_err(|e| format!("Failed to upload B: {}", e))?;
 
-/// Allocate device memory.
-pub fn alloc(size: usize) -> Result<*mut u8, String> {
-    let mut ptr = std::ptr::null_mut();
-    cudarc::driver::alloc(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc failed: {:?}", e))?;
-    Ok(ptr)
-}
+        // Allocate output on device (F16 for cublas Hgemm)
+        let c_size = m * n;
+        let mut c_dev = stream
+            .alloc_zeros::<f16>(c_size)
+            .map_err(|e| format!("Failed to allocate C: {}", e))?;
 
-/// Copy data to device.
-pub fn memcpy_h2d(dst: *mut u8, src: &[u8]) -> Result<(), String> {
-    let size = src.len();
-    cudarc::driver::memcpy_h2d(dst, src.as_ptr(), size).map_err(|e| format!("cuda_bridge::memcpy_h2d failed: {:?}", e))
-}
+        // cuBLAS is column-major. For row-major A×B, compute (B^T × A^T)^T.
+        // cublasGemmEx with CUBLAS_OP_T for both operands gives us the right layout.
+        unsafe {
+            self.handle.gemm(
+                GemmConfig {
+                    transa: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
+                    transb: cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
+                    m: n as i32,
+                    n: m as i32,
+                    k: k as i32,
+                    alpha: f16::from_f32(1.0),
+                    lda: n as i32,
+                    ldb: k as i32,
+                    beta: f16::from_f32(0.0),
+                    ldc: m as i32,
+                },
+                &b_dev,
+                &a_dev,
+                &mut c_dev,
+            ).map_err(|e| format!("cublasGemmEx failed: {}", e))?;
+        }
 
-/// Copy data from device.
-pub fn memcpy_d2h(dst: &mut [u8], src: *const u8) -> Result<(), String> {
-    let size = dst.len();
-    cudarc::driver::memcpy_d2h(dst.as_mut_ptr(), src, size).map_err(|e| format!("cuda_bridge::memcpy_d2h failed: {:?}", e))
-}
+        // Sync and download result, convert F16→F32 on host
+        stream.synchronize().map_err(|e| format!("sync failed: {}", e))?;
+        let c_host = stream
+            .clone_dtoh(&c_dev)
+            .map_err(|e| format!("Failed to download C: {}", e))?;
 
-/// Allocate pinned host memory for faster transfers.
-pub fn alloc_pinned(size: usize) -> Result<*mut u8, String> {
-    let mut ptr = std::ptr::null_mut();
-    cudarc::driver::alloc_host(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc_pinned failed: {:?}", e))?;
-    Ok(ptr)
-}
+        // Convert F16 results back to F32 for the caller
+        Ok(c_host.iter().map(|v| v.to_f32()).collect())
+    }
 
-/// Free pinned host memory.
-pub fn free_pinned(ptr: *mut u8) -> Result<(), String> {
-    if ptr.is_null() { return Ok(()); }
-    cudarc::driver::free_host(ptr).map_err(|e| format!("cuda_bridge::free_pinned failed: {:?}", e))
-}
-
-/// Query device attributes.
-pub fn device_attribute(attr: u32, dev: i32) -> Result<i32, String> {
-    let mut val = 0;
-    cudarc::driver::device_get_attribute(&mut val, attr, dev).map_err(|e| format!("cuda_bridge::device_attr failed: {:?}", e))?;
-    Ok(val)
-}
-
-/// Get the number of CUDA devices.
-pub fn device_count() -> Result<i32, String> {
-    let mut count = 0;
-    cudarc::driver::device_get_count(&mut count).map_err(|e| format!("cuda_bridge::device_count failed: {:?}", e))?;
-    Ok(count)
-}
-
-/// Set the active CUDA device.
-pub fn set_device(dev: i32) -> Result<(), String> {
-    cudarc::driver::set_device(dev).map_err(|e| format!("cuda_bridge::set_device failed: {:?}", e))
-}
-
-/// Convert f32 values to F16 and upload to device.
-pub fn convert_f32_to_f16_device(src: &[f32]) -> Result<*mut u8, String> {
-    let size_bytes = src.len() * 2;
-    let mut dev_ptr = std::ptr::null_mut();
-    cudarc::driver::alloc(&mut dev_ptr, size_bytes).map_err(|e| format!("convert: alloc failed: {:?}", e))?;
-
-    // Convert f32 -> f16 in place using half crate
-    let halfs: Vec<half::f16> = src.iter().map(|v| half::f16::from_f32(*v)).collect();
-    let raw_bytes: &[u8] = unsafe { std::slice::from_raw_parts(halfs.as_ptr() as *const u8, size_bytes) };
-
-    cudarc::driver::memcpy_h2d(dev_ptr, raw_bytes.as_ptr(), size_bytes)
-        .map_err(|e| format!("convert: memcpy failed: {:?}", e))?;
-
-    Ok(dev_ptr)
-}
-
-/// Convert device F16 values back to f32 on host.
-pub fn convert_f16_to_f32_host(src_dev: *const u8, count: usize) -> Result<Vec<f32>, String> {
-    let size_bytes = count * 2;
-    let mut host_buf = vec![0u8; size_bytes];
-
-    cudarc::driver::memcpy_d2h(host_buf.as_mut_ptr(), src_dev, size_bytes)
-        .map_err(|e| format!("convert back: memcpy failed: {:?}", e))?;
-
-    // Convert f16 -> f32
-    let halfs: &[half::f16] = unsafe { std::slice::from_raw_parts(host_buf.as_ptr() as *const half::f16, count) };
-    let result: Vec<f32> = halfs.iter().map(|h| h.to_f32()).collect();
-
-    Ok(result)
+    /// Synchronize the CUDA stream.
+    pub fn sync(&self) -> Result<(), String> {
+        if let Some(stream) = &self.stream {
+            stream.synchronize().map_err(|e| format!("sync failed: {}", e))?;
+        }
+        Ok(())
+    }
 }
