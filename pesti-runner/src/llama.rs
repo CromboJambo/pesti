@@ -768,9 +768,10 @@ impl LlamaRunner {
             {
                 samplers.push(LlamaSampler::penalties(
                     self.model.n_vocab() as i32,
-                    config.repeat_last_n as f32,
+                    config.repeat_last_n,
                     config.repetition_penalty as f32,
                     0.0, // frequency penalty (unused)
+                    0.0, // presence penalty (unused)
                 ));
             }
             #[cfg(not(feature = "llama_cpp_2_v156"))]
