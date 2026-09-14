@@ -40,7 +40,7 @@ rand.workspace = true
 ndarray.workspace = true
 
 # CUDA support (optional)
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true, features = ["f16"] }
 nvml-wrapper.workspace = true
 
 # Async runtime and HTTP

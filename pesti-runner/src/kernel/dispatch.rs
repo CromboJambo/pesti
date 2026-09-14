@@ -559,20 +559,12 @@ impl DispatchContext {
         #[cfg(feature = "cuda")]
         let mut result = if self.cuda_bridge_available() {
             debug!(m, n, k, "Linear: using direct CUDA cuBLAS bridge (F16)");
-            // Transpose weights for cuBLAS (row-major to column-major)
-            let w_t: Vec<f16> = {
-                let mut out = Vec::with_capacity(k * n);
-                for i in 0..k {
-                    for j in 0..n {
-                        out.push(weights[j * k + i]);
-                    }
-                }
-                out
-            };
+            // Pass original weights; cublas handles transpose via OP_T flags
             self.cuda_bridge()
                 .unwrap()
-                .gemm_f16(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
-                .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))
+                .gemm_f16f32(&x_f16, weights, m, n, k)
+                .map(|r| r.iter().cloned().collect::<Vec<f32>>())
+                .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16f32: {e}")))
         } else if self.prefer_gpu
             && self.gpu_available()
             && crate::kernel::candle_bridge::bridge_is_cuda()
