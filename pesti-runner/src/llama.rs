@@ -763,25 +763,25 @@ impl LlamaRunner {
 
         // Repetition penalty (API changed between llama-cpp-2 versions:
         // 0.1.154 takes 4 args, 0.1.156+ takes 5 with n_vocab prepended).
-        // Detect by feature flag from Cargo.toml if needed; for now assume
-        // the newer API and document the divergence.
-        #[cfg(feature = "llama_cpp_2_v156")]
-        {
-            samplers.push(LlamaSampler::penalties(
-                self.model.n_vocab() as i32,
-                config.repeat_last_n as f32,
-                config.repetition_penalty as f32,
-                0.0, // frequency penalty (unused)
-            ));
-        }
-        #[cfg(not(feature = "llama_cpp_2_v156"))]
-        {
-            samplers.push(LlamaSampler::penalties(
-                config.repeat_last_n,
-                config.repetition_penalty as f32,
-                0.0, // frequency penalty (unused)
-                0.0,
-            ));
+        if config.repetition_penalty != 1.0 {
+            #[cfg(feature = "llama_cpp_2_v156")]
+            {
+                samplers.push(LlamaSampler::penalties(
+                    self.model.n_vocab() as i32,
+                    config.repeat_last_n as f32,
+                    config.repetition_penalty as f32,
+                    0.0, // frequency penalty (unused)
+                ));
+            }
+            #[cfg(not(feature = "llama_cpp_2_v156"))]
+            {
+                samplers.push(LlamaSampler::penalties(
+                    config.repeat_last_n,
+                    config.repetition_penalty as f32,
+                    0.0, // frequency penalty (unused)
+                    0.0,
+                ));
+            }
         }
 
         // Terminal sampler: llama.cpp requires a final sampler that actually
