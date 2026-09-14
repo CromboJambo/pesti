@@ -10,7 +10,7 @@ static BLAS: OnceLock<cudarc::cublas::CudaBlas> = OnceLock::new();
 
 fn get_blas() -> &'static cudarc::cublas::CudaBlas {
     BLAS.get_or_init(|| {
-        let stream = cudarc::driver::CudaStream::default_stream();
+        let stream = Default::default();
         cudarc::cublas::CudaBlas::new(stream.clone()).expect("cuda_bridge: CudaBlas::new failed")
     })
 }
@@ -56,77 +56,78 @@ pub fn gemm_f16f32(
 
 /// Synchronize CUDA stream via event-based synchronization.
 pub fn stream_synchronize() -> Result<(), String> {
-    cuda_shim::stream_synchronize().map_err(|e| format!("cuda_bridge::stream_sync failed: {:?}", e))
+    cudarc::driver::stream_synchronize(Default::default())
+        .map_err(|e| format!("cuda_bridge::stream_sync failed: {:?}", e))
 }
 
 /// Free device memory.
 pub fn free(ptr: *mut u8) -> Result<(), String> {
     if ptr.is_null() { return Ok(()); }
-    cuda_shim::free(ptr).map_err(|e| format!("cuda_bridge::free failed: {:?}", e))
+    cudarc::driver::free(ptr).map_err(|e| format!("cuda_bridge::free failed: {:?}", e))
 }
 
 /// Allocate device memory.
 pub fn alloc(size: usize) -> Result<*mut u8, String> {
     let mut ptr = std::ptr::null_mut();
-    cuda_shim::alloc(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc failed: {:?}", e))?;
+    cudarc::driver::alloc(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc failed: {:?}", e))?;
     Ok(ptr)
 }
 
 /// Copy data to device.
 pub fn memcpy_h2d(dst: *mut u8, src: &[u8]) -> Result<(), String> {
     let size = src.len();
-    cuda_shim::memcpy_h2d(dst, src.as_ptr(), size).map_err(|e| format!("cuda_bridge::memcpy_h2d failed: {:?}", e))
+    cudarc::driver::memcpy_h2d(dst, src.as_ptr(), size).map_err(|e| format!("cuda_bridge::memcpy_h2d failed: {:?}", e))
 }
 
 /// Copy data from device.
 pub fn memcpy_d2h(dst: &mut [u8], src: *const u8) -> Result<(), String> {
     let size = dst.len();
-    cuda_shim::memcpy_d2h(dst.as_mut_ptr(), src, size).map_err(|e| format!("cuda_bridge::memcpy_d2h failed: {:?}", e))
+    cudarc::driver::memcpy_d2h(dst.as_mut_ptr(), src, size).map_err(|e| format!("cuda_bridge::memcpy_d2h failed: {:?}", e))
 }
 
 /// Allocate pinned host memory for faster transfers.
 pub fn alloc_pinned(size: usize) -> Result<*mut u8, String> {
     let mut ptr = std::ptr::null_mut();
-    cuda_shim::alloc_host(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc_pinned failed: {:?}", e))?;
+    cudarc::driver::alloc_host(&mut ptr, size).map_err(|e| format!("cuda_bridge::alloc_pinned failed: {:?}", e))?;
     Ok(ptr)
 }
 
 /// Free pinned host memory.
 pub fn free_pinned(ptr: *mut u8) -> Result<(), String> {
     if ptr.is_null() { return Ok(()); }
-    cuda_shim::free_host(ptr).map_err(|e| format!("cuda_bridge::free_pinned failed: {:?}", e))
+    cudarc::driver::free_host(ptr).map_err(|e| format!("cuda_bridge::free_pinned failed: {:?}", e))
 }
 
 /// Query device attributes.
 pub fn device_attribute(attr: u32, dev: i32) -> Result<i32, String> {
     let mut val = 0;
-    cuda_shim::device_get_attribute(&mut val, attr, dev).map_err(|e| format!("cuda_bridge::device_attr failed: {:?}", e))?;
+    cudarc::driver::device_get_attribute(&mut val, attr, dev).map_err(|e| format!("cuda_bridge::device_attr failed: {:?}", e))?;
     Ok(val)
 }
 
 /// Get the number of CUDA devices.
 pub fn device_count() -> Result<i32, String> {
     let mut count = 0;
-    cuda_shim::device_get_count(&mut count).map_err(|e| format!("cuda_bridge::device_count failed: {:?}", e))?;
+    cudarc::driver::device_get_count(&mut count).map_err(|e| format!("cuda_bridge::device_count failed: {:?}", e))?;
     Ok(count)
 }
 
 /// Set the active CUDA device.
 pub fn set_device(dev: i32) -> Result<(), String> {
-    cuda_shim::set_device(dev).map_err(|e| format!("cuda_bridge::set_device failed: {:?}", e))
+    cudarc::driver::set_device(dev).map_err(|e| format!("cuda_bridge::set_device failed: {:?}", e))
 }
 
 /// Convert f32 values to F16 and upload to device.
 pub fn convert_f32_to_f16_device(src: &[f32]) -> Result<*mut u8, String> {
     let size_bytes = src.len() * 2;
     let mut dev_ptr = std::ptr::null_mut();
-    cuda_shim::alloc(&mut dev_ptr, size_bytes).map_err(|e| format!("convert: alloc failed: {:?}", e))?;
+    cudarc::driver::alloc(&mut dev_ptr, size_bytes).map_err(|e| format!("convert: alloc failed: {:?}", e))?;
 
     // Convert f32 -> f16 in place using half crate
     let halfs: Vec<half::f16> = src.iter().map(|v| half::f16::from_f32(*v)).collect();
     let raw_bytes: &[u8] = unsafe { std::slice::from_raw_parts(halfs.as_ptr() as *const u8, size_bytes) };
 
-    cuda_shim::memcpy_h2d(dev_ptr, raw_bytes.as_ptr(), size_bytes)
+    cudarc::driver::memcpy_h2d(dev_ptr, raw_bytes.as_ptr(), size_bytes)
         .map_err(|e| format!("convert: memcpy failed: {:?}", e))?;
 
     Ok(dev_ptr)
@@ -137,7 +138,7 @@ pub fn convert_f16_to_f32_host(src_dev: *const u8, count: usize) -> Result<Vec<f
     let size_bytes = count * 2;
     let mut host_buf = vec![0u8; size_bytes];
 
-    cuda_shim::memcpy_d2h(host_buf.as_mut_ptr(), src_dev, size_bytes)
+    cudarc::driver::memcpy_d2h(host_buf.as_mut_ptr(), src_dev, size_bytes)
         .map_err(|e| format!("convert back: memcpy failed: {:?}", e))?;
 
     // Convert f16 -> f32
