@@ -67,12 +67,12 @@ impl CudaBridge {
                 m as i32,
                 k as i32,
                 &alpha,
-                b_dev.as_ptr(),
+                b_dev.as_cuda_slice().as_ptr(),
                 n as i32,
-                a_dev.as_ptr(),
+                a_dev.as_cuda_slice().as_ptr(),
                 k as i32,
                 &beta,
-                c_dev.as_mut_ptr(),
+                c_dev.as_cuda_slice_mut().as_mut_ptr(),
                 m as i32,
             )
             .map_err(|e| format!("cublasHgemm failed: {}", e))?;
