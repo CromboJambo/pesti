@@ -61,11 +61,9 @@ pub fn bridge_is_cuda() -> bool {
     bridge_device().is_cuda()
 }
 
-/// Convert a `DeviceBuffer<f16>` to a candle-core `Tensor`.
+/// Convert a `DeviceBuffer<f16>` to a candle-core `Tensor` (F16).
 ///
-/// # Safety
-///
-/// The buffer must be valid and contain `len` elements of type `f16`.
+/// Uses true f16 tensors on GPU for half the memory footprint.
 pub fn f16_to_tensor(
     data: &[f16],
     shape: &[usize],
@@ -75,9 +73,8 @@ pub fn f16_to_tensor(
         Some(d) => d.clone(),
         None => bridge_device().clone(),
     };
-    // Convert f16 to f32 for candle-core (candle uses f32 internally)
-    let data_f32: Vec<f32> = data.iter().map(|&x| x.to_f32()).collect();
-    Tensor::from_vec(data_f32, shape, &device)
+    // Convert to Vec<f16> for candle-core's F16 tensor support
+    Tensor::from_vec(data.to_vec(), shape, &device)
 }
 
 /// Convert a candle-core `Tensor` (f32) back to `DeviceBuffer<f16>`.
@@ -91,14 +88,25 @@ pub fn tensor_to_f32(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
     tensor.to_vec1()
 }
 
-/// Flatten any-rank f32 tensor to a 1D vec on the host.
+/// Flatten any-rank tensor to a 1D vec of f32 on the host (auto-detects dtype).
 pub fn tensor_to_f32_flat(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
     let shape = tensor.shape();
     let mut total = 1;
     for dim in shape.dims() {
         total *= dim;
     }
-    tensor.reshape((total,))?.to_vec1()
+    let flat = tensor.reshape((total,))?;
+    match flat.dtype() {
+        DType::F32 => flat.to_vec1(),
+        DType::F16 => {
+            let f16_data: Vec<half::f16> = flat.to_vec1()?;
+            Ok(f16_data.iter().map(|&x| x.to_f32()).collect())
+        }
+        dt => Err(candle_core::Error::Msg(format!(
+            "tensor_to_f32_flat: expected F32 or F16, got {:?}",
+            dt
+        ))),
+    }
 }
 
 /// Apply Rotary Positional Embedding (RoPE) using candle-core ops.
@@ -269,16 +277,9 @@ pub fn gemm(
 ) -> Result<Vec<f32>, candle_core::Error> {
     let device = bridge_device();
 
-    let a_t = Tensor::from_vec(
-        a.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(),
-        (m, k),
-        device,
-    )?;
-    let b_t = Tensor::from_vec(
-        b.iter().map(|&x| x.to_f32()).collect::<Vec<_>>(),
-        (k, n),
-        device,
-    )?;
+    // Convert to F16 tensors for half the memory footprint
+    let a_t = Tensor::from_vec(a.to_vec(), (m, k), &device)?;
+    let b_t = Tensor::from_vec(b.to_vec(), (k, n), &device)?;
 
     gemm_with_tensors(&a_t, &b_t, c, m, k, n, alpha, beta)
 }

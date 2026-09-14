@@ -632,9 +632,10 @@ impl LlamaModel {
         let weight = &output.weight;
         // Weight is stored [vocab, hidden] row-major (GGUF layout). The output
         // head GEMM needs B as [k=hidden, n=vocab], so transpose:
-        // B[k, v] = W[v, k].
-        let w_t: Vec<f32> = (0..hidden)
-            .flat_map(|k| (0..vocab).map(move |v| weight[v * hidden + k]))
+        // B[k, v] = W[v, k]. Convert to F16 for half the memory footprint.
+        let w_f16 = f32_to_f16(weight);
+        let w_t: Vec<f16> = (0..hidden)
+            .flat_map(|k| (0..vocab).map(move |v| w_f16[v * hidden + k]))
             .collect();
         match Tensor::from_vec(
             w_t,

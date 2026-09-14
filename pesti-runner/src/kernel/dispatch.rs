@@ -804,9 +804,11 @@ impl LinearDispatch {
         if !crate::kernel::candle_bridge::bridge_is_cuda() {
             return None;
         }
-        let w_t: Vec<f32> = (0..k)
-            .flat_map(|i| (0..n).map(move |j| weights_f16[j * k + i].to_f32()))
+        // Transpose [k, n] and keep as F16 for half the memory footprint
+        let w_t: Vec<f16> = (0..k)
+            .flat_map(|i| (0..n).map(move |j| weights_f16[j * k + i]))
             .collect();
+        // Use true F16 tensor for half the memory footprint
         match Tensor::from_vec(w_t, (k, n), crate::kernel::candle_bridge::bridge_device()) {
             Ok(t) => Some(t),
             Err(e) => {
