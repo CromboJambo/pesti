@@ -496,6 +496,8 @@ impl DispatchContext {
             && self.gpu_available()
             && crate::kernel::candle_bridge::bridge_is_cuda()
         {
+            // Keep input as F16 to match cached weight tensor dtype. Converting
+            // back to F32 here caused a dtype mismatch in matmul (lhs F32, rhs F16).
             let a_t = Tensor::from_vec(
                 x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(),
                 (m, k),

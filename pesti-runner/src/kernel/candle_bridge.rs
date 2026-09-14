@@ -305,8 +305,19 @@ pub fn gemm_with_tensors(
 ) -> Result<Vec<f32>, candle_core::Error> {
     let device = bridge_device();
 
+    // Normalize dtypes: if either operand is F16, convert both to F32 for matmul.
+    // Candle-core's matmul requires matching dtypes; we always want F32 results.
+    let a_for_matmul = match a_t.dtype() {
+        DType::F16 => a_t.to_dtype(DType::F32)?,
+        _ => a_t.clone(),
+    };
+    let b_for_matmul = match b_t.dtype() {
+        DType::F16 => b_t.to_dtype(DType::F32)?,
+        _ => b_t.clone(),
+    };
+
     // A @ B
-    let mut result = a_t.matmul(b_t)?;
+    let mut result = a_for_matmul.matmul(&b_for_matmul)?;
 
     // alpha * result
     if alpha != 1.0 {

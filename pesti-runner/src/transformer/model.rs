@@ -634,9 +634,12 @@ impl LlamaModel {
         // head GEMM needs B as [k=hidden, n=vocab], so transpose:
         // B[k, v] = W[v, k]. Convert to F16 for half the memory footprint.
         let w_f16 = f32_to_f16(weight);
-        let w_t: Vec<f16> = (0..hidden)
-            .flat_map(|k| (0..vocab).map(move |v| w_f16[v * hidden + k]))
-            .collect();
+        let mut w_t: Vec<half::f16> = Vec::with_capacity(hidden * vocab);
+        for k in 0..hidden {
+            for v in 0..vocab {
+                w_t.push(w_f16[v * hidden + k]);
+            }
+        }
         match Tensor::from_vec(
             w_t,
             (hidden, vocab),
