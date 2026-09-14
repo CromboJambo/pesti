@@ -23,7 +23,8 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct:
 - [x] Implement Q4_K quantized KV cache module (q4k_kvcache.rs)
 - [ ] Integrate Q4_K KV cache into model inference path (requires attention kernel modifications for on-the-fly dequantization)
 - [ ] Benchmark actual tok/s improvement with integrated Q4_K KV cache
-- [ ] Establish comparable tok/s benchmark against llama.cpp on same model/hardware
+- [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
+- [ ] **F16 GPU inference via candle_bridge redesign** — eliminate F32 conversion overhead in `candle_bridge::gemm`; use direct cuBLAS Hgemm calls for true half-precision compute and 2x memory reduction. See [spec](specs/F16_GPU_INFERENCE_SPEC.md).
 - [ ] Spike: TMA descriptors for async prefetching
 
 ## Known Issues / Debt

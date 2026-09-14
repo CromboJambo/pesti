@@ -34,8 +34,9 @@ Numerical conformance validated vs llama.cpp reference outputs.
 - [x] Fix remaining clippy warnings (unused vars in stub code, missing Safety docs) — down from 193 to 136 warnings
 - [x] Spike: batched generation for parallel prompts — ran on ftw3 (RTX 3070 Ti), measured ~1.0x speedup at seq=128 with Qwen2.5-0.5B-Instruct. Expected: short sequences don't benefit from batching; value appears at production sequence lengths (>512).
 
-### Week 23: Optimization and Scale
+### Week 23: Optimization and Scale (IN PROGRESS)
 - [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
+- [ ] **F16 GPU inference via candle_bridge redesign** — eliminate F32 conversion overhead in `candle_bridge::gemm`; use direct cuBLAS Hgemm calls for true half-precision compute and 2x memory reduction. See [spec](../docs/specs/F16_GPU_INFERENCE_SPEC.md).
 - [ ] Profile GEMM vs attention kernel time split at production sequence lengths
 - [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching

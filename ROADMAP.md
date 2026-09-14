@@ -25,8 +25,9 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel
 
 ## Upcoming Work
 
-### Week 23: Optimization and Scale
-- ✅ Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
+### Week 23: Optimization and Scale (IN PROGRESS)
+- [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
+- [ ] **F16 GPU inference via candle_bridge redesign** — eliminate F32 conversion overhead in `candle_bridge::gemm`; use direct cuBLAS Hgemm calls for true half-precision compute and 2x memory reduction. See [spec](docs/specs/F16_GPU_INFERENCE_SPEC.md).
 - [ ] Profile GEMM vs attention kernel time split at production sequence lengths — identify softmax host-transfer bottleneck
 - [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching
