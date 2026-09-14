@@ -5,8 +5,7 @@
 //! on GPU while maintaining F32 accumulation precision for numerical stability.
 
 use std::sync::Arc;
-use cudarc::cublas::{CudaBlas, GemmConfig};
-use cudarc::cublas::safe::gemm::Gemm;
+use cudarc::cublas::{CudaBlas, GemmConfig, Gemm};
 use cudarc::driver::{CudaContext, CudaStream};
 use half::f16;
 
