@@ -42,6 +42,8 @@ use crate::kernel::attention_stub::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
 };
 use crate::kernel::candle_bridge;
+#[cfg(feature = "cuda")]
+use crate::kernel::cuda_bridge::CudaBridge;
 use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::kernel::fused_attention_conformant::{
@@ -136,6 +138,9 @@ pub struct DispatchContext {
     /// run means the GPU path is NOT fully working (e.g. OOM on a shared GPU)
     /// and results may be a CPU/GPU mix — check before trusting "GPU" numbers.
     gpu_fallback_count: std::sync::atomic::AtomicU32,
+    /// Direct CUDA cuBLAS bridge for true F16 inference (Phase 1 of F16 spec).
+    #[cfg(feature = "cuda")]
+    cuda_bridge: Option<CudaBridge>,
 }
 
 impl DispatchContext {
@@ -157,6 +162,23 @@ impl DispatchContext {
         // launches and silently corrupts results.
         let memory = Self::build_memory(&engine);
 
+        // Initialize direct CUDA cuBLAS bridge for true F16 inference (Phase 1)
+        #[cfg(feature = "cuda")]
+        let cuda_bridge = if prefer_gpu {
+            match CudaBridge::new() {
+                Ok(bridge) => {
+                    tracing::info!("Direct CUDA cuBLAS bridge initialized (F16 inference enabled)");
+                    Some(bridge)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init direct CUDA bridge, falling back to candle_bridge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             engine,
             memory,
@@ -164,6 +186,8 @@ impl DispatchContext {
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(feature = "cuda")]
+            cuda_bridge,
         }
     }
 
@@ -209,6 +233,20 @@ impl DispatchContext {
         let engine = InferenceEngine::new(Device::Cpu, DType::F32);
         let backend_desc = engine.backend_description();
         tracing::info!(backend = %backend_desc, prefer_gpu, "DispatchContext initialized with GPU preference");
+
+        #[cfg(feature = "cuda")]
+        let cuda_bridge = if prefer_gpu {
+            match CudaBridge::new() {
+                Ok(bridge) => Some(bridge),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init direct CUDA bridge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             engine,
             memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
@@ -218,6 +256,8 @@ impl DispatchContext {
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(feature = "cuda")]
+            cuda_bridge,
         }
     }
 
@@ -229,6 +269,19 @@ impl DispatchContext {
         // Build a proper memory backend that matches the engine's GPU/CPU state
         let memory = Self::build_memory_from_engine(&engine);
 
+        #[cfg(feature = "cuda")]
+        let cuda_bridge = if prefer_gpu {
+            match CudaBridge::new() {
+                Ok(bridge) => Some(bridge),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init direct CUDA bridge");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             engine,
             memory,
@@ -236,6 +289,8 @@ impl DispatchContext {
             cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(feature = "cuda")]
+            cuda_bridge,
         }
     }
 
@@ -268,6 +323,18 @@ impl DispatchContext {
     /// Whether GPU is actually available (not just preferred).
     pub fn gpu_available(&self) -> bool {
         self.engine.gpu_available()
+    }
+
+    /// Whether the direct CUDA cuBLAS bridge for F16 inference is available.
+    #[cfg(feature = "cuda")]
+    pub fn cuda_bridge_available(&self) -> bool {
+        self.cuda_bridge.is_some()
+    }
+
+    /// Get a reference to the CUDA bridge if available.
+    #[cfg(feature = "cuda")]
+    pub fn cuda_bridge(&self) -> Option<&CudaBridge> {
+        self.cuda_bridge.as_ref()
     }
 
     /// Number of times a GPU operation failed and fell back to CPU since this
@@ -488,11 +555,25 @@ impl DispatchContext {
         // Convert input to f16 for GPU
         let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
 
-        // Use candle_bridge::gemm when a real CUDA device is available, CPU
-        // fallback otherwise. (The bridge only runs on GPU when candle-core is
-        // built with its cuda feature; otherwise prefer the native CPU GEMM.)
+        // Try direct CUDA cuBLAS bridge first (true F16 inference, Phase 1)
         #[cfg(feature = "cuda")]
-        let mut result = if self.prefer_gpu
+        let mut result = if self.cuda_bridge_available() {
+            debug!(m, n, k, "Linear: using direct CUDA cuBLAS bridge (F16)");
+            // Transpose weights for cuBLAS (row-major to column-major)
+            let w_t: Vec<f16> = {
+                let mut out = Vec::with_capacity(k * n);
+                for i in 0..k {
+                    for j in 0..n {
+                        out.push(weights[j * k + i]);
+                    }
+                }
+                out
+            };
+            self.cuda_bridge()
+                .unwrap()
+                .gemm_f16(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
+                .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))
+        } else if self.prefer_gpu
             && self.gpu_available()
             && crate::kernel::candle_bridge::bridge_is_cuda()
         {

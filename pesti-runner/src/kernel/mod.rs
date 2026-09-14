@@ -81,6 +81,8 @@ pub mod builder_stub;
 #[cfg(feature = "cuda")]
 pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
 pub mod candle_bridge;
+#[cfg(feature = "cuda")]
+pub mod cuda_bridge;
 pub mod device_buf;
 pub mod dispatch;
 #[cfg(feature = "cuda")]

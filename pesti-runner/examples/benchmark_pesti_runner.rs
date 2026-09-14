@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::time::Instant;
+use rand::SeedableRng;
 use pesti_runner::{load_gguf_weights, LlamaModel};
 
 fn main() {
