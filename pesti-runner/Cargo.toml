@@ -23,7 +23,7 @@ serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 
 # Mistral.rs for Qwen2 tokenizer support
-mistralrs-core = "0.8.1"
+mistralrs-core = { version = "0.8.1", optional = true }
 mistralrs-vision = "0.8.1"
 serde_json.workspace = true
 
@@ -61,9 +61,9 @@ tempfile.workspace = true
 # HuggingFace Hub
 hf-hub.workspace = true
 
-# ML inference (pure-Rust path)
-candle-core = { workspace = true, package = "candle-core" }
-candle-nn.workspace = true
+# ML inference backends (optional features enable these)
+candle-core = { workspace = true, package = "candle-core", optional = true }
+candle-nn = { workspace = true, optional = true }
 
 # Llama C++ FFI
 llama-cpp-2.workspace = true
@@ -75,5 +75,7 @@ encoding_rs.workspace = true
 [features]
 default = []
 cuda = ["cudarc"]
+mistralrs = ["dep:mistralrs-core", "dep:candle-core", "dep:candle-nn"]
+all-backends = ["cuda", "mistralrs"]
 llama_cpp_2_v156 = []
 rust-tokenizer = ["qwen2-bpe"]
