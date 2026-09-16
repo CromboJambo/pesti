@@ -1,6 +1,7 @@
 //! Phase 6 baseline benchmark - cudarc API conformance tok/s measurement
 use std::time::Instant;
 use pesti_runner::{load_gguf_weights, LlamaModel};
+use rand::SeedableRng;
 
 fn main() {
     let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
