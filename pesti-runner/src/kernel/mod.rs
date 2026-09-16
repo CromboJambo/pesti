@@ -80,12 +80,11 @@ pub mod builder;
 pub mod builder_stub;
 #[cfg(feature = "cuda")]
 pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
-#[cfg(feature = "mistralrs")]
 pub mod candle_bridge;
-pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod cuda_bridge;
 pub mod device_buf;
+pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
 #[cfg(feature = "cuda")]
@@ -156,8 +155,6 @@ pub use dispatch::{
 pub use gemm::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use gemm::{CudaGemmKernel, CudaGemmKernelBuilder};
-#[cfg(feature = "mistralrs")]
-pub use mistralrs_backend::MistralRsBackend;
 #[cfg(not(feature = "cuda"))]
 pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]

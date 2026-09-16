@@ -12,12 +12,14 @@ pub struct DeviceInfo {
 #[derive(Debug, Clone)]
 pub struct DeviceBackend {
     pub preference: String,
+    pub device: candle_core::Device,
 }
 
 impl DeviceBackend {
     pub fn new(preference: &str) -> Self {
         Self {
             preference: preference.to_string(),
+            device: candle_core::Device::Cpu,
         }
     }
 

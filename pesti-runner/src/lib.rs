@@ -23,7 +23,6 @@ pub mod device_stub;
 pub mod error;
 #[cfg(not(feature = "cuda"))]
 pub mod error_stub;
-pub mod generation; // Autoregressive generation loop with KV cache
 pub mod gguf_weight_loader;
 pub mod inertia; // Computational inertia subsystem
 pub mod inference_engine;
