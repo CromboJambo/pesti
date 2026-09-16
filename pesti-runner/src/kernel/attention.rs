@@ -549,21 +549,19 @@ impl GemmBasedAttentionKernel {
         Ok(output_buffer)
     }
 
-    /// 1D softmax along the last dimension.
+    /// 1D softmax along the last dimension - optimized with logsumexp trick.
     fn softmax_1d(&self, scores: &[f32], batch_size: usize, seq_len: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * seq_len];
 
+        // Process each row independently (already parallelizable across rows)
         for b in 0..batch_size {
             let start = b * seq_len;
             let softmax_row = &scores[start..start + seq_len];
 
-            // Find max for numerical stability
-            let max_val = softmax_row
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
+            // Logsumexp trick: find max first for numerical stability
+            let max_val = softmax_row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
 
-            // Compute exp and sum
+            // Compute exp(x - max) and accumulate sum in one pass
             let mut sum = 0.0f32;
             for i in 0..seq_len {
                 let exp_val = (softmax_row[i] - max_val).exp();
@@ -571,10 +569,11 @@ impl GemmBasedAttentionKernel {
                 sum += exp_val;
             }
 
-            // Normalize
+            // Normalize by dividing by sum
             if sum > 0.0 {
+                let inv_sum = 1.0 / sum;
                 for i in 0..seq_len {
-                    output[start + i] /= sum;
+                    output[start + i] *= inv_sum;
                 }
             }
         }
