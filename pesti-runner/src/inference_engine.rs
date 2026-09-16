@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 use crate::error::{Result, RunnerError};
+#[cfg(feature = "mistralrs")]
 use candle_core::{DType, Device, Tensor};
+#[cfg(feature = "mistralrs")]
 use candle_nn::Module;
 use half::f16;
 use tracing::warn;
@@ -28,7 +30,11 @@ use crate::kernel::attention::{AttentionKernel, GemmBasedAttentionKernel};
 
 /// Inference engine for tensor computation with computational inertia support.
 pub struct InferenceEngine {
+    #[cfg(feature = "mistralrs")]
     pub device: candle_core::Device,
+    #[cfg(not(feature = "mistralrs"))]
+    pub device: String,
+    #[cfg(feature = "mistralrs")]
     pub dtype: DType,
     gemm: Box<dyn crate::kernel::GemmKernel + Send + Sync>,
     attention: Box<dyn crate::kernel::AttentionKernel + Send + Sync>,

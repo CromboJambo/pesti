@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use cudarc::cublas::result::{create_handle, destroy_handle, hgemm};
-use cudarc::driver::{CudaContext, CudaStream};
+use cudarc::driver::{CudaContext, CudaStream, DevicePtr};
 use half::f16;
 
 /// Direct cuBLAS F16 bridge using cudarc result API.
@@ -58,6 +58,11 @@ impl CudaBridge {
         let alpha = f16::from_f32(1.0);
         let beta = f16::from_f32(0.0);
 
+        // Get device pointers via DevicePtr trait
+        let (a_ptr, _a_guard) = a_dev.device_ptr(stream);
+        let (b_ptr, _b_guard) = b_dev.device_ptr(stream);
+        let (c_ptr, _c_guard) = c_dev.device_ptr(stream);
+
         unsafe {
             hgemm(
                 self.handle,
@@ -67,12 +72,12 @@ impl CudaBridge {
                 m as i32,
                 k as i32,
                 &alpha,
-                b_dev.as_ptr(),
+                b_ptr as *const f16,
                 n as i32,
-                a_dev.as_ptr(),
+                a_ptr as *const f16,
                 k as i32,
                 &beta,
-                c_dev.as_mut_ptr(),
+                c_ptr as *mut f16,
                 m as i32,
             )
             .map_err(|e| format!("cublasHgemm failed: {}", e))?;
