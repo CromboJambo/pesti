@@ -6,9 +6,7 @@
 
 use std::sync::Arc;
 use crate::error::{Result, RunnerError};
-#[cfg(feature = "mistralrs")]
 use candle_core::{DType, Device, Tensor};
-#[cfg(feature = "mistralrs")]
 use candle_nn::Module;
 use half::f16;
 use tracing::warn;

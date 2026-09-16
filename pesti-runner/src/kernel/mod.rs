@@ -82,10 +82,10 @@ pub mod builder_stub;
 pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
 #[cfg(feature = "mistralrs")]
 pub mod candle_bridge;
+pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod cuda_bridge;
 pub mod device_buf;
-pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
 #[cfg(feature = "cuda")]
