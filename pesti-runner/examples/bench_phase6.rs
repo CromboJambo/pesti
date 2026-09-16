@@ -14,9 +14,11 @@ fn main() {
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
-    // Tokenize prompt
-    let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
-    let prompt_tokens = tokenizer.encode(prompt).expect("Failed to encode prompt");
+    // Tokenize prompt (drop borrow before generate)
+    let prompt_tokens = {
+        let tok = model.tokenizer.as_ref().expect("No tokenizer");
+        tok.encode(prompt).expect("Failed to encode prompt")
+    };
     println!("Encoded {} tokens", prompt_tokens.len());
 
     // Create sampling config (greedy)
@@ -43,9 +45,9 @@ fn main() {
     let tok_per_sec = result_tokens.len() as f64 / gen_time;
     println!("Decode speed: {:.2} tok/s", tok_per_sec);
 
-    // Decode and display output
+    // Decode and display output (re-borrow tokenizer after generate)
     if !result_tokens.is_empty() {
-        let generated_text = tokenizer.decode(&result_tokens).expect("Failed to decode");
+        let generated_text = model.tokenizer.as_ref().expect("No tokenizer").decode(&result_tokens).expect("Failed to decode");
         println!("Output: {}", &generated_text[..generated_text.len().min(150)]);
     }
 }
