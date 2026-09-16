@@ -444,7 +444,4 @@ pub fn copy_device_to_host(
     }
 }
 
-/// Trait extension for CUresult to provide `.result()` method.
-/// This mirrors cuda-oxide's `IntoResult` trait.
-/// Re-exported from cuda_shim.
-pub use crate::cuda_shim::IntoResult;
+

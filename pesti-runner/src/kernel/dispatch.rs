@@ -562,7 +562,7 @@ impl DispatchContext {
             // Pass original weights; cublas handles transpose via OP_T flags
             self.cuda_bridge()
                 .unwrap()
-                .gemm_f16f32(&x_f16, weights, m, n, k)
+                .gemm_f16(&x_f16, weights, m, n, k)
                 .map(|r| r.iter().cloned().collect::<Vec<f32>>())
                 .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16f32: {e}")))
         } else if self.prefer_gpu

@@ -10,7 +10,7 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use crate::cuda_runtime::{CudaRuntime, IntoResult};
+use crate::cuda_runtime::CudaRuntime;
 use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
 use cudarc::driver::safe::{CudaContext, CudaStream};
@@ -251,6 +251,39 @@ impl CpuGemmKernel {
                 let mut sum = 0.0f32;
                 for l in 0..k {
                     sum += a[i * k + l] * b[l * n + j];
+                }
+                c[i * n + j] = alpha * sum + beta * c[i * n + j];
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Direct f32 GEMM with transpose on B: C = alpha * A @ B^T + beta * C
+    /// A: [m x k] f32, B: [n x k] f32 (treated as transposed), C: [m x n] f32
+    pub fn gemm_f32_t(
+        &self,
+        a: &[f32],
+        b: &[f32],
+        c: &mut [f32],
+        m: usize,
+        n: usize,
+        k: usize,
+        alpha: f32,
+        beta: f32,
+    ) -> Result<(), GemmError> {
+        if a.len() < m * k || b.len() < n * k || c.len() < m * n {
+            return Err(GemmError::BufferSizeMismatch {
+                expected: m * k,
+                got: a.len().min(m * k),
+            });
+        }
+
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0.0f32;
+                for l in 0..k {
+                    sum += a[i * k + l] * b[j * k + l];
                 }
                 c[i * n + j] = alpha * sum + beta * c[i * n + j];
             }

@@ -3,7 +3,7 @@
 //! Implements matrix multiplication using NVIDIA Ampere tensor cores via WGMMA instructions.
 //! Provides ~3× speedup over warp-level GEMM (mma.sync) on sm_8.9 architecture.
 
-use crate::cuda_runtime::{CudaRuntime, IntoResult};
+use crate::cuda_runtime::CudaRuntime;
 use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
 use cudarc::driver::safe::{CudaContext, CudaStream};

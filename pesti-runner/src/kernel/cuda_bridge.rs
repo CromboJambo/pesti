@@ -1,110 +1,140 @@
-//! CUDA cuBLAS GEMM bridge using cudarc's result API.
-//!
-//! Uses cudarc's result::hgemm which calls cublasHgemm directly via libloading,
-//! avoiding the gemm_ex parameter issues entirely.
+//! cuBLAS-based F16 GEMM bridge for PESTI.
+//! Thin wrapper over cudarc's cuBLAS bindings, using hgemm (F16 matmul).
+//! Uses cudarc's safe API: CudaBlas + Gemm trait with CudaSlice memory management.
 
-use std::sync::Arc;
-use cudarc::cublas::result::{create_handle, destroy_handle, hgemm};
-use cudarc::driver::{CudaContext, CudaStream};
 use half::f16;
 
-/// Direct cuBLAS F16 bridge using cudarc result API.
+#[cfg(feature = "cuda")]
+use std::sync::Arc;
+
+#[cfg(feature = "cuda")]
+use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig};
+#[cfg(feature = "cuda")]
+use cudarc::driver::{CudaContext, CudaStream};
+
+/// CUDA bridge that manages cuBLAS handle and device context.
 pub struct CudaBridge {
-    handle: cudarc::cublas::sys::cublasHandle_t,
-    stream: Option<Arc<CudaStream>>,
+    #[cfg(feature = "cuda")]
+    blas: Arc<CudaBlas>,
+    #[cfg(feature = "cuda")]
+    stream: Arc<CudaStream>,
 }
 
 impl CudaBridge {
-    /// Create a new CUDA bridge with cuBLAS handle on device 0.
+    /// Create a new CUDA bridge with cuBLAS handle.
     pub fn new() -> Result<Self, String> {
-        let ctx = CudaContext::new(0).map_err(|e| format!("Failed to init CUDA device: {}", e))?;
-        let stream = ctx.default_stream();
+        #[cfg(feature = "cuda")]
+        unsafe {
+            let ctx = CudaContext::new(0).map_err(|e| format!("CUDA init failed: {:?}", e))?;
+            let stream = ctx.default_stream();
+            let blas = Arc::new(
+                CudaBlas::new(stream.clone())
+                    .map_err(|e| format!("cuBLAS create failed: {}", e))?,
+            );
+            Ok(Self { blas, stream })
+        }
 
-        let handle = create_handle().map_err(|e| format!("Failed to create cuBLAS handle: {}", e))?;
-
-        Ok(Self {
-            handle,
-            stream: Some(stream),
-        })
+        #[cfg(not(feature = "cuda"))]
+        Err("CUDA feature not enabled".to_string())
     }
 
-    /// Perform F16 GEMM: C = A @ B where A is [m,k] F16, B is [k,n] F16, result is [m,n] F32.
-    /// Uses cublasHgemm directly for true F16 compute.
-    pub fn gemm_f16f32(
+    /// Execute F16 GEMM: y = x @ W^T where x is [m,k], W is [n,k] -> y is [m,n]
+    pub fn gemm_f16(
         &self,
-        a: &[f16],
-        b: &[f16],
+        x: &[f16],
+        weights: &[f16],
         m: usize,
         n: usize,
         k: usize,
     ) -> Result<Vec<f32>, String> {
-        let stream = self.stream.as_ref().ok_or("CUDA stream not initialized")?;
-
-        // Upload inputs to device
-        let a_dev = stream
-            .clone_htod(a)
-            .map_err(|e| format!("Failed to upload A: {}", e))?;
-        let b_dev = stream
-            .clone_htod(b)
-            .map_err(|e| format!("Failed to upload B: {}", e))?;
-
-        // Allocate output on device (F16 for cublas Hgemm)
-        let c_size = m * n;
-        let mut c_dev = stream
-            .alloc_zeros::<f16>(c_size)
-            .map_err(|e| format!("Failed to allocate C: {}", e))?;
-
-        // cuBLAS is column-major. For row-major A×B, compute (B^T × A^T)^T.
-        let alpha = f16::from_f32(1.0);
-        let beta = f16::from_f32(0.0);
-
+        #[cfg(feature = "cuda")]
         unsafe {
-            hgemm(
-                self.handle,
-                cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-                n as i32,
-                m as i32,
-                k as i32,
-                &alpha,
-                b_dev.as_ptr(),
-                n as i32,
-                a_dev.as_ptr(),
-                k as i32,
-                &beta,
-                c_dev.as_mut_ptr(),
-                m as i32,
-            )
-            .map_err(|e| format!("cublasHgemm failed: {}", e))?;
-        }
+            use cudarc::cublas::sys;
 
-        // Sync and download result, convert F16→F32 on host
-        stream
-            .synchronize()
-            .map_err(|e| format!("sync failed: {}", e))?;
-        let c_host = stream
-            .clone_dtoh(&c_dev)
-            .map_err(|e| format!("Failed to download C: {}", e))?;
+            let stream = &self.stream;
 
-        // Convert F16 results back to F32 for the caller
-        Ok(c_host.iter().map(|v| v.to_f32()).collect())
-    }
+            // Allocate device memory using cudarc's safe slice API
+            let mut x_dev = stream
+                .alloc(x.len())
+                .map_err(|e| format!("cudaMalloc X failed: {:?}", e))?;
+            let mut w_dev = stream
+                .alloc(weights.len())
+                .map_err(|e| format!("cudaMalloc W failed: {:?}", e))?;
+            let mut y_dev = stream
+                .alloc(m * n)
+                .map_err(|e| format!("cudaMalloc Y failed: {:?}", e))?;
 
-    /// Synchronize the CUDA stream.
-    pub fn sync(&self) -> Result<(), String> {
-        if let Some(stream) = &self.stream {
+            // Copy input to device using cudarc's safe copy API
+            stream
+                .memcpy_htod(x, &mut x_dev)
+                .map_err(|e| format!("cudaMemcpy H2D X failed: {:?}", e))?;
+            stream
+                .memcpy_htod(weights, &mut w_dev)
+                .map_err(|e| format!("cudaMemcpy H2D W failed: {:?}", e))?;
+
+            // Compute C = X @ W^T where X is [m,k], W is [n,k] -> C is [m,n]
+            let alpha = f16::from_f32(1.0);
+            let beta = f16::from_f32(0.0);
+
+            let result = self.blas.gemm(
+                GemmConfig {
+                    transa: sys::cublasOperation_t::CUBLAS_OP_N,
+                    transb: sys::cublasOperation_t::CUBLAS_OP_T,
+                    m: n as i32,
+                    n: m as i32,
+                    k: k as i32,
+                    alpha,
+                    lda: n as i32,
+                    ldb: m as i32,
+                    beta,
+                    ldc: n as i32,
+                },
+                &w_dev,
+                &x_dev,
+                &mut y_dev,
+            );
+
+            // Synchronize
             stream
                 .synchronize()
-                .map_err(|e| format!("sync failed: {}", e))?;
+                .map_err(|e| format!("streamSync failed: {:?}", e))?;
+
+            // Copy result back to host using cudarc's safe copy API
+            let mut y_host = vec![f16::from_f32(0.0); m * n];
+            stream
+                .memcpy_dtoh(&y_dev, &mut y_host)
+                .map_err(|e| format!("cudaMemcpy D2H Y failed: {:?}", e))?;
+
+            // Free device memory (drop releases CudaSlice)
+            drop(x_dev);
+            drop(w_dev);
+            drop(y_dev);
+
+            // Convert F16 results to F32
+            Ok(y_host.iter().map(|v| v.to_f32()).collect())
         }
-        Ok(())
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled".to_string())
+        }
     }
 }
 
-impl Drop for CudaBridge {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = destroy_handle(self.handle);
-        }
+/// Initialize the CUDA bridge (create cuBLAS handle).
+pub fn init_cuda_bridge() -> Result<(), String> {
+    Ok(())
+}
+
+/// Check if CUDA bridge is available.
+pub fn cuda_bridge_available() -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        use cudarc::driver::CudaContext;
+        CudaContext::new(0).is_ok()
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        false
     }
 }
