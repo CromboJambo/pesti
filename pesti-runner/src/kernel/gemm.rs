@@ -128,9 +128,9 @@ pub trait GemmKernel: Send + Sync {
     fn arch(&self) -> GemmArch;
 }
 
-// --- CPU Implementation (Fallback) ---
+// --- CPU Implementation (Optimized Blocked/Tiled) ---
 
-/// Simple CPU GEMM implementation for testing and fallback.
+/// Optimized CPU GEMM using blocked/tiled computation for cache efficiency.
 pub struct CpuGemmKernel;
 
 impl CpuGemmKernel {
@@ -144,6 +144,11 @@ impl Default for CpuGemmKernel {
         Self::new()
     }
 }
+
+// Blocked GEMM tile sizes (tuned for L1/L2 cache)
+const TILE_M: usize = 64;
+const TILE_N: usize = 64;
+const TILE_K: usize = 32;
 
 impl GemmKernel for CpuGemmKernel {
     fn matmul(
@@ -170,14 +175,41 @@ impl GemmKernel for CpuGemmKernel {
             got: 0,
         })?;
 
-        // Simple O(m*n*k) GEMM
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0f32;
-                for l in 0..k {
-                    sum += a_host[i * k + l].to_f32() * b_host[l * n + j].to_f32();
+        // Convert f16->f32 once (not per-multiply)
+        let mut a_f32 = vec![0.0f32; m * k];
+        for i in 0..m * k {
+            a_f32[i] = a_host[i].to_f32();
+        }
+        let mut b_f32 = vec![0.0f32; k * n];
+        for i in 0..k * n {
+            b_f32[i] = b_host[i].to_f32();
+        }
+
+        // Blocked/tiled GEMM for cache efficiency
+        if beta == 0.0 {
+            c_host.fill(0.0);
+        } else if beta != 1.0 {
+            for val in c_host.iter_mut() {
+                *val *= beta;
+            }
+        }
+
+        for mm in (0..m).step_by(TILE_M) {
+            let m_end = (mm + TILE_M).min(m);
+            for nn in (0..n).step_by(TILE_N) {
+                let n_end = (nn + TILE_N).min(n);
+                for kk in (0..k).step_by(TILE_K) {
+                    let k_end = (kk + TILE_K).min(k);
+                    for i in mm..m_end {
+                        for j in nn..n_end {
+                            let mut sum = 0.0f32;
+                            for l in kk..k_end {
+                                sum += a_f32[i * k + l] * b_f32[l * n + j];
+                            }
+                            c_host[i * n + j] = alpha * sum + beta * c_host[i * n + j];
+                        }
+                    }
                 }
-                c_host[i * n + j] = alpha * sum + beta * c_host[i * n + j];
             }
         }
 
