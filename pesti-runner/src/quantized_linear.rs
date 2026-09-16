@@ -93,41 +93,37 @@ impl QuantizedLinear {
         }
     }
 
-    /// Forward pass: dequantize weights on-demand, then GEMM.
+    /// Forward pass: fused dequantize+GEMM (dequantize on-the-fly, not full matrix).
     ///
     /// y = x @ W^T + bias, where W is stored in quantized format.
-    /// Dequantizes the full weight matrix to f32, feeds to gemm.
+    /// Dequantizes each weight row just-in-time during GEMM to minimize memory bandwidth.
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let m = batch_size;
         let k = self.in_features;
         let n = self.out_features;
         let mut output = vec![0.0f32; m * n];
 
-        // Dequantize full weight matrix: [out_features, in_features]
-        let w_f32 = match self.dequantize_full_row_range(0, n) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("dequantize_full_row_range error: {}", e);
-                return output;
-            }
-        };
-
-        // Matmul: output[b, o] = sum_i(x[b, i] * W[o, i])
-        use rayon::prelude::*;
-        output
-            .par_chunks_mut(n)
-            .enumerate()
-            .for_each(|(b, out_row)| {
-                let x_row = &x[b * k..(b + 1) * k];
-                for o in 0..n {
-                    let w_row = &w_f32[o * k..(o + 1) * k];
-                    let mut acc = 0.0f32;
-                    for i in 0..k {
-                        acc += x_row[i] * w_row[i];
+        // Fused dequantize+GEMM: dequantize each weight row just-in-time
+        for b in 0..m {
+            let x_row = &x[b * k..(b + 1) * k];
+            for o in 0..n {
+                // Dequantize just this weight row on-the-fly
+                let w_row = match self.dequantize_row(o, x_row.len()) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        eprintln!("dequantize_row error for row {}: {}", o, e);
+                        continue;
                     }
-                    out_row[o] = acc;
+                };
+
+                // Dot product with fused dequantized weights
+                let mut acc = 0.0f32;
+                for i in 0..k {
+                    acc += x_row[i] * w_row[i];
                 }
-            });
+                output[b * n + o] = acc;
+            }
+        }
 
         // Apply bias if present
         if let Some(ref bias) = self.bias {
@@ -139,6 +135,27 @@ impl QuantizedLinear {
         }
 
         output
+    }
+
+    /// Dequantize a single weight row (just-in-time for GEMM).
+    fn dequantize_row(&self, row: usize, len: usize) -> Result<Vec<f32>> {
+        let rb = self.row_bytes();
+        if rb == 0 || row * rb >= self.data.len() {
+            return Ok(vec![0.0; len]);
+        }
+
+        let row_offset = row * rb;
+        let row_end_byte = (row_offset + rb).min(self.data.len());
+        let row_data = &self.data[row_offset..row_end_byte];
+
+        match self.dtype {
+            QuantDtype::Q4_0 => tile_dequant::dequantize_q4_0_tile(row_data, 0, len),
+            QuantDtype::Q8_0 => tile_dequant::dequantize_q8_0_tile(row_data, 0, len),
+            QuantDtype::Q4_K => tile_dequant::dequantize_q4_k_tile(row_data, 0, len),
+            QuantDtype::Q5_K => tile_dequant::dequantize_q4_k_tile(row_data, 0, len),
+            QuantDtype::Q6_K => tile_dequant::dequantize_q6_k_tile(row_data, 0, len),
+            _ => tile_dequant::dequantize_q4_0_tile(row_data, 0, len),
+        }
     }
 
     /// Dequantize a range of rows to a flat f32 array.
