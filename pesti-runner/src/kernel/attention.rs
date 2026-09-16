@@ -206,47 +206,51 @@ impl AttentionKernel for CpuAttentionKernel {
         let query_seq_len = q_host.len() / (num_heads * head_dim);
 
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
+        // Use optimized blocked GEMM with transpose for better cache performance
         let mut scores = vec![0.0f32; query_seq_len * num_heads * n];
 
-        // SIMD inner product helper (requires nightly Rust)
-        // For now, use scalar fallback for stable compatibility
-        #[inline]
-        fn simd_dot_product(q_slice: &[f32], k_slice: &[f32], head_dim: usize) -> f32 {
-            // Scalar fallback - no SIMD lanes
-            q_slice.iter().zip(k_slice.iter()).map(|(a, b)| a * b).sum()
-        }
+        for h in 0..num_heads {
+            // Compute Q_h @ K_h^T where each has shape [query_seq_len, head_dim] and [n, head_dim]
+            let q_h = &q_host[h * query_seq_len * head_dim..(h + 1) * query_seq_len * head_dim];
+            let k_h = &k_host[h * n * head_dim..(h + 1) * n * head_dim];
 
-        for qs in 0..query_seq_len {
-            for h in 0..num_heads {
-                let q_base = (qs * num_heads + h) * head_dim;
-                for s in 0..n {
-                    let k_base = (h * n + s) * head_dim;
-                    let sum = simd_dot_product(&q_host[q_base..], &k_host[k_base..], head_dim);
-                    scores[qs * num_heads * n + h * n + s] = sum * config.scale;
-                }
+            // Transpose K_h for efficient GEMM: scores = Q @ K^T
+            crate::kernel::gemm::gemm_f32(
+                q_h, k_h, &mut scores[h * query_seq_len * n..], 
+                query_seq_len, n, head_dim,
+                1.0, 0.0, true,
+            );
+
+            // Apply scaling factor after GEMM
+            let scores_h = &mut scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
+            for s in scores_h.iter_mut() {
+                *s *= config.scale;
             }
         }
 
-        // Step 2: Softmax on cache_seq_len dimension
+        // Step 2: Softmax on cache_seq_len dimension (optimized with logsumexp)
         let mut softmax_scores = vec![0.0f32; scores.len()];
         for qs in 0..query_seq_len {
             for h in 0..num_heads {
                 let start = (qs * num_heads + h) * n;
-                let mut max_val = f32::NEG_INFINITY;
-                for s in 0..n {
-                    if scores[start + s] > max_val {
-                        max_val = scores[start + s];
-                    }
-                }
+                let softmax_row = &scores[start..start + n];
+
+                // Logsumexp trick: find max first for numerical stability
+                let max_val = softmax_row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+                // Compute exp(x - max) and accumulate sum in one pass
                 let mut sum = 0.0f32;
-                for s in 0..n {
-                    let exp_val = (scores[start + s] - max_val).exp();
-                    softmax_scores[start + s] = exp_val;
+                for i in 0..n {
+                    let exp_val = (softmax_row[i] - max_val).exp();
+                    softmax_scores[start + i] = exp_val;
                     sum += exp_val;
                 }
+
+                // Normalize by dividing by sum
                 if sum > 0.0 {
-                    for s in 0..n {
-                        softmax_scores[start + s] /= sum;
+                    let inv_sum = 1.0 / sum;
+                    for i in 0..n {
+                        softmax_scores[start + i] *= inv_sum;
                     }
                 }
             }
@@ -255,32 +259,16 @@ impl AttentionKernel for CpuAttentionKernel {
         // Step 3: Softmax @ V -> output [query_seq_len, num_heads, head_dim]
         let mut output = vec![0.0f32; query_seq_len * num_heads * head_dim];
 
-        // SIMD vectorized dot product for softmax @ V (requires nightly)
-        // For now, use scalar fallback for stable compatibility
-        #[inline]
-        fn simd_softmax_v_dot(
-            softmax_row: &[f32],
-            v_slice: &[f32],
-            n: usize,
-            head_dim: usize,
-            d: usize,
-        ) -> f32 {
-            // Scalar fallback - no SIMD lanes
-            (0..n)
-                .map(|i| softmax_row[i] * v_slice[i * head_dim + d])
-                .sum()
-        }
+        for h in 0..num_heads {
+            // Compute S_h @ V_h where each has shape [query_seq_len, n] and [n, head_dim]
+            let s_h = &softmax_scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
+            let v_h = &v_host[h * n * head_dim..(h + 1) * n * head_dim];
 
-        for qs in 0..query_seq_len {
-            for h in 0..num_heads {
-                let softmax_start = (qs * num_heads + h) * n;
-                let softmax_row = &softmax_scores[softmax_start..softmax_start + n];
-
-                for d in 0..head_dim {
-                    let sum = simd_softmax_v_dot(softmax_row, &v_host, n, head_dim, d);
-                    output[qs * num_heads * head_dim + h * head_dim + d] = sum;
-                }
-            }
+            crate::kernel::gemm::gemm_f32(
+                s_h, v_h, &mut output[h * query_seq_len * head_dim..], 
+                query_seq_len, head_dim, n,
+                1.0, 0.0, false,
+            );
         }
 
         // Convert back to device buffer
