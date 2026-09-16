@@ -10,7 +10,7 @@
 //! - Better for very long sequences
 //!
 use crate::kernel::device_buf::DeviceBuffer;
-use crate::kernel::gemm::{CudaGemmKernel, GemmArch, GemmKernel};
+use crate::kernel::gemm::{CpuGemmKernel, CudaGemmKernel, GemmArch, GemmKernel};
 use crate::kernel::softmax::{SoftmaxKernel, SoftmaxKernelBuilder};
 use half::f16;
 
@@ -207,6 +207,7 @@ impl AttentionKernel for CpuAttentionKernel {
 
         // Step 1: Q @ K^T -> scores [query_seq_len, num_heads, cache_seq_len]
         // Use optimized blocked GEMM with transpose for better cache performance
+        let gemm = CpuGemmKernel::new();
         let mut scores = vec![0.0f32; query_seq_len * num_heads * n];
 
         for h in 0..num_heads {
@@ -215,11 +216,11 @@ impl AttentionKernel for CpuAttentionKernel {
             let k_h = &k_host[h * n * head_dim..(h + 1) * n * head_dim];
 
             // Transpose K_h for efficient GEMM: scores = Q @ K^T
-            crate::kernel::gemm::gemm_f32(
+            gemm.gemm_f32_t(
                 q_h, k_h, &mut scores[h * query_seq_len * n..], 
                 query_seq_len, n, head_dim,
-                1.0, 0.0, true,
-            );
+                1.0, 0.0,
+            ).map_err(|e| AttentionError::Gemm(e))?;
 
             // Apply scaling factor after GEMM
             let scores_h = &mut scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
@@ -264,11 +265,11 @@ impl AttentionKernel for CpuAttentionKernel {
             let s_h = &softmax_scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
             let v_h = &v_host[h * n * head_dim..(h + 1) * n * head_dim];
 
-            crate::kernel::gemm::gemm_f32(
+            gemm.gemm_f32(
                 s_h, v_h, &mut output[h * query_seq_len * head_dim..], 
                 query_seq_len, head_dim, n,
-                1.0, 0.0, false,
-            );
+                1.0, 0.0,
+            ).map_err(|e| AttentionError::Gemm(e))?;
         }
 
         // Convert back to device buffer
