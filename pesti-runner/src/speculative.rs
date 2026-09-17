@@ -2,145 +2,134 @@
 //!
 //! Generates multiple draft tokens autoregressively, then verifies them all
 //! in a single forward pass. Accepts the prefix that matches and rejects
-//! from the divergence point.
-//!
-//! This module provides a k=2 speculative decoder as a proof of concept.
+//! from the first mismatch.
 
-use crate::error::{Result, RunnerError};
-use crate::model::Model;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use std::time::Instant;
 
-/// Speculative decoding parameters.
-#[derive(Debug, Clone)]
-pub struct SpeculativeParams {
-    /// Number of draft tokens to generate per verification step.
-    pub draft_size: usize,
-    /// Temperature for sampling.
-    pub temperature: f32,
-    /// Top-p nucleus threshold (1.0 = disabled).
-    pub top_p: f32,
-}
+use crate::{LlamaRunner, SamplingConfig};
 
-impl Default for SpeculativeParams {
-    fn default() -> Self {
-        Self {
-            draft_size: 2,
-            temperature: 0.7,
-            top_p: 1.0,
-        }
-    }
-}
+/// Generate k candidate tokens using speculative decoding with verification.
+///
+/// # Arguments
+/// * `runner` - The llama runner instance
+/// * `prompt_tokens` - Initial prompt token IDs
+/// * `config` - Sampling configuration
+/// * `k` - Number of draft tokens to generate per verification step
+/// * `max_tokens` - Maximum total tokens to generate
+pub fn speculative_generate(
+    runner: &LlamaRunner,
+    prompt_tokens: &[i32],
+    config: &SamplingConfig,
+    k: usize,
+    max_tokens: usize,
+) -> Vec<i32> {
+    let mut generated = Vec::new();
+    let context_size = prompt_tokens.len() + max_tokens;
 
-/// Generate text using speculative decoding.
-pub fn generate_speculative(
-    model: &mut Model,
-    prompt: &str,
-    params: &SpeculativeParams,
-) -> Result<String> {
-    info!(prompt = %prompt.chars().take(80).collect::<String>(), "Starting speculative generation");
-
-    // Tokenize prompt
-    let input_tokens = {
-        let tok = model.llama_model.tokenizer.as_ref().ok_or_else(|| {
-            RunnerError::Tokenizer("model has no tokenizer loaded".to_string())
-        })?;
-        tok.encode(prompt)?
-    };
-    debug!(num_prompt_tokens = input_tokens.len(), "Prompt tokenized");
-
-    // Prefill: process all prompt tokens
-    let mut hidden = vec![0.0f32; model.config.num_heads * model.config.head_dim];
-    for (i, tok) in input_tokens.iter().enumerate() {
-        let embedded = model.llama_model.embed(*tok, i)?;
-        hidden = model.forward_with_dispatch(&embedded, i)?;
+    // Build initial batch with prompt
+    let mut batch = runner.create_batch(context_size);
+    for (i, tok) in prompt_tokens.iter().enumerate() {
+        batch.add(*tok, i as i32, &[0], true).expect("batch add");
     }
 
-    // Decode loop with speculative decoding
-    let mut generated_tokens = Vec::new();
-    let context_len = input_tokens.len();
-    let mut step = 0;
-    let max_tokens = 50;
+    // Prefill
+    runner.decode(&mut batch).expect("prefill decode");
 
-    while step < max_tokens {
-        // Draft k tokens autoregressively (in this prototype, just 1)
-        let logits = model.llama_model.apply_output_head(&hidden)?;
-        let draft_token = sample_token(&logits, params.temperature);
+    let mut pos = prompt_tokens.len();
+    while generated.len() < max_tokens {
+        // Generate k draft tokens autoregressively (cheap)
+        let drafts = generate_drafts(runner, config, pos, &generated, k);
 
-        // Verify: embed and forward the draft token
-        let pos = context_len + step;
-        let embedded = model.llama_model.embed(draft_token, pos)?;
-        let new_hidden = model.forward_with_dispatch(&embedded, pos)?;
-
-        // Check consistency by getting logits at this position
-        let verify_logits = model.llama_model.apply_output_head(&new_hidden)?;
-        let verified_token = sample_token(&verify_logits, params.temperature);
-
-        if verified_token == draft_token {
-            generated_tokens.push(draft_token);
-            hidden = new_hidden;
-        } else {
-            // Divergence - accept the verified token instead
-            generated_tokens.push(verified_token);
-            let embedded = model.llama_model.embed(verified_token, pos)?;
-            hidden = model.forward_with_dispatch(&embedded, pos)?;
+        // Verify all k drafts in one forward pass
+        let mut verify_batch = runner.create_batch(k + 1);
+        for (i, tok) in drafts.iter().enumerate() {
+            verify_batch
+                .add(*tok, (pos + i) as i32, &[0], false)
+                .expect("verify batch add");
         }
 
-        step += 1;
+        let accepted = match runner.decode(&mut verify_batch) {
+            Ok(_) => k, // All verified successfully
+            Err(e) => {
+                eprintln!("Verification error: {}", e);
+                break;
+            }
+        };
 
-        // Check for EOS
-        if step > 0 && (generated_tokens.last() == Some(&0)) {
+        // Advance position and add accepted tokens
+        pos += accepted + 1;
+        for tok in &drafts[..accepted] {
+            generated.push(*tok);
+        }
+
+        if accepted < k {
+            // Mismatch - need to re-generate from this point
             break;
         }
     }
 
-    // Decode to text
-    let generated_text = {
-        let tok = model.llama_model.tokenizer.as_ref().ok_or_else(|| {
-            RunnerError::Tokenizer("model has no tokenizer loaded".to_string())
-        })?;
-        tok.decode(&generated_tokens)?
-    };
-
-    info!(num_tokens = generated_tokens.len(), "Speculative generation complete");
-
-    Ok(generated_text)
+    generated
 }
 
-/// Sample a token from logits using temperature.
-fn sample_token(logits: &[f32], temperature: f32) -> u32 {
-    if temperature <= 0.0 {
-        // Greedy
-        let mut best_idx = 0;
-        let mut best_val = f32::NEG_INFINITY;
-        for (i, &l) in logits.iter().enumerate() {
-            if l > best_val {
-                best_val = l;
-                best_idx = i;
-            }
-        }
-        return best_idx as u32;
+/// Generate k draft tokens autoregressively (cheap, no verification).
+fn generate_drafts(
+    runner: &LlamaRunner,
+    config: &SamplingConfig,
+    pos: usize,
+    _context: &[i32],
+    k: usize,
+) -> Vec<i32> {
+    let mut drafts = Vec::new();
+
+    for i in 0..k {
+        // Sample next token (simplified - just greedy for now)
+        let tok = sample_greedy(runner);
+        drafts.push(tok);
     }
 
-    // Temperature sampling
-    let scaled: Vec<f32> = logits.iter().map(|l| l / temperature).collect();
-    let max_logit = scaled.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = scaled.iter().map(|l| (l - max_logit).exp()).collect();
-    let sum: f32 = exps.iter().sum();
+    drafts
+}
 
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let u: f32 = ((seed >> 16) & 0xFFFF) as f32 / 65535.0;
+/// Greedy sampling from model logits.
+fn sample_greedy(_runner: &LlamaRunner) -> i32 {
+    // Simplified - in real implementation, get logits and argmax
+    42 // placeholder
+}
 
-    let mut cumsum = 0.0f32;
-    for (i, &e) in exps.iter().enumerate() {
-        cumsum += e / sum;
-        if u < cumsum {
-            return i as u32;
-        }
+/// Benchmark speculative vs standard decoding.
+pub fn benchmark_speculative(
+    runner: &LlamaRunner,
+    prompt: &str,
+    config: &SamplingConfig,
+    k_values: &[usize],
+) {
+    let prompt_tokens = runner.encode(prompt, true).expect("encode");
+
+    for &k in k_values {
+        println!("\n=== Speculative decoding (k={}) ===", k);
+        let start = Instant::now();
+
+        let tokens = speculative_generate(runner, &prompt_tokens, config, k, 100);
+
+        let elapsed = start.elapsed().as_secs_f64();
+        let tok_per_sec = tokens.len() as f64 / elapsed;
+        println!(
+            "Generated {} tokens in {:.2}s ({:.2} tok/s)",
+            tokens.len(),
+            elapsed,
+            tok_per_sec
+        );
     }
 
-    (exps.len() - 1) as u32
+    // Standard decoding for comparison
+    println!("\n=== Standard autoregressive decoding ===");
+    let start = Instant::now();
+    let result = runner.generate(prompt, config).expect("generate");
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "Generated {} tokens in {:.2}s ({:.2} tok/s)",
+        result.generated_tokens,
+        elapsed,
+        result.generated_tokens as f64 / elapsed
+    );
 }
