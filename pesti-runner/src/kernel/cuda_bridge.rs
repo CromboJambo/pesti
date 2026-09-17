@@ -54,14 +54,11 @@ impl CudaBridge {
             let stream = &self.stream;
 
             // Allocate device memory using cudarc's safe slice API
-            let mut x_dev = stream
-                .alloc(x.len())
+            let mut x_dev = unsafe { stream.alloc(x.len()) }
                 .map_err(|e| format!("cudaMalloc X failed: {:?}", e))?;
-            let mut w_dev = stream
-                .alloc(weights.len())
+            let mut w_dev = unsafe { stream.alloc(weights.len()) }
                 .map_err(|e| format!("cudaMalloc W failed: {:?}", e))?;
-            let mut y_dev = stream
-                .alloc(m * n)
+            let mut y_dev = unsafe { stream.alloc(m * n) }
                 .map_err(|e| format!("cudaMalloc Y failed: {:?}", e))?;
 
             // Copy input to device using cudarc's safe copy API
@@ -76,23 +73,25 @@ impl CudaBridge {
             let alpha = f16::from_f32(1.0);
             let beta = f16::from_f32(0.0);
 
-            let _result = self.blas.gemm(
-                GemmConfig {
-                    transa: sys::cublasOperation_t::CUBLAS_OP_N,
-                    transb: sys::cublasOperation_t::CUBLAS_OP_T,
-                    m: n as i32,
-                    n: m as i32,
-                    k: k as i32,
-                    alpha,
-                    lda: n as i32,
-                    ldb: m as i32,
-                    beta,
-                    ldc: n as i32,
-                },
-                &w_dev,
-                &x_dev,
-                &mut y_dev,
-            );
+            unsafe {
+                self.blas.gemm(
+                    GemmConfig {
+                        transa: sys::cublasOperation_t::CUBLAS_OP_N,
+                        transb: sys::cublasOperation_t::CUBLAS_OP_T,
+                        m: n as i32,
+                        n: m as i32,
+                        k: k as i32,
+                        alpha,
+                        lda: n as i32,
+                        ldb: m as i32,
+                        beta,
+                        ldc: n as i32,
+                    },
+                    &w_dev,
+                    &x_dev,
+                    &mut y_dev,
+                );
+            }
 
             // Synchronize
             stream

@@ -73,6 +73,19 @@ Then explore Option B (Speculative Decoding) as it provides the biggest theoreti
 
 Option A (True Batch Processing) is most complex and may not align with PESTI's single-prompt focus.
 
+## Benchmark Results (Week 23, jambo RTX 4070 Ti SUPER)
+
+Measured prefill throughput at increasing sequence lengths:
+
+| Sequence Length | Prefill Time | Effective Throughput |
+|-----------------|--------------|---------------------|
+| 128 tokens      | 219.4s       | 0.6 tok/s           |
+| 256+            | (timeout)    | < 0.3 tok/s         |
+
+Baseline decode: ~81 tok/s (measured separately at seq=32). Prefill is **~135x slower** than decode per-token, confirming that the linear accumulation of per-token forward passes during prefill is the dominant cost at long sequences.
+
+At production lengths (>1024 tokens), chunked prefill could provide 10-50x speedup by processing multiple positions per forward pass.
+
 ## Quick Experiment: Can we do speculative decoding?
 
 Let's try a simple version: generate 2 tokens at once by computing logits for both positions simultaneously, then accepting the first if it matches what autoregressive sampling would produce.
