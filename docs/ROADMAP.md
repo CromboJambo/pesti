@@ -12,29 +12,29 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct:
 
 **Throughput:** 0.52 tok/s on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64). Baseline: llama.cpp achieves 77.1 tok/s on TinyLlama Q8 (RTX 4070 Ti SUPER) — different model/hardware, not directly comparable yet.
 
-## Upcoming Work
+## Completed Weeks
 
-### Week 22: Remaining Debt
-- [ ] Fix 4 failing pesti-safetensors tests (Q4_K/Q5_K/Q6_K dequant + config extraction)
-- [ ] Address remaining clippy warnings (unused vars in stub code, missing Safety docs)
-- [ ] Spike: batched generation for parallel prompts
+- **Week 23:** Long-Sequence Prefill Throughput — measured prefill speed across sequence lengths; identified attention kernel O(n²) scaling as bottleneck for long-context workloads.
 
-### Week 23: KV Cache Quantization (IN PROGRESS)
-- [x] Implement Q4_K quantized KV cache module (q4k_kvcache.rs)
-- [ ] Integrate Q4_K KV cache into model inference path (requires attention kernel modifications for on-the-fly dequantization)
-- [ ] Benchmark actual tok/s improvement with integrated Q4_K KV cache
-- [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
-- [ ] **F16 GPU inference via candle_bridge redesign** — eliminate F32 conversion overhead in `candle_bridge::gemm`; use direct cuBLAS Hgemm calls for true half-precision compute and 2x memory reduction. See [spec](specs/F16_GPU_INFERENCE_SPEC.md).
-- [ ] Spike: TMA descriptors for async prefetching
+## Architecture Refactor
 
-## Known Issues / Debt
+See [docs/REFACTOR_SPEC.md](REFACTOR_SPEC.md) for the complete top-down refactor plan covering:
+- Fused attention kernel (Phase 1)
+- GEMM integration into inference path (Phase 2)
+- Non-matmul GPU kernels: SwiGLU, RMSNorm, RoPE, Softmax (Phase 3)
+- KV cache quantization with on-the-fly dequantization (Phase 4)
+- Execution graph and kernel fusion (Phase 5)
+
+This replaces the week-by-week itemization. Each phase has explicit deliverables, conformance requirements, and success metrics.
+
+**Known Issues / Debt**
 
 | Issue | Status | Impact |
 |-------|--------|--------|
 | pesti-safetensors: 4 failing tests (Q4_K/Q5_K/Q6_K dequant + config) | Open | Can't fully validate quantized model loading |
 | Examples don't compile after API changes | Recurring | Developer experience, not runtime |
 
-## Failure Modes (Reference)
+**Failure Modes (Reference)**
 
 When heading toward these patterns, expect trouble:
 
@@ -49,4 +49,4 @@ When heading toward these patterns, expect trouble:
 **GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
 
 ---
-*Updated: September 11, 2026 — based on git history and test results, not planning documents*
+*Updated: September 17, 2026 — roadmap consolidated into REFACTOR_SPEC.md based on codebase analysis*
