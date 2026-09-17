@@ -121,4 +121,7 @@ pub use llama::{
 };
 pub use runtime::{ModelState, RunnerBackend, Runtime, RuntimeConfig};
 
+// ── Speculative decoding ──
+pub mod speculative;
+
 // ── Mistral.rs backend (optional, enabled via `mistralrs` feature) ──

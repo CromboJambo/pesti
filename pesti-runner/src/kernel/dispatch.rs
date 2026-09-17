@@ -1580,7 +1580,7 @@ impl AttentionDispatch {
                 let q_ptr = std::ptr::addr_of!(q_row_f16[0]) as *const u8;
                 ctx.memory
                     .h2d(
-                        std::slice::from_raw_parts(q_ptr, q_bytes),
+                        unsafe { std::slice::from_raw_parts(q_ptr, q_bytes) },
                         q_handle,
                     )
                     .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
@@ -1588,7 +1588,7 @@ impl AttentionDispatch {
                 let k_ptr = std::ptr::addr_of!(k_expanded[0]) as *const u8;
                 ctx.memory
                     .h2d(
-                        std::slice::from_raw_parts(k_ptr, k_bytes),
+                        unsafe { std::slice::from_raw_parts(k_ptr, k_bytes) },
                         k_handle,
                     )
                     .map_err(|e| DispatchError::Transfer(format!("H2D k: {e}")))?;
@@ -1596,7 +1596,7 @@ impl AttentionDispatch {
                 let v_ptr = std::ptr::addr_of!(v_expanded[0]) as *const u8;
                 ctx.memory
                     .h2d(
-                        std::slice::from_raw_parts(v_ptr, v_bytes),
+                        unsafe { std::slice::from_raw_parts(v_ptr, v_bytes) },
                         v_handle,
                     )
                     .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
