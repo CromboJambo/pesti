@@ -46,7 +46,7 @@ fn main() {
         prompt_tokens.push(tokens);
     }
 
-    let max_seq_len = prompt_tokens.iter().map(|t| t.len()).max().unwrap();
+    let _max_seq_len = prompt_tokens.iter().map(|t| t.len()).max().unwrap();
 
     // Calculate total tokens needed across all sequences
     let total_tokens_needed = prompt_tokens.iter().map(|t| t.len()).sum::<usize>();

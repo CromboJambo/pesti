@@ -53,7 +53,7 @@ impl TmaDescriptor {
     /// The offset must be 256-byte aligned for TMA.
     /// Stored in word 0 [31:0].
     pub const fn with_gmem_addr(mut self, addr: u64) -> Self {
-        self.0 |= (addr as u128 & 0xFFFFFFFF) << 0;
+        self.0 |= addr as u128 & 0xFFFFFFFF;
         self
     }
 

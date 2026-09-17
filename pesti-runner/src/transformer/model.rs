@@ -117,11 +117,11 @@ impl LlamaConfig {
         if num_kv_heads < num_heads {
             let k_name = match arch {
                 ModelArch::Qwen2 | ModelArch::Qwen3 => "blk.0.attn_k.weight".to_string(),
-                _ => format!("layers.0.attention.wk.weight"),
+                _ => "layers.0.attention.wk.weight".to_string(),
             };
             // Use gguf_model_loader's get_tensor_byte_range helper
-            if let Some(tensor_info) = header.tensors.iter().find(|t| t.name == k_name) {
-                if tensor_info.shape.len() >= 2 {
+            if let Some(tensor_info) = header.tensors.iter().find(|t| t.name == k_name)
+                && tensor_info.shape.len() >= 2 {
                     let kv_dim = tensor_info.shape[1] as usize;
                     let inferred = kv_dim / num_kv_heads;
                     if inferred > 0 && inferred != head_dim {
@@ -135,7 +135,6 @@ impl LlamaConfig {
                         head_dim = inferred;
                     }
                 }
-            }
         }
         let intermediate_dim = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
@@ -203,22 +202,20 @@ impl LlamaConfig {
         // Helper: get a u64 from metadata, trying multiple key names
         let get_u64 = |keys: &[&str]| -> Option<u64> {
             for &k in keys {
-                if let Some(v) = meta.get(k) {
-                    if let Ok(n) = v.trim_matches('"').parse::<u64>() {
+                if let Some(v) = meta.get(k)
+                    && let Ok(n) = v.trim_matches('"').parse::<u64>() {
                         return Some(n);
                     }
-                }
             }
             None
         };
 
         let get_f32 = |keys: &[&str]| -> Option<f32> {
             for &k in keys {
-                if let Some(v) = meta.get(k) {
-                    if let Ok(n) = v.trim_matches('"').parse::<f32>() {
+                if let Some(v) = meta.get(k)
+                    && let Ok(n) = v.trim_matches('"').parse::<f32>() {
                         return Some(n);
                     }
-                }
             }
             None
         };
@@ -427,8 +424,8 @@ impl LlamaModel {
                 Linear::from_f32_weight_with_shape(
                     tensor_data,
                     None,
-                    embed_dim as usize,
-                    vocab_size as usize * embed_dim as usize,
+                    embed_dim,
+                    vocab_size as usize * embed_dim,
                 )
             } else {
                 Linear::from_f32_weight(tensor_data, None)
@@ -450,7 +447,7 @@ impl LlamaModel {
                     Some(Linear::from_f32_weight_with_shape(
                         tensor_data,
                         None,
-                        embed_dim as usize,
+                        embed_dim,
                         vocab,
                     ))
                 } else {
@@ -465,7 +462,7 @@ impl LlamaModel {
                 if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                     let embed_dim = config.embed_dim;
                     let vocab = vocab_size as usize;
-                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim, vocab)
                 } else {
                     Linear::from_f32_weight(tensor_data, None)
                 }
@@ -627,7 +624,7 @@ impl LlamaModel {
         if !crate::kernel::candle_bridge::bridge_is_cuda() {
             return None;
         }
-        let hidden = config.embed_dim as usize;
+        let hidden = config.embed_dim;
         let vocab = vocab_size as usize;
         let weight = &output.weight;
         // Weight is stored [vocab, hidden] row-major (GGUF layout). The output
@@ -684,7 +681,7 @@ impl LlamaModel {
             if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                 let embed_dim = config.embed_dim;
                 let vocab = vocab_size as usize;
-                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim as usize, vocab)
+                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim, vocab)
             } else {
                 Linear::from_f32_weight(tensor_data, None)
             }
@@ -1363,7 +1360,7 @@ impl LlamaModel {
         let _embed_dim = hidden.len();
         let mut h = hidden.to_vec();
 
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
+        for layer in self.layers.iter() {
             h = layer.forward(&h, 1, 1, start_pos); // Fixed: was start_pos + layer_idx
         }
 
@@ -1465,22 +1462,14 @@ impl LlamaModel {
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     kv_max_seq,
-                    if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
-                        true
-                    } else {
-                        false
-                    },
+                    ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda(),
                 );
                 let value_cache = Kvcache::new(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     kv_max_seq,
-                    if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
-                        true
-                    } else {
-                        false
-                    },
+                    ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda(),
                 );
                 key_caches.push(key_cache);
                 value_caches.push(value_cache);
@@ -1681,7 +1670,7 @@ impl LlamaModel {
         // correct; this dispatch path previously fed the un-transposed buffer
         // and computed a scrambled projection.)
         let vocab = self.vocab_size as usize;
-        let hidden = self.config.embed_dim as usize;
+        let hidden = self.config.embed_dim;
         let weight = &output.weight;
         let output_f16: Vec<half::f16> = (0..hidden)
             .flat_map(|k| (0..vocab).map(move |v| half::f16::from_f32(weight[v * hidden + k])))
@@ -1785,7 +1774,7 @@ impl LlamaModel {
         sampling_config: &crate::transformer::SamplingConfig,
         rng: &mut rand::rngs::StdRng,
         stop_tokens: &[u32],
-        mut hook: F,
+        hook: F,
     ) -> Result<Vec<u32>>
     where
         F: FnMut(usize, &[f32]),

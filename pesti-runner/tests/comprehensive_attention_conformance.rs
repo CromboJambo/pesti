@@ -110,7 +110,7 @@ fn launch_fused_attention_sync(
         &mut k_v as *mut u64 as *mut std::ffi::c_void,
         &mut v_v as *mut u64 as *mut std::ffi::c_void,
         &mut out_v as *mut u64 as *mut std::ffi::c_void,
-        &mut (scale as f32) as *mut f32 as *mut std::ffi::c_void,
+        &mut { scale } as *mut f32 as *mut std::ffi::c_void,
         &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
         &mut seq_k_v as *mut u32 as *mut std::ffi::c_void,
         &mut num_heads_v as *mut u32 as *mut std::ffi::c_void,
@@ -186,7 +186,7 @@ fn test_attention_config_deprecated(seq_q: usize, seq_k: usize, num_heads: usize
 
     // Load PTX and launch
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
-    let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
+    let module = CudaModule::load_from_ptx(cuda_rt.context(), ptx_src).unwrap();
 
     launch_fused_attention_sync(
         &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
@@ -315,7 +315,7 @@ fn test_extreme_values() {
     }
 
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
-    let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
+    let module = CudaModule::load_from_ptx(cuda_rt.context(), ptx_src).unwrap();
 
     launch_fused_attention_sync(
         &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
@@ -384,7 +384,7 @@ fn test_zero_values() {
     }
 
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
-    let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
+    let module = CudaModule::load_from_ptx(cuda_rt.context(), ptx_src).unwrap();
 
     launch_fused_attention_sync(
         &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,

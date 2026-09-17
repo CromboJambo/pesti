@@ -123,7 +123,7 @@ impl SafetensorsWriter {
             current_offset += size;
         }
 
-        Ok(serde_json::to_string(&tensors_obj).map_err(SafetensorsSchemaError::Json)?)
+        serde_json::to_string(&tensors_obj).map_err(SafetensorsSchemaError::Json)
     }
 
     /// Get the element size in bytes for a given dtype.

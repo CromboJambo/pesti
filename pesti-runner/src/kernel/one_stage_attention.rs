@@ -3,7 +3,7 @@
 //! This module provides a drop-in replacement for the SDPA path that uses
 //! our custom one-stage kernel instead of candle_bridge::sdpa.
 
-use crate::kernel::{device_buf::DeviceBuffer, kvcache::Kvcache};
+use crate::kernel::kvcache::Kvcache;
 use half::f16;
 use std::sync::Arc;
 
@@ -63,8 +63,8 @@ impl OneStageAttentionKernel {
 
         // Allocate device buffers
         let q_size = batch_size * seq_len * num_heads * head_dim * 2; // f16
-        let k_size = cache_len * num_heads * head_dim * 2; // f16 (K is already in cache)
-        let v_size = cache_len * num_heads * head_dim * 2; // f16 (V is already in cache)
+        let _k_size = cache_len * num_heads * head_dim * 2; // f16 (K is already in cache)
+        let _v_size = cache_len * num_heads * head_dim * 2; // f16 (V is already in cache)
         let output_size = batch_size * seq_len * num_heads * head_dim * 4; // f32
 
         let q_ptr = unsafe { crate::cuda_runtime::allocate_device_memory(q_size)? };
@@ -84,7 +84,7 @@ impl OneStageAttentionKernel {
 
         // Get CUDA context from memory backend (using a runtime instance)
         let cuda_rt = crate::cuda_runtime::CudaRuntime::new(0)?;
-        let module = crate::cuda_shim::CudaModule::load_from_ptx(&cuda_rt.context(), ptx_src)?;
+        let module = crate::cuda_shim::CudaModule::load_from_ptx(cuda_rt.context(), ptx_src)?;
 
         // Parameters for kernel launch (10 params)
         let mut q_v: u64 = q_ptr as u64;
@@ -109,7 +109,7 @@ impl OneStageAttentionKernel {
             &mut k_v as *mut u64 as *mut std::ffi::c_void,
             &mut v_v as *mut u64 as *mut std::ffi::c_void,
             &mut out_v as *mut u64 as *mut std::ffi::c_void,
-            &mut (self.config.scale as f32) as *mut f32 as *mut std::ffi::c_void,
+            &mut { self.config.scale } as *mut f32 as *mut std::ffi::c_void,
             &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
             &mut seq_k_v as *mut u32 as *mut std::ffi::c_void,
             &mut num_heads_v as *mut u32 as *mut std::ffi::c_void,

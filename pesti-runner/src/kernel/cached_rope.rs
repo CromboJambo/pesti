@@ -47,7 +47,7 @@ impl CachedRoPEFrequencies {
         for pos in 0..config.max_seq_len {
             for i in 0..num_freqs {
                 let freq =
-                    (pos as f32 / (config.base.powf((2.0 * i as f32) / config.d_model as f32)));
+                    pos as f32 / (config.base.powf((2.0 * i as f32) / config.d_model as f32));
                 let idx = pos * num_freqs + i;
                 freqs_sin[idx] = f16::from_f32(freq.sin());
                 freqs_cos[idx] = f16::from_f32(freq.cos());

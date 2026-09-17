@@ -79,8 +79,16 @@ pub fn f16_to_tensor(
 
 /// Convert a candle-core `Tensor` (f32) back to `DeviceBuffer<f16>`.
 pub fn tensor_to_f16(tensor: &Tensor) -> Result<Vec<f16>, candle_core::Error> {
-    let f32_data: Vec<f32> = tensor.to_vec1()?;
-    Ok(f32_data.iter().map(|&x| f16::from_f32(x)).collect())
+    match tensor.dtype() {
+        DType::F16 => {
+            let f16_data: Vec<f16> = tensor.to_vec1()?;
+            Ok(f16_data)
+        }
+        _ => {
+            let f32_data: Vec<f32> = tensor.to_vec1()?;
+            Ok(f32_data.iter().map(|&x| f16::from_f32(x)).collect())
+        }
+    }
 }
 
 /// Convert a candle-core `Tensor` (f32) to host f32 Vec.
@@ -278,8 +286,8 @@ pub fn gemm(
     let device = bridge_device();
 
     // Convert to F16 tensors for half the memory footprint
-    let a_t = Tensor::from_vec(a.to_vec(), (m, k), &device)?;
-    let b_t = Tensor::from_vec(b.to_vec(), (k, n), &device)?;
+    let a_t = Tensor::from_vec(a.to_vec(), (m, k), device)?;
+    let b_t = Tensor::from_vec(b.to_vec(), (k, n), device)?;
 
     gemm_with_tensors(&a_t, &b_t, c, m, k, n, alpha, beta)
 }

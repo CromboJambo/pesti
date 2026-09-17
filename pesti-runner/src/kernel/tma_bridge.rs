@@ -38,7 +38,7 @@ impl HostTmaDescriptor {
         global_height: u64,
         tile_width: u32,
         tile_height: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, String> { unsafe {
         let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
         let global_dim: [u64; 2] = [global_width, global_height];
         // Byte stride between consecutive rows in global memory
@@ -71,7 +71,7 @@ impl HostTmaDescriptor {
         Ok(Self {
             opaque: descriptor.opaque,
         })
-    }
+    }}
 
     /// Create a TMA descriptor with SWIZZLE_128B for tensor memory compatibility.
     ///
@@ -88,7 +88,7 @@ impl HostTmaDescriptor {
         global_height: u64,
         tile_width: u32,
         tile_height: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, String> { unsafe {
         let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
         let global_dim: [u64; 2] = [global_width, global_height];
         let global_strides: [u64; 1] = [global_width * 2]; // f16 = 2 bytes
@@ -120,5 +120,5 @@ impl HostTmaDescriptor {
         Ok(Self {
             opaque: descriptor.opaque,
         })
-    }
+    }}
 }

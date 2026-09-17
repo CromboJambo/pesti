@@ -28,7 +28,7 @@ pub fn softmax_cpu(logits: &[f32]) -> Vec<f32> {
 #[cfg(feature = "cuda")]
 pub fn softmax_cuda(
     logits: &[f32],
-    stream: &cudarc::driver::CudaStream,
+    _stream: &cudarc::driver::CudaStream,
 ) -> Result<Vec<f32>, SoftmaxError> {
     // For now, fall back to CPU for the actual computation
     // (The GPU transfer methods require updating to match cudarc's current API)

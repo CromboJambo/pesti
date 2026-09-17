@@ -5,9 +5,7 @@
 //! 2. Warp-level parallelism for attention heads
 //! 3. Adaptive thread block sizing based on sequence length
 
-use crate::kernel::device_buf::DeviceBuffer;
 use half::f16;
-use std::sync::Arc;
 
 /// Batched parallel attention configuration.
 #[derive(Debug, Clone)]
@@ -153,8 +151,8 @@ impl BatchedParallelAttentionKernel {
                         // Parallel reduction across dimensions (simulating warp reduction)
                         let chunk_size = head_dim / 4; // Each thread handles 4 dims
                         for c in 0..chunk_size {
-                            let d1 = pos_q * head_dim + h_offset + c * 4 + 0;
-                            let d2 = pos_k * head_dim + h_offset + c * 4 + 0;
+                            let d1 = pos_q * head_dim + h_offset + c * 4;
+                            let d2 = pos_k * head_dim + h_offset + c * 4;
                             dot += q_proj[b * seq_len * num_heads * head_dim + d1]
                                 * k_proj[b * seq_len * num_heads * head_dim + d2];
 
@@ -228,7 +226,7 @@ impl BatchedParallelAttentionKernel {
                     // Parallel reduction across sequence positions
                     let chunk_size = seq_len / 4;
                     for c in 0..chunk_size {
-                        let pos_k = c * 4 + 0;
+                        let pos_k = c * 4;
                         let softmax_idx = b * seq_len * seq_len * num_heads
                             + pos_q * seq_len * num_heads
                             + pos_k * num_heads

@@ -1,10 +1,8 @@
 //! KV cache for LLM inference.
 //!
 //! Stores key and value tensors per layer with dynamic sequence management.
-//!
-//! Layout: `[num_heads * head_dim, max_seq]` contiguous per layer.
-//! The sequence dimension is contiguous for efficient TMA transfers
-//! during attention computation.
+//! Optimized layout: `[num_heads * head_dim, max_seq]` contiguous per layer.
+//! The sequence dimension is contiguous for efficient TMA transfers during attention computation.
 //!
 //! For a model with `num_heads` heads and `head_dim` per head:
 //! - Each head's KV slice is `head_dim` elements
@@ -342,14 +340,13 @@ impl Kvcache {
         let new_total = self.num_heads * self.head_dim * 2 * new_max_seq;
         let mut new_buf = DeviceBuffer::zeros(new_total);
 
-        if let Some(src) = self.buffer.as_slice() {
-            if let Some(dst) = new_buf.as_mut_slice() {
+        if let Some(src) = self.buffer.as_slice()
+            && let Some(dst) = new_buf.as_mut_slice() {
                 let copy_len = self.total_elements();
                 if copy_len <= dst.len() && copy_len <= src.len() {
                     dst[..copy_len].copy_from_slice(&src[..copy_len]);
                 }
             }
-        }
 
         self.buffer = new_buf;
         self.max_seq = new_max_seq;

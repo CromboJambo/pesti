@@ -124,7 +124,7 @@ impl Linear {
         let n = self.out_features;
 
         // Infer actual batch size from input length to handle dimension mismatches
-        let actual_batch_size = x.len() / k;
+        let _actual_batch_size = x.len() / k;
 
         // Parallelize over batch dimension
         output
@@ -227,7 +227,7 @@ mod tests {
         // C[1,0] = 4*1 + 5*2 + 6*3 + 0.1 = 4 + 10 + 18 + 0.1 = 32.1
         // C[1,1] = 4*4 + 5*5 + 6*6 + 0.2 = 16 + 25 + 36 + 0.2 = 77.2
 
-        let expected = vec![14.1, 32.2, 32.1, 77.2];
+        let expected = [14.1, 32.2, 32.1, 77.2];
 
         for (i, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
             assert!(
@@ -255,7 +255,7 @@ mod tests {
         // C[0,1] = 1*3 + 2*4 = 11
         // C[0,2] = 1*5 + 2*6 = 17
 
-        let expected = vec![5.0, 11.0, 17.0];
+        let expected = [5.0, 11.0, 17.0];
 
         for (i, (got, exp)) in output.iter().zip(expected.iter()).enumerate() {
             assert!(

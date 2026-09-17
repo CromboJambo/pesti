@@ -26,14 +26,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-#[cfg(feature = "cuda")]
-use crate::device::DeviceType;
 use crate::error::Result;
 use crate::llama::{GenerationResult, LlamaRunner, SamplingConfig, StreamingResult, TokenInfo};
 use crate::model_manager::{ModelManager, ModelSpec, PreloadConfig, PreloadStats};
 use crate::registry::{DiscoveredModel, ModelDiscovery, ModelEntry, ModelFormat, Registry};
-#[cfg(feature = "cuda")]
-use crate::transformer::{LlamaConfig, LlamaModel};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -356,7 +352,7 @@ impl Runtime {
         };
 
         #[cfg(feature = "cuda")]
-        let sampling_config = crate::transformer::SamplingConfig {
+        let _sampling_config = crate::transformer::SamplingConfig {
             temperature: 0.7,
             top_k: 50,
             top_p: 0.95,

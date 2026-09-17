@@ -44,13 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Results from join! is a tuple, not an iterable
     let results_tuple = (results.0, results.1, results.2);
 
-    for (_i, result) in [
+    for result in [
         (&results_tuple.0, 1usize),
         (&results_tuple.1, 2usize),
         (&results_tuple.2, 3usize),
     ]
     .iter()
-    .enumerate()
+    
     {
         match result.0 {
             Ok(chat_result) => {

@@ -5,9 +5,7 @@
 //! 2. Global memory writes (intermediate buffers)
 //! 3. Host-device transfers
 
-use crate::kernel::device_buf::DeviceBuffer;
 use half::f16;
-use std::sync::Arc;
 
 /// Fused QKV + Attention + Output kernel configuration.
 #[derive(Debug, Clone)]

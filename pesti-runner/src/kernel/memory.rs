@@ -12,7 +12,7 @@
 //! RawHandle is a u64 newtype. For CPU it's a slab index, for CUDA it's the
 //! device pointer cast to u64. The backend impl knows how to interpret it.
 
-use cudarc::driver::result::{self, DriverError};
+use cudarc::driver::result::DriverError;
 use cudarc::driver::safe::CudaStream;
 use cudarc::driver::sys;
 use std::sync::Arc;
@@ -393,14 +393,12 @@ pub enum MemoryManager {
 impl MemoryManager {
     /// Create a MemoryManager, preferring CUDA if available.
     pub fn new() -> Self {
-        if crate::cuda_runtime::is_available() {
-            if let Ok(rt) = crate::cuda_runtime::CudaRuntime::for_default_device() {
-                if let Ok(stream) = rt.new_stream() {
+        if crate::cuda_runtime::is_available()
+            && let Ok(rt) = crate::cuda_runtime::CudaRuntime::for_default_device()
+                && let Ok(stream) = rt.new_stream() {
                     let device_info = rt.device_info().clone();
                     return Self::Cuda(CudaMemoryBackend::with_device_info(stream, device_info));
                 }
-            }
-        }
         Self::Cpu(CpuMemoryBackend::new(usize::MAX))
     }
 

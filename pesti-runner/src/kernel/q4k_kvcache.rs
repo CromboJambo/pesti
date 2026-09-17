@@ -12,8 +12,6 @@
 //! Total: 144 bytes per 256 f32-equivalent values
 
 use crate::kernel::device_buf::DeviceBuffer;
-use half::f16;
-use std::sync::Arc;
 
 /// Q4_K block size constants (ggml canonical format).
 const Q4K_BLOCK_SIZE: usize = 144; // bytes per block
@@ -40,7 +38,7 @@ impl Q4KVCache {
     pub fn new(num_kv_heads: usize, head_dim: usize, max_seq: usize) -> Self {
         // Calculate total bytes needed for K and V in Q4_K format
         let total_elems = num_kv_heads * head_dim * max_seq;
-        let blocks_needed = (total_elems + Q4K_BLOCK_ELEMS - 1) / Q4K_BLOCK_ELEMS;
+        let blocks_needed = total_elems.div_ceil(Q4K_BLOCK_ELEMS);
         let buffer_bytes = blocks_needed * Q4K_BLOCK_SIZE;
 
         Self {
@@ -54,9 +52,9 @@ impl Q4KVCache {
     }
 
     /// Create from existing device buffer (for pre-allocated memory).
-    pub fn from_device(k_ptr: u64, v_ptr: u64, k_bytes: usize, num_kv_heads: usize, head_dim: usize, max_seq: usize) -> Self {
+    pub fn from_device(k_ptr: u64, v_ptr: u64, _k_bytes: usize, num_kv_heads: usize, head_dim: usize, max_seq: usize) -> Self {
         let total_elems = num_kv_heads * head_dim * max_seq;
-        let blocks_needed = (total_elems + Q4K_BLOCK_ELEMS - 1) / Q4K_BLOCK_ELEMS;
+        let blocks_needed = total_elems.div_ceil(Q4K_BLOCK_ELEMS);
         let buffer_bytes = blocks_needed * Q4K_BLOCK_SIZE;
 
         Self {
@@ -108,7 +106,7 @@ impl Q4KVCache {
         }
 
         let row_bytes = self.num_kv_heads * self.head_dim;
-        let blocks_per_row = (row_bytes + Q4K_BLOCK_ELEMS - 1) / Q4K_BLOCK_ELEMS;
+        let blocks_per_row = row_bytes.div_ceil(Q4K_BLOCK_ELEMS);
         let block_offset = pos * blocks_per_row * Q4K_BLOCK_SIZE;
 
         // Write K block

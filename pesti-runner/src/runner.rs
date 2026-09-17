@@ -3,8 +3,6 @@
 //! Implements HTTP transport for remote LM Studio inference.
 //! Routes requests to local GPU or remote endpoint based on device selection.
 
-#[cfg(feature = "cuda")]
-use crate::device::{DeviceSelection, DeviceSelector};
 use crate::error::RunnerError;
 use pesti_plug_in::protocol::{InferenceRequest, InferenceResponse, RunnerConfig};
 use tracing::debug;

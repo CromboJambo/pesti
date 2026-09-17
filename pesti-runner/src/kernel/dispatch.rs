@@ -30,7 +30,6 @@
 //! let out = ctx.dispatch_linear_cpu(&input, &weights, batch_size)?;
 //! ```
 
-use std::sync::Arc;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
@@ -45,10 +44,6 @@ use crate::kernel::candle_bridge;
 #[cfg(feature = "cuda")]
 use crate::kernel::cuda_bridge::CudaBridge;
 use crate::kernel::device_buf::DeviceBuffer;
-#[cfg(feature = "cuda")]
-use crate::kernel::fused_attention_conformant::{
-    FusedAttentionArch, build_fused_attention_kernel_conformant,
-};
 #[cfg(feature = "cuda")]
 use crate::kernel::gemm::{GemmArch, GemmKernel};
 #[cfg(not(feature = "cuda"))]
@@ -563,7 +558,7 @@ impl DispatchContext {
             self.cuda_bridge()
                 .unwrap()
                 .gemm_f16(&x_f16, weights, m, n, k)
-                .map(|r| r.iter().cloned().collect::<Vec<f32>>())
+                .map(|r| r.to_vec())
                 .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16f32: {e}")))
         } else if self.prefer_gpu
             && self.gpu_available()

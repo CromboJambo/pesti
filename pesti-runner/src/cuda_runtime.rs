@@ -8,7 +8,6 @@
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use cudarc::driver::sys;
 use std::sync::Arc;
-use tracing::warn;
 
 /// Error type for CUDA runtime operations.
 #[derive(Debug, thiserror::Error)]
@@ -127,17 +126,17 @@ impl CudaRuntime {
         // Get device name
         let name = ctx
             .name()
-            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
+            .map_err(|_e| CudaError::DeviceUnavailable { ordinal })?;
 
         // Get compute capability
         let (major, minor) = ctx
             .compute_capability()
-            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
+            .map_err(|_e| CudaError::DeviceUnavailable { ordinal })?;
 
         // Get memory info
         let (free_memory, total_memory) = ctx
             .mem_get_info()
-            .map_err(|e| CudaError::DeviceUnavailable { ordinal })?;
+            .map_err(|_e| CudaError::DeviceUnavailable { ordinal })?;
 
         let device_info = CudaDeviceInfo {
             ordinal,
@@ -236,9 +235,9 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
     // First try NVML (more reliable when context is in use)
     #[cfg(feature = "cuda")]
     {
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(device_count) = nvml.device_count() {
-                if device_count > 0 {
+        if let Ok(nvml) = nvml_wrapper::Nvml::init()
+            && let Ok(device_count) = nvml.device_count()
+                && device_count > 0 {
                     let mut devices = Vec::with_capacity(device_count as usize);
 
                     for ordinal in 0..device_count as usize {
@@ -269,8 +268,6 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
                         return Ok(devices);
                     }
                 }
-            }
-        }
     }
 
     // Fallback to cudarc context API
@@ -349,13 +346,11 @@ pub fn is_available() -> bool {
     // First try NVML (more reliable when context is in use)
     #[cfg(feature = "cuda")]
     {
-        if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-            if let Ok(count) = nvml.device_count() {
-                if count > 0 {
+        if let Ok(nvml) = nvml_wrapper::Nvml::init()
+            && let Ok(count) = nvml.device_count()
+                && count > 0 {
                     return true;
                 }
-            }
-        }
     }
 
     // Fallback to cudarc

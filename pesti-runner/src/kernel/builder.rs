@@ -305,8 +305,8 @@ impl GemmKernel for KernelFromPtx {
         }
 
         // If GPU is available, launch the kernel
-        if self.gpu_available {
-            if let (Some(ctx), Some(_module), Some(func), Some(stream)) =
+        if self.gpu_available
+            && let (Some(ctx), Some(_module), Some(func), Some(stream)) =
                 (&self.ctx, &self.module, &self.function, &self.stream)
             {
                 // Bind context to thread
@@ -352,12 +352,11 @@ impl GemmKernel for KernelFromPtx {
                 }
 
                 // Synchronize (event-based: see cuda_shim::stream_synchronize)
-                crate::cuda_shim::stream_synchronize(&stream)
+                crate::cuda_shim::stream_synchronize(stream)
                     .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
 
                 return Ok(());
             }
-        }
 
         // GPU unavailable — fall back to CPU
         let _ = (alpha, beta, self.source.kernel_name.as_str(), m, n, k);

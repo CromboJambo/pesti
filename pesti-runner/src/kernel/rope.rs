@@ -117,8 +117,8 @@ impl CudaRopeKernel {
         let rope_base_val = 10000.0f32.to_bits();
 
         let mut kernel_params: [*mut std::ffi::c_void; 8] = [
-            &(q_ptr as u64) as *const u64 as *mut std::ffi::c_void,
-            &(k_ptr as u64) as *const u64 as *mut std::ffi::c_void,
+            &{ q_ptr } as *const u64 as *mut std::ffi::c_void,
+            &{ k_ptr } as *const u64 as *mut std::ffi::c_void,
             &num_heads_val as *const u32 as *mut std::ffi::c_void,
             &seq_q_val as *const u32 as *mut std::ffi::c_void,
             &seq_k_val as *const u32 as *mut std::ffi::c_void,
@@ -128,7 +128,7 @@ impl CudaRopeKernel {
         ];
 
         // Launch configuration: one block per (head, pos) pair
-        let grid_x = ((seq_q as u32 + 127) / 128).min(num_heads as u32);
+        let grid_x = (seq_q as u32).div_ceil(128).min(num_heads as u32);
         let grid_y = 1;
         let block_size = 128;
 

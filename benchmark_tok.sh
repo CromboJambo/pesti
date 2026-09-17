@@ -1,3 +1,24 @@
+#!/usr/bin/env bash
+# Tok/s benchmark for pesti-runner using real model generation.
+# Uses qwen2.5-0.5b-instruct-q4_k_m.gguf from conformance-corpus/.
+
+set -e
+cd "$(dirname "$0")"
+
+MODEL="conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+
+if [ ! -f "$MODEL" ]; then
+    echo "Model not found: $MODEL"
+    exit 1
+fi
+
+echo "=== PESTI tok/s Benchmark ==="
+echo "Model: qwen2.5-0.5b-instruct-q4_k_m (Q4_K_M)"
+echo "Hardware: NVIDIA RTX 4070 Ti SUPER, CUDA 12.x"
+echo ""
+
+# Write benchmark test file
+cat > pesti-runner/tests/benchmark_tok.rs << 'EOF'
 //! Tok/s benchmark for pesti-runner using real model generation.
 
 use std::path::Path;
@@ -5,25 +26,26 @@ use std::time::Instant;
 use rand::SeedableRng;
 use pesti_runner::{load_gguf_weights, LlamaModel};
 
-fn main() {
+#[test]
+fn benchmark_tok_per_second() {
     let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
     if !Path::new(model_path).exists() {
-        println!("Model not found at {}", model_path);
-        std::process::exit(1);
+        println!("Skipping: model not found at {}", model_path);
+        return;
     }
 
     println!("=== PESTI tok/s Benchmark ===");
-    println!("Model: qwen2.5-0.5b-instruct-q4_k_m");
+    println!("Model: qwen2.5-0.5b-instruct-q4_k_m (Q4_K_M)");
     println!();
 
-    // Load model
+    // Load weights and build model
     let t_load = Instant::now();
     let weights = load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
-    // Load tokenizer from GGUF metadata
+    // Load tokenizer from GGUF metadata (required for proper tokenization)
     let tokenizer_config = pesti_runner::transformer::GgufTokenizerConfig {
         vocab_size: 152064,
         pad_token_id: Some(151663),
@@ -72,18 +94,32 @@ fn main() {
     println!();
     println!("=== Results ===");
     println!("Generated {} tokens in {:.2}s", result_tokens.len(), gen_time);
-    
+
     if !result_tokens.is_empty() {
         let tok_per_sec = result_tokens.len() as f64 / gen_time;
         println!("Decode speed: {:.2} tok/s", tok_per_sec);
         println!("Avg time per token: {:.0}ms", 1000.0 / tok_per_sec);
     }
 
-    // Decode output
-    let generated_text = {
-        let tok = model.tokenizer.as_ref().expect("No tokenizer");
-        tok.decode(&result_tokens).expect("Failed to decode")
-    };
+    // Decode and show output
+    if let Some(tok) = model.tokenizer.as_ref() {
+        let generated_text = tok.decode(&result_tokens).expect("Failed to decode");
+        println!();
+        println!("Output: {}", &generated_text[..generated_text.len().min(200)]);
+    }
+
     println!();
-    println!("Output: {}", &generated_text[..generated_text.len().min(200)]);
+    println!("=== Benchmark Complete ===");
 }
+EOF
+
+# Run benchmark test
+cargo test --package pesti-runner --features cuda,mistralrs \
+    --test benchmark_tok benchmark_tok_per_second \
+    -- --nocapture 2>&1 | grep -E "tok/s|Generated|Decode speed|Model loaded|Warmup|Benchmark Complete|Output:" || true
+
+# Cleanup temp test file
+rm -f pesti-runner/tests/benchmark_tok.rs
+
+echo ""
+echo "=== Benchmark Complete ==="

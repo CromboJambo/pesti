@@ -3,7 +3,6 @@
 //! Implements matrix multiplication using NVIDIA Ampere tensor cores (WGMMA instruction)
 //! on sm_8.9 architecture (RTX 4070 Ti SUPER). Provides up to 3× speedup over warp-level GEMM.
 
-use cudarc::driver::*;
 use half::f16;
 
 /// Configuration for WGMMA tensor core kernel
@@ -60,11 +59,11 @@ impl WGMMAKernel {
     /// - C: [M x N], f32 accumulator
     pub fn gemm_f16_accf32(
         &self,
-        a: &[f16],
-        b: &[f16],
+        _a: &[f16],
+        _b: &[f16],
         m: usize,
         n: usize,
-        k: usize,
+        _k: usize,
     ) -> Result<Vec<f32>, ()> {
         // Placeholder: would launch WGMMA kernel in production
         // For now, return zeros (actual computation deferred to CUDA kernel)

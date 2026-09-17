@@ -76,7 +76,7 @@ impl CudaBridge {
             let alpha = f16::from_f32(1.0);
             let beta = f16::from_f32(0.0);
 
-            let result = self.blas.gemm(
+            let _result = self.blas.gemm(
                 GemmConfig {
                     transa: sys::cublasOperation_t::CUBLAS_OP_N,
                     transb: sys::cublasOperation_t::CUBLAS_OP_T,

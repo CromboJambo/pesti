@@ -8,9 +8,7 @@
 //! This is ideal for long sequences (512+ tokens) where standard attention
 //! becomes memory-bound.
 
-use crate::kernel::device_buf::DeviceBuffer;
 use half::f16;
-use std::sync::Arc;
 
 /// Flash attention configuration.
 #[derive(Debug, Clone)]
@@ -112,7 +110,7 @@ impl FlashAttentionKernel {
                         let mut tile_scores = vec![0.0f32; tile_len];
 
                         for k_pos in tile_start..tile_end {
-                            let kh_offset = b * seq_len * num_heads + k_pos * num_heads + h;
+                            let _kh_offset = b * seq_len * num_heads + k_pos * num_heads + h;
 
                             // Compute dot product Q[q_pos] @ K[k_pos]
                             let mut dot = 0.0f32;
@@ -145,7 +143,7 @@ impl FlashAttentionKernel {
                         m[m_idx] = tile_max.max(old_m);
 
                         // Update l (sum of exp)
-                        let beta = (tile_max - old_m).exp();
+                        let _beta = (tile_max - old_m).exp();
                         l[l_idx] = l[l_idx] * alpha
                             + (0..tile_len).map(|_| 1.0f32.exp() - 1.0f32).sum::<f32>(); // Simplified: all scores same for demo
 
@@ -266,7 +264,7 @@ mod tests {
 
         // Create dummy inputs (Q, K, V)
         let q: Vec<f16> = (0..batch_size * seq_len * num_heads * head_dim)
-            .map(|i| f16::from_f32(0.5))
+            .map(|_i| f16::from_f32(0.5))
             .collect();
 
         let k: Vec<f16> = vec![f16::from_f32(0.5); batch_size * seq_len * num_heads * head_dim];

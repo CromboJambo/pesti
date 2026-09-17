@@ -787,7 +787,7 @@ fn extract_tensor_bytes(
     tensor: &GgufTensorInfo,
 ) -> Result<Vec<u8>, GgufConvertError> {
     let mut file = std::fs::File::open(gguf_path)?;
-    let offset = tensor.offset as u64;
+    let offset = tensor.offset;
     let size = tensor.stored_size().unwrap_or(0) as usize;
 
     file.seek(std::io::SeekFrom::Start(offset))?;

@@ -10,7 +10,6 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use crate::cuda_runtime::CudaRuntime;
 use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
 use cudarc::driver::safe::{CudaContext, CudaStream};
@@ -406,7 +405,7 @@ impl CudaGemmKernel {
         n: usize,
         k: usize,
     ) -> Result<(), GemmError> {
-        use cudarc::driver::sys;
+        
 
         // Kernel signature varies by architecture:
         // - WGMMA (sm_90a/sm_120): gemm_wgmma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
@@ -438,9 +437,9 @@ impl CudaGemmKernel {
         // - tcgen05: 128×128 tiles per block, 128 threads
         // - mma.sync: 16×8 tiles per block, 32 threads (1 warp)
         let (grid_x, grid_y, block_size) = match self.arch {
-            GemmArch::Wgmma => (((n + 127) / 128) as u32, ((m + 127) / 128) as u32, 128u32),
-            GemmArch::Tcgen05 => (((n + 127) / 128) as u32, ((m + 127) / 128) as u32, 128u32),
-            GemmArch::Mma => (((n + 7) / 8) as u32, ((m + 15) / 16) as u32, 32u32),
+            GemmArch::Wgmma => (n.div_ceil(128) as u32, m.div_ceil(128) as u32, 128u32),
+            GemmArch::Tcgen05 => (n.div_ceil(128) as u32, m.div_ceil(128) as u32, 128u32),
+            GemmArch::Mma => (n.div_ceil(8) as u32, m.div_ceil(16) as u32, 32u32),
         };
 
         let grid = (grid_x, grid_y, 1u32);

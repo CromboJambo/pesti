@@ -9,8 +9,6 @@ use crate::error::Result;
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
 #[cfg(feature = "cuda")]
-use crate::kernel::DeviceBuffer;
-#[cfg(feature = "cuda")]
 use crate::kernel::attention::{AttentionArch, AttentionConfig};
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::attention_stub::{AttentionArch, AttentionConfig};

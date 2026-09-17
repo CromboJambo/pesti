@@ -128,7 +128,7 @@ impl InferenceEngine {
                 Option<CudaGemmKernel>,
             ) = if let (Some(cuda_rt), Some(s), Some(arch)) = (&cuda_runtime, &stream, &arch) {
                 match CudaGemmKernelBuilder::new(
-                    arch.clone(),
+                    *arch,
                     cuda_rt.context().clone(),
                     s.clone(),
                     cuda_rt.device_info().clone(),
@@ -150,7 +150,7 @@ impl InferenceEngine {
             };
 
             // Initialize attention kernel using the GEMM kernel if available
-            let (attention, backend): (
+            let (attention, _backend): (
                 Box<dyn AttentionKernel + Send + Sync>,
                 Option<Arc<crate::kernel::memory::CudaMemoryBackend>>,
             ) = if is_available() {

@@ -77,6 +77,8 @@ pub use gguf_weight_loader::{GgufWeights, load_gguf_tensor, load_gguf_weights};
 pub use inference_engine::InferenceEngine;
 pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
 #[cfg(feature = "cuda")]
+pub use kernel::mistralrs_backend;
+#[cfg(feature = "cuda")]
 pub use kernel::{DeviceBuffer, HostTmaDescriptor, Kvcache};
 #[cfg(not(feature = "cuda"))]
 pub use kernel::{DeviceBuffer, kvcache_stub::Kvcache};
@@ -120,9 +122,4 @@ pub use llama::{
 pub use runtime::{ModelState, RunnerBackend, Runtime, RuntimeConfig};
 
 // ── Mistral.rs backend (optional, enabled via `mistralrs` feature) ──
-#[cfg(feature = "mistralrs")]
-pub mod mistralrs_backend {
-    pub use crate::kernel::mistralrs_backend::{
-        MistralRsAttentionKernel, MistralRsBackend, MistralRsGemmKernel,
-    };
-}
+pub use kernel::mistralrs_backend;

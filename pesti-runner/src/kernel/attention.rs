@@ -11,13 +11,15 @@
 //!
 use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CpuGemmKernel, CudaGemmKernel, GemmArch, GemmKernel};
-use crate::kernel::softmax::{SoftmaxKernel, SoftmaxKernelBuilder};
+use crate::kernel::softmax::SoftmaxKernel;
 use half::f16;
 
 /// Attention architecture selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AttentionArch {
     /// CPU-only attention (reference implementation).
+    #[default]
     Cpu,
     /// WGMMA-based attention for Blackwell tensor cores.
     Wgmma,
@@ -35,11 +37,6 @@ impl AttentionArch {
     }
 }
 
-impl Default for AttentionArch {
-    fn default() -> Self {
-        Self::Cpu
-    }
-}
 
 // Serialize/Deserialize support
 impl serde::Serialize for AttentionArch {
@@ -220,7 +217,7 @@ impl AttentionKernel for CpuAttentionKernel {
                 q_h, k_h, &mut scores[h * query_seq_len * n..], 
                 query_seq_len, n, head_dim,
                 1.0, 0.0,
-            ).map_err(|e| AttentionError::Gemm(e))?;
+            ).map_err(AttentionError::Gemm)?;
 
             // Apply scaling factor after GEMM
             let scores_h = &mut scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
@@ -269,7 +266,7 @@ impl AttentionKernel for CpuAttentionKernel {
                 s_h, v_h, &mut output[h * query_seq_len * head_dim..], 
                 query_seq_len, head_dim, n,
                 1.0, 0.0,
-            ).map_err(|e| AttentionError::Gemm(e))?;
+            ).map_err(AttentionError::Gemm)?;
         }
 
         // Convert back to device buffer
@@ -452,7 +449,7 @@ impl GemmBasedAttentionKernel {
         let num_heads = config.num_heads;
         let head_dim = config.head_dim;
         let n = key_cache.seq_len();
-        let query_seq_len = (query.len() / (num_heads * head_dim)) as usize;
+        let query_seq_len = query.len() / (num_heads * head_dim);
 
         println!(
             "GEMM attention: Q[{}, {}] x K[{}, {}] -> scores[{}, {}]",
@@ -480,7 +477,7 @@ impl GemmBasedAttentionKernel {
                 k_n, // n = cache_seq_len (K is transposed)
                 q_k, // k = head_dim
             )
-            .map_err(|e| AttentionError::Gemm(e))?;
+            .map_err(AttentionError::Gemm)?;
 
         // Synchronize stream to ensure GEMM completes (event-based: see
         // cuda_shim::stream_synchronize for why cuStreamSynchronize alone
@@ -491,7 +488,7 @@ impl GemmBasedAttentionKernel {
         // Step 2: Read back scores and apply softmax on CPU
         let mut scores_host = scores_buffer
             .to_host_vec(&*self.backend)
-            .map_err(|e| AttentionError::Transfer(e))?;
+            .map_err(AttentionError::Transfer)?;
 
         // Apply scaling factor (1/sqrt(head_dim))
         for score in scores_host.iter_mut() {
@@ -527,7 +524,7 @@ impl GemmBasedAttentionKernel {
                 v_n, // n = head_dim
                 s_k, // k = cache_seq_len (V is transposed)
             )
-            .map_err(|e| AttentionError::Gemm(e))?;
+            .map_err(AttentionError::Gemm)?;
 
         // Synchronize before returning (event-based: see
         // cuda_shim::stream_synchronize for why cuStreamSynchronize alone

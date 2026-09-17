@@ -27,8 +27,8 @@ fn reference_causal_attention(
                 // Compute scores over k positions (causal: only k_pos <= q_pos)
                 let mut scores = vec![f32::NEG_INFINITY; seq_k]; // Initialize with -inf for future positions
                 for k_pos in 0..=q_pos {
-                    let q_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
-                    let k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
+                    let _q_idx = q_pos * num_heads * head_dim + head * head_dim + dim_idx;
+                    let _k_idx = k_pos * num_heads * head_dim + head * head_dim + dim_idx;
 
                     // Dot product over head_dim
                     for d in 0..head_dim {
@@ -108,7 +108,7 @@ fn launch_fused_attention_sync(
         &mut k_v as *mut u64 as *mut std::ffi::c_void,
         &mut v_v as *mut u64 as *mut std::ffi::c_void,
         &mut out_v as *mut u64 as *mut std::ffi::c_void,
-        &mut (scale as f32) as *mut f32 as *mut std::ffi::c_void,
+        &mut { scale } as *mut f32 as *mut std::ffi::c_void,
         &mut seq_q_v as *mut u32 as *mut std::ffi::c_void,
         &mut seq_k_v as *mut u32 as *mut std::ffi::c_void,
         &mut num_heads_v as *mut u32 as *mut std::ffi::c_void,
@@ -177,7 +177,7 @@ fn test_causal_attention() {
 
     // Load PTX and launch
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
-    let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
+    let module = CudaModule::load_from_ptx(cuda_rt.context(), ptx_src).unwrap();
 
     launch_fused_attention_sync(
         &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,
@@ -269,7 +269,7 @@ fn test_causal_vs_noncausal() {
     }
 
     let ptx_src = include_str!("../src/kernel/ptx/fused_attention_full_kernel.ptx");
-    let module = CudaModule::load_from_ptx(&cuda_rt.context(), &ptx_src).unwrap();
+    let module = CudaModule::load_from_ptx(cuda_rt.context(), ptx_src).unwrap();
 
     launch_fused_attention_sync(
         &cuda_rt, &module, q_ptr, k_ptr, v_ptr, out_ptr, seq_q, seq_k, num_heads, head_dim,

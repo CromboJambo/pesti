@@ -21,18 +21,15 @@ use pesti_gguf::types::{GgufHeader, GgufKvValue};
 
 /// Tokenizer backend selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TokenizerBackend {
     /// Build the real tokenizer from GGUF-embedded arrays (default)
+    #[default]
     MistralRs,
     /// Use pure Rust qwen2-bpe implementation
     Qwen2Bpe,
 }
 
-impl Default for TokenizerBackend {
-    fn default() -> Self {
-        TokenizerBackend::MistralRs
-    }
-}
 
 #[cfg(feature = "rust-tokenizer")]
 use qwen2_bpe::Qwen2Tokenizer as RustTokenizer;

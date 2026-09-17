@@ -3,29 +3,23 @@
 //! **Layout**: Row-major `[seq_q, num_heads, head_dim]` for Q/K/V tensors (matches llama.cpp).
 //! **Algorithm**: Single-kernel softmax + fused multiply-add (eliminates H2D intermediate transfers).
 
-use crate::kernel::device_buf::DeviceBuffer;
-use crate::kernel::kvcache::Kvcache;
 use cudarc::driver::{
     safe::{CudaContext, CudaStream},
     sys,
 };
-use half::f16;
 use std::sync::Arc;
 
 /// Fused attention architecture (consumer Blackwell RTX 50-series uses mma.sync).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum FusedAttentionArch {
     /// mma.sync (sm_80..sm_120) - consumer RTX 40/50 series
+    #[default]
     MmaSync,
     /// tcgen05 (sm_100a) - datacenter B200 only
     Tcgen05,
 }
 
-impl Default for FusedAttentionArch {
-    fn default() -> Self {
-        Self::MmaSync // Consumer GPUs have better support
-    }
-}
 
 /// Configuration for fused attention kernel.
 #[derive(Debug)]
@@ -108,7 +102,7 @@ impl FusedAttentionKernel {
         rope_base: f32,
         max_pos: usize,
     ) -> Result<(), AttentionError> {
-        use cudarc::driver::sys;
+        
 
         // Launch kernel 1: fused_attention_kernel (RoPE + Q @ K^T + causal mask)
         let mut scale_v: f32 = scale;
@@ -139,7 +133,7 @@ impl FusedAttentionKernel {
         ];
 
         // Launch kernel 1: fused_attention_kernel (RoPE + Q @ K^T + causal mask)
-        let grid_x = (seq_q + 127) / 128;
+        let grid_x = seq_q.div_ceil(128);
         let grid = (grid_x as u32, seq_k as u32, num_heads as u32);
         let block = (128u32, 1u32, 1u32);
         let smem_size = 0u32;

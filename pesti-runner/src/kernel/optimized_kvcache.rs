@@ -44,7 +44,7 @@ impl OptimizedKvcache {
         page_size: Option<usize>,
     ) -> Self {
         let page_size = page_size.unwrap_or(512); // Default 512 tokens per page
-        let num_pages = (max_seq + page_size - 1) / page_size;
+        let num_pages = max_seq.div_ceil(page_size);
 
         // Allocate FP16 buffers (50% smaller than F32)
         let k_total = num_kv_heads * head_dim * max_seq;

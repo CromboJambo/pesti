@@ -132,7 +132,7 @@ impl MemoryPool {
 
         // Pool exhausted, allocate new buffer (if under limit)
         {
-            let mut stats = self.stats.lock().unwrap();
+            let stats = self.stats.lock().unwrap();
             if stats.total_allocations < self.config.max_allocations {
                 drop(stats); // Release lock before allocation
 
@@ -207,7 +207,7 @@ impl Drop for MemoryPool {
     fn drop(&mut self) {
         // Free all buffers when pool is destroyed (only if CUDA is available)
         #[cfg(feature = "cuda")]
-        for (class_idx, pool) in self.pools.iter().enumerate() {
+        for pool in self.pools.iter() {
             if let Ok(mut pool) = pool.lock() {
                 while let Some(buffer) = pool.pop_front() {
                     let _ = unsafe { free_device_memory(buffer.ptr) };

@@ -4,9 +4,10 @@
 
 #[test]
 fn test_mistralrs_gemm_kernel_creation() {
-    use pesti_runner::kernel::{GemmArch, MistralRsBackend};
+    use pesti_runner::mistralrs_backend;
+    use pesti_runner::kernel::{GemmArch, GemmKernel};
 
-    let backend = MistralRsBackend::default();
+    let backend = mistralrs_backend::MistralRsBackend::default();
     println!("Default backend: {:?}", backend);
 
     // Try to create kernel - may fail if no GPU available, which is OK for this test
@@ -28,9 +29,10 @@ fn test_mistralrs_gemm_kernel_creation() {
 
 #[test]
 fn test_mistralrs_attention_kernel_creation() {
-    use pesti_runner::kernel::{AttentionArch, MistralRsBackend};
+    use pesti_runner::mistralrs_backend;
+    use pesti_runner::kernel::{AttentionArch, AttentionKernel};
 
-    let backend = MistralRsBackend::default();
+    let backend = mistralrs_backend::MistralRsBackend::default();
     // Use Wgmma variant which exists in the enum
     let kernel = backend.create_attention_kernel(AttentionArch::Wgmma);
     match kernel {
@@ -49,12 +51,12 @@ fn test_mistralrs_attention_kernel_creation() {
 
 #[test]
 fn test_mistralrs_backend_description() {
-    use pesti_runner::kernel::MistralRsBackend;
+    use pesti_runner::mistralrs_backend;
 
     let backends = [
-        MistralRsBackend::MistralRs,
-        MistralRsBackend::Cuda,
-        MistralRsBackend::Cpu,
+        mistralrs_backend::MistralRsBackend::MistralRs,
+        mistralrs_backend::MistralRsBackend::Cuda,
+        mistralrs_backend::MistralRsBackend::Cpu,
     ];
 
     for b in backends {
