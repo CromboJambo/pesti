@@ -278,12 +278,11 @@ impl Qwen2Tokenizer {
                         result.push_str("<|end_of_text|>");
                         continue;
                     }
-                    if let Some(pad_id) = special.pad_token_id {
-                        if token_id == pad_id {
+                    if let Some(pad_id) = special.pad_token_id
+                        && token_id == pad_id {
                             result.push_str("<|pad|>");
                             continue;
                         }
-                    }
                 }
 
                 // Fallback to character representation

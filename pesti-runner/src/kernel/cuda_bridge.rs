@@ -24,7 +24,7 @@ impl CudaBridge {
     /// Create a new CUDA bridge with cuBLAS handle.
     pub fn new() -> Result<Self, String> {
         #[cfg(feature = "cuda")]
-        unsafe {
+        {
             let ctx = CudaContext::new(0).map_err(|e| format!("CUDA init failed: {:?}", e))?;
             let stream = ctx.default_stream();
             let blas = Arc::new(
@@ -48,7 +48,7 @@ impl CudaBridge {
         k: usize,
     ) -> Result<Vec<f32>, String> {
         #[cfg(feature = "cuda")]
-        unsafe {
+        {
             use cudarc::cublas::sys;
 
             let stream = &self.stream;

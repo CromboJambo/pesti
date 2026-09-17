@@ -246,7 +246,7 @@ mod tests {
             extract: args.extract.clone(),
             json: false,
         };
-        assert_eq!(cloned.tensors_only, true);
+        assert!(cloned.tensors_only);
         assert_eq!(cloned.extract, Some("tensor1".to_string()));
     }
 
