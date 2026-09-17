@@ -122,4 +122,3 @@ pub use llama::{
 pub use runtime::{ModelState, RunnerBackend, Runtime, RuntimeConfig};
 
 // ── Mistral.rs backend (optional, enabled via `mistralrs` feature) ──
-pub use kernel::mistralrs_backend;
