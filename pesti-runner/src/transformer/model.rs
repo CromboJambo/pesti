@@ -1741,10 +1741,16 @@ impl LlamaModel {
         )
     }
 
-    /// Set a Q4_K quantized KV cache for compressed storage.
+    /// Set Q4_K quantized KV cache (enables compressed KV storage).
     #[cfg(feature = "cuda")]
-    pub fn set_q4k_kvcache(&mut self, cache: Q4KVCache) {
+    pub fn set_q4k_kvcache(&mut self, cache: Arc<Q4KVCache>) {
         self.q4k_kvcache = Some(cache);
+    }
+
+    /// Get the Q4_K KV cache if enabled.
+    #[cfg(feature = "cuda")]
+    pub fn q4k_kvcache(&self) -> Option<&Arc<Q4KVCache>> {
+        self.q4k_kvcache.as_ref()
     }
 
     /// Sample a token from logits using the configured sampling strategy.

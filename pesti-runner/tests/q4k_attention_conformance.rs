@@ -5,10 +5,8 @@
 
 #[cfg(feature = "cuda")]
 mod q4k_conformance {
-    use pesti_runner::kernel::{
-        FusedDecodeAttentionConfig, FusedDecodeAttentionKernel,
-        FusedDecodeAttentionQ4KConfig, FusedDecodeAttentionQ4KKernel,
-    };
+    use pesti_runner::kernel::fused_decode_attention::{FusedDecodeAttentionConfig, FusedDecodeAttentionKernel};
+    use pesti_runner::kernel::fused_decode_attention_q4k::{FusedDecodeAttentionQ4KConfig, FusedDecodeAttentionQ4KKernel};
 
     /// FP32 reference: compute attention with full precision KV cache.
     fn fp32_reference_attention(
@@ -85,9 +83,21 @@ mod q4k_conformance {
             .expect("failed to allocate output on device");
 
         // Copy data to device
-        pesti_runner::cuda_runtime::copy_host_to_device(q_dev, &q).expect("failed to copy q");
-        pesti_runner::cuda_runtime::copy_host_to_device(k_dev, &k_cache).expect("failed to copy k");
-        pesti_runner::cuda_runtime::copy_host_to_device(v_dev, &v_cache).expect("failed to copy v");
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            q_dev,
+            q.as_ptr() as *const u8,
+            tensor_size,
+        ).expect("failed to copy q");
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            k_dev,
+            k_cache.as_ptr() as *const u8,
+            seq_len * head_dim * 4,
+        ).expect("failed to copy k");
+        pesti_runner::cuda_runtime::copy_host_to_device(
+            v_dev,
+            v_cache.as_ptr() as *const u8,
+            seq_len * head_dim * 4,
+        ).expect("failed to copy v");
 
         // Run FP32 fused attention kernel
         let fp32_kernel = FusedDecodeAttentionKernel::load(
@@ -100,8 +110,11 @@ mod q4k_conformance {
 
         // Copy result back and compare with reference
         let mut fp32_gpu_output = vec![0.0f32; head_dim];
-        pesti_runner::cuda_runtime::copy_device_to_host(out_dev, &mut fp32_gpu_output)
-            .expect("failed to copy output from device");
+        pesti_runner::cuda_runtime::copy_device_to_host(
+            fp32_gpu_output.as_mut_ptr() as *mut u8,
+            out_dev,
+            tensor_size,
+        ).expect("failed to copy output from device");
 
         let max_diff = fp32_output.iter().zip(&fp32_gpu_output)
             .map(|(a, b)| (a - b).abs())
