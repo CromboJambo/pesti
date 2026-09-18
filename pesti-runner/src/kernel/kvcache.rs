@@ -341,12 +341,13 @@ impl Kvcache {
         let mut new_buf = DeviceBuffer::zeros(new_total);
 
         if let Some(src) = self.buffer.as_slice()
-            && let Some(dst) = new_buf.as_mut_slice() {
-                let copy_len = self.total_elements();
-                if copy_len <= dst.len() && copy_len <= src.len() {
-                    dst[..copy_len].copy_from_slice(&src[..copy_len]);
-                }
+            && let Some(dst) = new_buf.as_mut_slice()
+        {
+            let copy_len = self.total_elements();
+            if copy_len <= dst.len() && copy_len <= src.len() {
+                dst[..copy_len].copy_from_slice(&src[..copy_len]);
             }
+        }
 
         self.buffer = new_buf;
         self.max_seq = new_max_seq;

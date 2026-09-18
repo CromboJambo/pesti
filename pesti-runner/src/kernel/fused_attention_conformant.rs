@@ -10,8 +10,7 @@ use cudarc::driver::{
 use std::sync::Arc;
 
 /// Fused attention architecture (consumer Blackwell RTX 50-series uses mma.sync).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FusedAttentionArch {
     /// mma.sync (sm_80..sm_120) - consumer RTX 40/50 series
     #[default]
@@ -19,7 +18,6 @@ pub enum FusedAttentionArch {
     /// tcgen05 (sm_100a) - datacenter B200 only
     Tcgen05,
 }
-
 
 /// Configuration for fused attention kernel.
 #[derive(Debug)]
@@ -102,8 +100,6 @@ impl FusedAttentionKernel {
         rope_base: f32,
         max_pos: usize,
     ) -> Result<(), AttentionError> {
-        
-
         // Launch kernel 1: fused_attention_kernel (RoPE + Q @ K^T + causal mask)
         let mut scale_v: f32 = scale;
         let mut q_v: u64 = q_ptr;

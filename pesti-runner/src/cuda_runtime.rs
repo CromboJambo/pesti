@@ -237,37 +237,38 @@ pub fn enumerate_devices() -> Result<Vec<CudaDeviceInfo>, CudaError> {
     {
         if let Ok(nvml) = nvml_wrapper::Nvml::init()
             && let Ok(device_count) = nvml.device_count()
-                && device_count > 0 {
-                    let mut devices = Vec::with_capacity(device_count as usize);
+            && device_count > 0
+        {
+            let mut devices = Vec::with_capacity(device_count as usize);
 
-                    for ordinal in 0..device_count as usize {
-                        if let Ok(device) = nvml.device_by_index(ordinal as u32) {
-                            // Get name
-                            if let Ok(name) = device.name() {
-                                // Get memory info
-                                if let Ok(mem_info) = device.memory_info() {
-                                    let total_memory = mem_info.total;
-                                    let free_memory = mem_info.free;
+            for ordinal in 0..device_count as usize {
+                if let Ok(device) = nvml.device_by_index(ordinal as u32) {
+                    // Get name
+                    if let Ok(name) = device.name() {
+                        // Get memory info
+                        if let Ok(mem_info) = device.memory_info() {
+                            let total_memory = mem_info.total;
+                            let free_memory = mem_info.free;
 
-                                    // Estimate compute capability from name
-                                    let cc = estimate_compute_capability_from_name(&name);
+                            // Estimate compute capability from name
+                            let cc = estimate_compute_capability_from_name(&name);
 
-                                    devices.push(CudaDeviceInfo {
-                                        ordinal,
-                                        name: name.to_string(),
-                                        compute_capability: cc,
-                                        total_memory,
-                                        free_memory,
-                                    });
-                                }
-                            }
+                            devices.push(CudaDeviceInfo {
+                                ordinal,
+                                name: name.to_string(),
+                                compute_capability: cc,
+                                total_memory,
+                                free_memory,
+                            });
                         }
                     }
-
-                    if !devices.is_empty() {
-                        return Ok(devices);
-                    }
                 }
+            }
+
+            if !devices.is_empty() {
+                return Ok(devices);
+            }
+        }
     }
 
     // Fallback to cudarc context API
@@ -348,9 +349,10 @@ pub fn is_available() -> bool {
     {
         if let Ok(nvml) = nvml_wrapper::Nvml::init()
             && let Ok(count) = nvml.device_count()
-                && count > 0 {
-                    return true;
-                }
+            && count > 0
+        {
+            return true;
+        }
     }
 
     // Fallback to cudarc
@@ -438,5 +440,3 @@ pub fn copy_device_to_host(
         Ok(())
     }
 }
-
-

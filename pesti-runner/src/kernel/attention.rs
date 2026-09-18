@@ -15,8 +15,7 @@ use crate::kernel::softmax::SoftmaxKernel;
 use half::f16;
 
 /// Attention architecture selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AttentionArch {
     /// CPU-only attention (reference implementation).
     #[default]
@@ -36,7 +35,6 @@ impl AttentionArch {
         }
     }
 }
-
 
 // Serialize/Deserialize support
 impl serde::Serialize for AttentionArch {
@@ -214,10 +212,16 @@ impl AttentionKernel for CpuAttentionKernel {
 
             // Transpose K_h for efficient GEMM: scores = Q @ K^T
             gemm.gemm_f32_t(
-                q_h, k_h, &mut scores[h * query_seq_len * n..], 
-                query_seq_len, n, head_dim,
-                1.0, 0.0,
-            ).map_err(AttentionError::Gemm)?;
+                q_h,
+                k_h,
+                &mut scores[h * query_seq_len * n..],
+                query_seq_len,
+                n,
+                head_dim,
+                1.0,
+                0.0,
+            )
+            .map_err(AttentionError::Gemm)?;
 
             // Apply scaling factor after GEMM
             let scores_h = &mut scores[h * query_seq_len * n..(h + 1) * query_seq_len * n];
@@ -234,7 +238,10 @@ impl AttentionKernel for CpuAttentionKernel {
                 let softmax_row = &scores[start..start + n];
 
                 // Logsumexp trick: find max first for numerical stability
-                let max_val = softmax_row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let max_val = softmax_row
+                    .iter()
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max);
 
                 // Compute exp(x - max) and accumulate sum in one pass
                 let mut sum = 0.0f32;
@@ -263,10 +270,16 @@ impl AttentionKernel for CpuAttentionKernel {
             let v_h = &v_host[h * n * head_dim..(h + 1) * n * head_dim];
 
             gemm.gemm_f32(
-                s_h, v_h, &mut output[h * query_seq_len * head_dim..], 
-                query_seq_len, head_dim, n,
-                1.0, 0.0,
-            ).map_err(AttentionError::Gemm)?;
+                s_h,
+                v_h,
+                &mut output[h * query_seq_len * head_dim..],
+                query_seq_len,
+                head_dim,
+                n,
+                1.0,
+                0.0,
+            )
+            .map_err(AttentionError::Gemm)?;
         }
 
         // Convert back to device buffer
@@ -545,7 +558,10 @@ impl GemmBasedAttentionKernel {
             let softmax_row = &scores[start..start + seq_len];
 
             // Logsumexp trick: find max first for numerical stability
-            let max_val = softmax_row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let max_val = softmax_row
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
 
             // Compute exp(x - max) and accumulate sum in one pass
             let mut sum = 0.0f32;

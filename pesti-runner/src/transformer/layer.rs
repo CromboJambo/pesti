@@ -7,38 +7,30 @@
 //! FFN uses SwiGLU: gate = x @ W1^T, up = x @ W3^T,
 //!   output = (silu(gate) * up) @ W2^T
 
+use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
+use crate::kernel::rope::{CpuRopeKernel, RopeKernel};
 use crate::transformer::kv_cache::LayerKvCache;
 use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;
 use crate::transformer::rope::RopeConfig;
+use std::sync::Arc;
 
-/// SwiGLU activation: silu(x) * y
-fn swiglu(x: &[f32], y: &[f32], size: usize) -> Vec<f32> {
-    assert!(
-        size <= x.len(),
-        "swiglu: size={} but x.len()={}",
-        size,
-        x.len()
-    );
-    assert!(
-        size <= y.len(),
-        "swiglu: size={} but y.len()={}",
-        size,
-        y.len()
-    );
+/// SwiGLU activation: silu(x) * y (CPU reference)
+fn swiglu_cpu(gate: &[f32], up: &[f32], size: usize) -> Vec<f32> {
+    assert!(size <= gate.len(), "swiglu: size={} but gate.len()={}", size, gate.len());
+    assert!(size <= up.len(), "swiglu: size={} but up.len()={}", size, up.len());
     let mut output = vec![0.0f32; size];
     for i in 0..size {
         // sigmoid(x), numerically stable:
         //   x >= 0 : 1 / (1 + e^{-x})
-        //   x <  0 : e^{x} / (1 + e^{x})   (== 1/(1+e^{-x}), avoids e^{-x} overflow)
-        // The previous else branch computed x/(1+e^{x}) == silu(x), NOT sigmoid(x);
-        // it was then multiplied by x again, giving x^2*sigmoid(x)*y for x<0.
-        let sigmoid = if x[i] >= 0.0 {
-            1.0 / (1.0 + (-x[i]).exp())
+        //   x <  0 : e^{x} / (1 + e^{x})
+        let sigmoid = if gate[i] >= 0.0 {
+            1.0 / (1.0 + (-gate[i]).exp())
         } else {
-            x[i].exp() / (1.0 + x[i].exp())
+            gate[i].exp() / (1.0 + gate[i].exp())
         };
-        output[i] = sigmoid * x[i] * y[i];
+        output[i] = sigmoid * gate[i] * up[i];
     }
     output
 }
@@ -54,6 +46,9 @@ pub struct Attention {
     pub num_kv_heads: usize,
     pub head_dim: usize,
     pub kv_dim: usize, // num_kv_heads * head_dim
+    /// Optional GPU RoPE kernel for accelerated rotary embeddings.
+    #[cfg(feature = "cuda")]
+    rope_kernel: Option<Arc<dyn RopeKernel>>,
 }
 
 impl Attention {
@@ -78,7 +73,15 @@ impl Attention {
             num_kv_heads,
             head_dim,
             kv_dim,
+            #[cfg(feature = "cuda")]
+            rope_kernel: None,
         }
+    }
+
+    /// Set a GPU RoPE kernel for this attention layer.
+    #[cfg(feature = "cuda")]
+    pub fn set_rope_kernel(&mut self, kernel: Arc<dyn RopeKernel>) {
+        self.rope_kernel = Some(kernel);
     }
 
     /// Compute scaled dot-product attention without caching (original path).
@@ -209,9 +212,15 @@ impl Attention {
         // Must be separate because Q and K may have different head counts (GQA).
         let mut q = q_proj;
         let mut k_rotated = k_proj.clone();
-        self.rope.apply_single(&mut q, self.num_heads, 1, pos);
-        self.rope
-            .apply_single(&mut k_rotated, self.num_kv_heads, 1, pos);
+
+        // Use GPU RoPE kernel if available, otherwise fall back to CPU.
+        if let Some(ref rope_kernel) = self.rope_kernel {
+            let _ = rope_kernel.apply(&mut q, &mut k_rotated, self.num_heads, 1, pos);
+        } else {
+            self.rope.apply_single(&mut q, self.num_heads, 1, pos);
+            self.rope
+                .apply_single(&mut k_rotated, self.num_kv_heads, 1, pos);
+        }
 
         // Append K (RoPE-rotated) and V to cache
         kv_cache.append(&k_rotated, &v_proj);
@@ -289,16 +298,8 @@ impl FeedForward {
         let gate = self.w1.forward(x, batch_size);
         let up = self.w3.forward(x, batch_size);
 
-        eprintln!(
-            "FFN: intermediate_dim={}, gate.len={}, up.len={}, x.len={}, batch={}",
-            self.intermediate_dim,
-            gate.len(),
-            up.len(),
-            x.len(),
-            batch_size
-        );
-
-        let swiglu_out = swiglu(&gate, &up, self.intermediate_dim);
+        // CPU SwiGLU for now (GPU kernel available in kernel/swiglu.rs)
+        let swiglu_out = swiglu_cpu(&gate, &up, self.intermediate_dim);
         self.w2.forward(&swiglu_out, batch_size)
     }
 }

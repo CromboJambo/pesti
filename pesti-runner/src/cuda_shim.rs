@@ -101,5 +101,3 @@ pub fn stream_synchronize(stream: &Arc<CudaStream>) -> Result<(), DriverError> {
 pub fn context_synchronize() -> Result<(), DriverError> {
     unsafe { cudarc::driver::sys::cuCtxSynchronize().result() }
 }
-
-

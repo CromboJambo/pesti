@@ -50,7 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (&results_tuple.2, 3usize),
     ]
     .iter()
-    
     {
         match result.0 {
             Ok(chat_result) => {

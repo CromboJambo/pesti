@@ -4,8 +4,8 @@
 
 #[test]
 fn test_mistralrs_gemm_kernel_creation() {
-    use pesti_runner::mistralrs_backend;
     use pesti_runner::kernel::{GemmArch, GemmKernel};
+    use pesti_runner::mistralrs_backend;
 
     let backend = mistralrs_backend::MistralRsBackend::default();
     println!("Default backend: {:?}", backend);
@@ -29,8 +29,8 @@ fn test_mistralrs_gemm_kernel_creation() {
 
 #[test]
 fn test_mistralrs_attention_kernel_creation() {
-    use pesti_runner::mistralrs_backend;
     use pesti_runner::kernel::{AttentionArch, AttentionKernel};
+    use pesti_runner::mistralrs_backend;
 
     let backend = mistralrs_backend::MistralRsBackend::default();
     // Use Wgmma variant which exists in the enum

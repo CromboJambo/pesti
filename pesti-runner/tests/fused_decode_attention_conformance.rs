@@ -5,11 +5,11 @@
 
 #[cfg(feature = "cuda")]
 mod fused_decode_attention_conformance {
-    use cudarc::driver::{
-        CuResult,
-        safe::{CudaContext, CudaStream},
+    use pesti_runner::cuda_runtime::{
+        allocate_device_memory, copy_device_to_host, copy_host_to_device, free_device_memory,
+        CudaRuntime,
     };
-    use std::sync::Arc;
+    use pesti_runner::kernel::fused_decode_attention::build_fused_decode_attention_kernel;
 
     // CPU reference: softmax(q @ K^T / sqrt(d)) @ V
     fn cpu_reference(
@@ -67,55 +67,38 @@ mod fused_decode_attention_conformance {
         // Compute CPU reference
         let cpu_result = cpu_reference(&q, &k_cache, &v_cache, seq_len, head_dim);
 
-        // GPU path: allocate device memory, launch kernel, copy back
-        let context = Arc::new(CudaContext::current().unwrap());
-        let stream = Arc::new(CudaStream::default_stream());
+        // GPU path: create runtime and stream
+        let rt = CudaRuntime::for_default_device().expect("failed to init CUDA runtime");
+        let stream = rt.new_stream().expect("failed to create stream");
 
-        // Allocate device buffers
-        let q_dev = unsafe {
-            let mut ptr = std::ptr::null_mut();
-            CuResult::cuMemAlloc(&mut ptr, (head_dim * 4) as u64).unwrap();
-            ptr
-        };
-        let k_dev = unsafe {
-            let mut ptr = std::ptr::null_mut();
-            CuResult::cuMemAlloc(&mut ptr, (seq_len * head_dim * 4) as u64).unwrap();
-            ptr
-        };
-        let v_dev = unsafe {
-            let mut ptr = std::ptr::null_mut();
-            CuResult::cuMemAlloc(&mut ptr, (seq_len * head_dim * 4) as u64).unwrap();
-            ptr
-        };
-        let out_dev = unsafe {
-            let mut ptr = std::ptr::null_mut();
-            CuResult::cuMemAlloc(&mut ptr, (head_dim * 4) as u64).unwrap();
-            ptr
-        };
+        // Allocate device memory using pesti's cuda_runtime helpers
+        let q_size = head_dim * 4;
+        let kv_size = seq_len * head_dim * 4;
 
-        // Copy data to device
-        unsafe {
-            CuResult::cuMemcpyHtoD(q_dev, q.as_ptr() as _, (head_dim * 4) as u64).unwrap();
-            CuResult::cuMemcpyHtoD(
-                k_dev,
-                k_cache.as_ptr() as _,
-                (seq_len * head_dim * 4) as u64,
-            )
-            .unwrap();
-            CuResult::cuMemcpyHtoD(
-                v_dev,
-                v_cache.as_ptr() as _,
-                (seq_len * head_dim * 4) as u64,
-            )
-            .unwrap();
-        }
+        let q_dev = allocate_device_memory(q_size).expect("failed to allocate q on device");
+        let k_dev = allocate_device_memory(kv_size).expect("failed to allocate k on device");
+        let v_dev = allocate_device_memory(kv_size).expect("failed to allocate v on device");
+        let out_dev = allocate_device_memory(q_size).expect("failed to allocate output on device");
+
+        // Copy data to device using pesti's wrappers (synchronous)
+        copy_host_to_device(
+            q_dev,
+            q.as_ptr() as *const u8,
+            q_size,
+        ).expect("H2D copy for q failed");
+        copy_host_to_device(
+            k_dev,
+            k_cache.as_ptr() as *const u8,
+            kv_size,
+        ).expect("H2D copy for k failed");
+        copy_host_to_device(
+            v_dev,
+            v_cache.as_ptr() as *const u8,
+            kv_size,
+        ).expect("H2D copy for v failed");
 
         // Build and launch fused attention kernel
-        let kernel =
-            pesti_runner::kernel::fused_decode_attention::build_fused_decode_attention_kernel(
-                context.clone(),
-                stream.clone(),
-            )
+        let kernel = build_fused_decode_attention_kernel(rt.context().clone(), stream.clone())
             .expect("failed to build fused decode attention kernel");
 
         kernel
@@ -131,31 +114,33 @@ mod fused_decode_attention_conformance {
             .expect("kernel launch failed");
 
         // Synchronize and copy result back
-        unsafe {
-            CuResult::cuStreamSynchronize(stream.as_raw()).unwrap();
-            let mut gpu_result = vec![0.0f32; head_dim];
-            CuResult::cuMemcpyDtoH(gpu_result.as_mut_ptr() as _, out_dev, (head_dim * 4) as u64)
-                .unwrap();
+        pesti_runner::cuda_shim::stream_synchronize(&stream).unwrap();
 
-            // Free device memory
-            CuResult::cuMemFree(q_dev).unwrap();
-            CuResult::cuMemFree(k_dev).unwrap();
-            CuResult::cuMemFree(v_dev).unwrap();
-            CuResult::cuMemFree(out_dev).unwrap();
+        let mut gpu_result = vec![0.0f32; head_dim];
+        copy_device_to_host(
+            gpu_result.as_mut_ptr() as *mut u8,
+            out_dev,
+            q_size,
+        ).expect("D2H copy failed");
 
-            // Compare results
-            let max_error = gpu_result
-                .iter()
-                .zip(cpu_result.iter())
-                .map(|(g, c)| (g - c).abs())
-                .fold(0.0f32, f32::max);
+        // Free device memory
+        free_device_memory(q_dev).unwrap();
+        free_device_memory(k_dev).unwrap();
+        free_device_memory(v_dev).unwrap();
+        free_device_memory(out_dev).unwrap();
 
-            println!("Max absolute error: {}", max_error);
-            assert!(
-                max_error < 1e-4,
-                "GPU/CPU mismatch: max error {} exceeds tolerance 1e-4",
-                max_error
-            );
-        }
+        // Compare results
+        let max_error = gpu_result
+            .iter()
+            .zip(cpu_result.iter())
+            .map(|(g, c)| (g - c).abs())
+            .fold(0.0f32, f32::max);
+
+        println!("Max absolute error: {}", max_error);
+        assert!(
+            max_error < 1e-4,
+            "GPU/CPU mismatch: max error {} exceeds tolerance 1e-4",
+            max_error
+        );
     }
 }

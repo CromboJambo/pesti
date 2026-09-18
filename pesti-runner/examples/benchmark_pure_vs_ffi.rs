@@ -4,18 +4,21 @@
 //!
 //! NOTE: Runs sequentially with explicit cleanup between runs to avoid OOM.
 
-use std::path::Path;
-use std::time::Instant;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use rand::SeedableRng;
+use std::path::Path;
+use std::time::Instant;
 
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 64;
 
 fn benchmark_pure_rust() -> f64 {
-    println!("
-=== Pure Rust Path (pesti-runner native) ===");
+    println!(
+        "
+=== Pure Rust Path (pesti-runner native) ==="
+    );
     let start = Instant::now();
 
     // Load model using pesti's own GGUF loader + transformer implementation
@@ -35,21 +38,25 @@ fn benchmark_pure_rust() -> f64 {
     };
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let generated = model.generate(&input_ids, NUM_TOKENS, &sampling, &mut rng, &[]).unwrap();
+    let generated = model
+        .generate(&input_ids, NUM_TOKENS, &sampling, &mut rng, &[])
+        .unwrap();
     let elapsed = start.elapsed().as_secs_f64();
 
     println!("Generated {} tokens in {:.3}s", generated.len(), elapsed);
     let tok_per_sec = generated.len() as f64 / elapsed;
     println!("Throughput: {:.2} tok/s (pure Rust)", tok_per_sec);
-    
+
     // Drop model to free GPU memory before FFI run
     drop(model);
     tok_per_sec
 }
 
 fn benchmark_ffi() -> f64 {
-    println!("
-=== FFI Path (llama.cpp via LlamaRunner) ===");
+    println!(
+        "
+=== FFI Path (llama.cpp via LlamaRunner) ==="
+    );
     let start = Instant::now();
 
     // Use pesti-runner's llama.cpp wrapper (FFI path)
@@ -59,13 +66,18 @@ fn benchmark_ffi() -> f64 {
         .unwrap();
 
     // Generate tokens (FFI path) - use default sampling config for comparison
-    let result = runner.generate(PROMPT, &pesti_runner::llama::SamplingConfig::default()).unwrap();
+    let result = runner
+        .generate(PROMPT, &pesti_runner::llama::SamplingConfig::default())
+        .unwrap();
     let elapsed = start.elapsed().as_secs_f64();
 
-    println!("Generated {} tokens in {:.3}s", result.generated_tokens, elapsed);
+    println!(
+        "Generated {} tokens in {:.3}s",
+        result.generated_tokens, elapsed
+    );
     let tok_per_sec = result.generated_tokens as f64 / elapsed;
     println!("Throughput: {:.2} tok/s (FFI)", tok_per_sec);
-    
+
     // Drop runner to free GPU memory
     drop(runner);
     tok_per_sec
@@ -82,8 +94,10 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_secs(1)); // Let GPU free up
     let ffi_tps = benchmark_ffi();
 
-    println!("
-=== RESULTS ===");
+    println!(
+        "
+=== RESULTS ==="
+    );
     println!("Pure Rust (pesti-runner): {:.2} tok/s", pure_rust_tps);
     println!("FFI (llama.cpp wrapper):  {:.2} tok/s", ffi_tps);
     println!("Ratio: {:.3}x", ffi_tps / pure_rust_tps);

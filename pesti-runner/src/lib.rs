@@ -75,9 +75,9 @@ pub use error::{Result, RunnerError};
 pub use error_stub::{Result, RunnerError};
 pub use gguf_weight_loader::{GgufWeights, load_gguf_tensor, load_gguf_weights};
 pub use inference_engine::InferenceEngine;
-pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use kernel::mistralrs_backend;
+pub use kernel::{AttentionKernel, CpuAttentionKernel, GemmBuilder, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use kernel::{DeviceBuffer, HostTmaDescriptor, Kvcache};
 #[cfg(not(feature = "cuda"))]

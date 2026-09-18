@@ -66,11 +66,13 @@ impl Linear {
 
         // Transpose weights: W is [out, in] row-major; GEMM needs B as [k, n].
         // Convert to f16 for GPU GEMM efficiency.
-        let w_t: Vec<f16> = (0..k)
-            .flat_map(|i| {
-                (0..n).map(move |j| f16::from_f32(self.weight[j * k + i]))
-            })
-            .collect();
+        let w = &self.weight;
+        let mut w_t = Vec::with_capacity(k * n);
+        for i in 0..k {
+            for j in 0..n {
+                w_t.push(f16::from_f32(w[j * k + i]));
+            }
+        }
 
         self.gpu_weight = Some(Arc::new(DeviceBuffer::from_host(w_t)));
     }

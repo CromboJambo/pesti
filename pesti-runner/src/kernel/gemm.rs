@@ -405,8 +405,6 @@ impl CudaGemmKernel {
         n: usize,
         k: usize,
     ) -> Result<(), GemmError> {
-        
-
         // Kernel signature varies by architecture:
         // - WGMMA (sm_90a/sm_120): gemm_wgmma_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)
         // - tcgen05: gemm_tcgen05_kernel(f32 alpha, u64 A, u64 B, f32 beta, u64 C, u32 m, u32 n, u32 k)

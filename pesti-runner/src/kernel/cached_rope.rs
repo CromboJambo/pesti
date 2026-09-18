@@ -2,7 +2,6 @@
 //!
 //! Pre-computes and caches sin/cos frequencies across layers to avoid redundant computations.
 
-
 use half::f16;
 
 /// Cached RoPE frequencies structure (simplified placeholder)

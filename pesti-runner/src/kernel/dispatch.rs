@@ -981,6 +981,9 @@ pub struct AttentionDispatch {
     /// Optional fused attention kernel for GPU acceleration (set after construction).
     #[cfg(feature = "cuda")]
     pub fused_kernel: Option<crate::kernel::fused_attention_conformant::FusedAttentionKernel>,
+    /// Phase 1 fused decode attention kernel (single-query softmax + weighted sum).
+    #[cfg(feature = "cuda")]
+    pub fused_decode_kernel: Option<crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel>,
 }
 
 impl AttentionDispatch {
@@ -998,6 +1001,8 @@ impl AttentionDispatch {
         let kv_dim = num_kv_heads * head_dim;
         #[cfg(feature = "cuda")]
         let fused_kernel = None; // Will be set via set_fused_kernel() after CUDA init
+        #[cfg(feature = "cuda")]
+        let fused_decode_kernel = None; // Will be set via set_fused_decode_kernel() after CUDA init
 
         Self {
             wq,
@@ -1011,6 +1016,8 @@ impl AttentionDispatch {
             rope_base,
             #[cfg(feature = "cuda")]
             fused_kernel,
+            #[cfg(feature = "cuda")]
+            fused_decode_kernel,
         }
     }
 
@@ -1023,10 +1030,25 @@ impl AttentionDispatch {
         self.fused_kernel = Some(kernel);
     }
 
+    /// Set the Phase 1 fused decode attention kernel (single-query softmax + weighted sum).
+    #[cfg(feature = "cuda")]
+    pub fn set_fused_decode_kernel(
+        &mut self,
+        kernel: crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel,
+    ) {
+        self.fused_decode_kernel = Some(kernel);
+    }
+
     /// Check if fused attention kernel is available.
     #[cfg(feature = "cuda")]
     fn has_fused_kernel(&self) -> bool {
         self.fused_kernel.is_some()
+    }
+
+    /// Check if Phase 1 fused decode attention kernel is available.
+    #[cfg(feature = "cuda")]
+    fn has_fused_decode_kernel(&self) -> bool {
+        self.fused_decode_kernel.is_some()
     }
 
     /// Check if fused attention kernel is available (CPU builds always false).
@@ -1488,6 +1510,19 @@ impl AttentionDispatch {
             );
         }
 
+        // Phase 1: Use fused decode attention kernel for single-token decode.
+        #[cfg(feature = "cuda")]
+        if self.has_fused_decode_kernel() && batch_size == 1 && seq_len == 1 {
+            return self.forward_gpu_decode_fused(
+                ctx,
+                &q_rope_t,
+                key_cache,
+                value_cache,
+                start_pos,
+                scale,
+            );
+        }
+
         // Fall back to manual per-head attention for small sequences or when fused kernel unavailable.
         self.forward_gpu_manual(
             ctx,
@@ -1647,6 +1682,124 @@ impl AttentionDispatch {
         }
 
         Ok(output)
+    }
+
+    /// Phase 1 fused decode attention: single-query (batch=1, seq=1) softmax + weighted sum.
+    /// Uses the optimized fused_decode_attention kernel that computes
+    /// softmax(q @ K^T / sqrt(d)) @ V in one kernel launch per query head.
+    #[cfg(feature = "cuda")]
+    fn forward_gpu_decode_fused(
+        &self,
+        ctx: &DispatchContext,
+        q_rope_t: &Tensor,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
+        start_pos: usize,
+        scale: f32,
+    ) -> Result<Vec<f32>, DispatchError> {
+        let embed_dim = self.num_heads * self.head_dim;
+        let cache_len = start_pos + 1; // decode: one new token
+
+        // Extract Q values from RoPE'd tensor [1, 1, num_heads, head_dim]
+        let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
+            .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
+
+        // Process each query head independently (GQA: multiple Q heads per KV head)
+        let mut attn_concat = Vec::with_capacity(self.num_heads);
+        for q_h in 0..self.num_heads {
+            let kv_h = q_h / (self.num_heads / self.num_kv_heads);
+
+            // Extract Q row for this head from RoPE'd tensor [head_dim]
+            let q_offset = q_h * self.head_dim;
+            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
+
+            // Build expanded K/V tensors for this KV head group: [cache_len, head_dim] f16
+            let mut k_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
+            let mut v_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
+
+            for j in 0..cache_len {
+                let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                k_expanded.extend_from_slice(&k_slice);
+                v_expanded.extend_from_slice(&v_slice);
+            }
+
+            // Allocate device buffers for this head
+            let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
+            let k_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+            let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+            let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
+
+            let q_handle = ctx.memory.alloc(q_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
+            let k_handle = ctx.memory.alloc(k_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc k: {e}")))?;
+            let v_handle = ctx.memory.alloc(v_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
+            let out_handle = ctx.memory.alloc(out_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
+
+            // Transfer Q (f32 -> f16 on device), K, V to device
+            let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
+            let q_bytes_raw: &[u8] = unsafe {
+                std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes)
+            };
+            ctx.memory.h2d(q_bytes_raw, q_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
+
+            let k_bytes_raw: &[u8] = unsafe {
+                std::slice::from_raw_parts(k_expanded.as_ptr() as *const u8, k_bytes)
+            };
+            ctx.memory.h2d(k_bytes_raw, k_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D k: {e}")))?;
+
+            let v_bytes_raw: &[u8] = unsafe {
+                std::slice::from_raw_parts(v_expanded.as_ptr() as *const u8, v_bytes)
+            };
+            ctx.memory.h2d(v_bytes_raw, v_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
+
+            // Launch fused decode attention kernel for this head
+            if let Some(ref kernel) = self.fused_decode_kernel {
+                kernel.launch(
+                    q_handle.as_ptr() as u64,
+                    k_handle.as_ptr() as u64,
+                    v_handle.as_ptr() as u64,
+                    scale,
+                    cache_len,
+                    self.head_dim,
+                    out_handle.as_ptr() as u64,
+                ).map_err(|e| DispatchError::Kernel(format!("fused decode kernel: {e}")))?;
+            }
+
+            // Synchronize and read back result for this head
+            ctx.memory.sync()
+                .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+
+            let mut out_f32 = vec![0.0f32; self.head_dim];
+            let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
+            ctx.memory.d2h(out_handle, unsafe {
+                std::slice::from_raw_parts_mut(out_ptr, out_bytes)
+            }).map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
+
+            // Free device buffers for this head
+            let _ = ctx.memory.free(q_handle);
+            let _ = ctx.memory.free(k_handle);
+            let _ = ctx.memory.free(v_handle);
+            let _ = ctx.memory.free(out_handle);
+
+            attn_concat.push(out_f32);
+        }
+
+        // Flatten all heads back to [num_heads * head_dim]
+        let mut flat_attn = Vec::with_capacity(embed_dim);
+        for row in attn_concat {
+            flat_attn.extend(row);
+        }
+
+        // Output projection
+        let wo_output = self.wo.forward(ctx, &flat_attn, 1)?;
+        Ok(wo_output)
     }
 
     /// Manual per-head attention fallback for small sequences or when fused kernel unavailable.

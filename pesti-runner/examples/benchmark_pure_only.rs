@@ -1,12 +1,13 @@
 //! Benchmark: pesti's pure Rust inference stack (standalone).
 //! Uses a small sequence length to fit in GPU memory.
 
-use std::path::Path;
-use std::time::Instant;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use rand::SeedableRng;
+use std::path::Path;
+use std::time::Instant;
 
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 32;
 
@@ -40,17 +41,22 @@ fn main() {
     };
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let generated = model.generate(&input_ids, NUM_TOKENS, &sampling, &mut rng, &[]).unwrap();
+    let generated = model
+        .generate(&input_ids, NUM_TOKENS, &sampling, &mut rng, &[])
+        .unwrap();
     let elapsed = start.elapsed().as_secs_f64();
 
     println!("Generated {} tokens in {:.3}s", generated.len(), elapsed);
     let tok_per_sec = generated.len() as f64 / elapsed;
     println!("Throughput: {:.2} tok/s (pure Rust)", tok_per_sec);
-    
+
     // Decode and print output
     let tokenizer = model.tokenizer.as_ref().expect("Tokenizer not loaded");
     let decoded = tokenizer.decode(&generated).unwrap();
-    println!("
+    println!(
+        "
 Generated text:
-{}", decoded);
+{}",
+        decoded
+    );
 }

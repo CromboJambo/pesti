@@ -4,11 +4,11 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-use std::sync::Arc;
 use crate::error::{Result, RunnerError};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Module;
 use half::f16;
+use std::sync::Arc;
 use tracing::warn;
 
 // Import InertiaManager for computational inertia support
@@ -73,7 +73,7 @@ impl InferenceEngine {
 
         #[cfg(feature = "cuda")]
         {
-            use crate::cuda_runtime::{is_available, CudaRuntime};
+            use crate::cuda_runtime::{CudaRuntime, is_available};
             use crate::kernel::{AttentionArch, CudaGemmKernelBuilder, GemmArch};
 
             // Initialize CUDA when the feature is on and a GPU is present.
@@ -245,6 +245,26 @@ impl InferenceEngine {
         #[cfg(not(feature = "cuda"))]
         {
             false
+        }
+    }
+
+    /// Get the GEMM kernel used by this engine (for propagation to model layers).
+    /// Returns None if using CPU fallback.
+    pub fn gemm_kernel(&self) -> Option<Arc<dyn crate::kernel::GemmKernel + Send + Sync>> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.gpu_gemm {
+                // The engine owns the kernel internally; expose it via a shared reference.
+                // We need to clone the internal Arc - but we don't store it as Arc, so
+                // we'll need to restructure slightly. For now, return None (CPU path).
+                None
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            None
         }
     }
 

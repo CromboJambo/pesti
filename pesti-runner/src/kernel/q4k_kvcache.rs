@@ -6,7 +6,7 @@
 //!
 //! Layout: Each Q4_K block stores 256 values using:
 //! - 2 bytes: scale factor (f16)
-//! - 2 bytes: min offset (f16) 
+//! - 2 bytes: min offset (f16)
 //! - 12 bytes: per-group scales/mins (packed 6-bit pairs)
 //! - 128 bytes: quantized data (nibbles, 2 values per byte)
 //! Total: 144 bytes per 256 f32-equivalent values
@@ -52,7 +52,14 @@ impl Q4KVCache {
     }
 
     /// Create from existing device buffer (for pre-allocated memory).
-    pub fn from_device(k_ptr: u64, v_ptr: u64, _k_bytes: usize, num_kv_heads: usize, head_dim: usize, max_seq: usize) -> Self {
+    pub fn from_device(
+        k_ptr: u64,
+        v_ptr: u64,
+        _k_bytes: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        max_seq: usize,
+    ) -> Self {
         let total_elems = num_kv_heads * head_dim * max_seq;
         let blocks_needed = total_elems.div_ceil(Q4K_BLOCK_ELEMS);
         let buffer_bytes = blocks_needed * Q4K_BLOCK_SIZE;
@@ -100,9 +107,17 @@ impl Q4KVCache {
     /// Write a quantized KV row at position `pos`.
     ///
     /// Expects pre-quantized Q4_K block data for K and V.
-    pub fn write_kv_at(&mut self, pos: usize, k_block: &[u8], v_block: &[u8]) -> Result<(), KvError> {
+    pub fn write_kv_at(
+        &mut self,
+        pos: usize,
+        k_block: &[u8],
+        v_block: &[u8],
+    ) -> Result<(), KvError> {
         if pos >= self.max_seq {
-            return Err(KvError::SeqLenExceeded { current: pos, max: self.max_seq });
+            return Err(KvError::SeqLenExceeded {
+                current: pos,
+                max: self.max_seq,
+            });
         }
 
         let row_bytes = self.num_kv_heads * self.head_dim;
@@ -172,30 +187,37 @@ mod tests {
     fn test_q4k_memory_savings() {
         // 8 KV heads, head_dim=64, max_seq=2048
         let cache = Q4KVCache::new(8, 64, 2048);
-        
+
         // FP16 would use: 8 * 64 * 2048 * 2 bytes (K+V) = 2,097,152 bytes
         let fp16_bytes = 8 * 64 * 2048 * 2;
-        
+
         // Q4_K should use significantly less (~4x reduction)
         let q4k_bytes = cache.memory_bytes();
-        assert!(q4k_bytes < fp16_bytes, "Q4_K cache should be smaller than FP16");
-        
+        assert!(
+            q4k_bytes < fp16_bytes,
+            "Q4_K cache should be smaller than FP16"
+        );
+
         // Expect ~75% savings (4:1 compression ratio)
         let savings = cache.memory_savings_percentage();
-        assert!(savings > 70.0, "Expected >70% memory savings, got {:.1}%", savings);
+        assert!(
+            savings > 70.0,
+            "Expected >70% memory savings, got {:.1}%",
+            savings
+        );
     }
 
     #[test]
     fn test_q4k_write_kv() {
         let mut cache = Q4KVCache::new(8, 64, 2048);
-        
+
         // Create dummy quantized block data (Q4_K block is 144 bytes)
         let k_block = vec![0u8; Q4K_BLOCK_SIZE];
         let v_block = vec![0u8; Q4K_BLOCK_SIZE];
-        
+
         cache.write_kv_at(0, &k_block, &v_block).unwrap();
         assert_eq!(cache.seq_len(), 1);
-        
+
         cache.write_kv_at(1, &k_block, &v_block).unwrap();
         assert_eq!(cache.seq_len(), 2);
     }

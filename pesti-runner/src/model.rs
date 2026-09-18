@@ -203,6 +203,8 @@ impl Model {
                 dispatch: None,
                 kv_caches: None,
                 cpu_kv_caches: None,
+                #[cfg(feature = "cuda")]
+                q4k_kvcache: None,
                 capture_per_layer: None,
                 #[cfg(feature = "cuda")]
                 dispatch_layers: None,

@@ -1,10 +1,10 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
 //! Mirrors the llama.cpp generate() flow using pesti-runner's transformer stack.
 
+use pesti_runner::transformer::{SamplingConfig, LlamaModel};
+use pesti_runner::gguf_weight_loader::load_gguf_weights;
 use std::path::Path;
 use std::time::Instant;
-use rand::SeedableRng;
-use pesti_runner::{load_gguf_weights, LlamaModel};
 
 fn main() {
     let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
@@ -26,38 +26,45 @@ fn main() {
         t_encode.elapsed().as_secs_f64() * 1000.0
     );
 
-    // Prefill: run full forward pass on prompt (like llama.cpp's context.decode(batch))
-    let t_prefill = Instant::now();
-    let mut hidden = model.embedding(&prompt_tokens[0]).expect("Embedding failed");
-    for layer in &mut model.layers {
-        hidden = layer.forward_with_cache(&hidden, &mut layer.cache, 0);
+    // Prefill: run each prompt token through the model at its position so
+    // the KV cache contains the full prompt context.
+    let mut logits: Vec<f32> = Vec::new();
+    for (i, &tok) in prompt_tokens.iter().enumerate() {
+        let hidden = model.embed(tok, i).expect("Embedding failed");
+        if model.dispatch.is_some() {
+            logits = model.forward_with_dispatch(&hidden, i).expect("Forward dispatch failed");
+        } else {
+            let hidden_out = model.forward_layers(&hidden, i).expect("Forward layers failed");
+            logits = model.apply_output_head(&hidden_out).expect("Apply output head failed");
+        }
     }
     println!(
         "Prefill done in {:.2}ms",
-        t_prefill.elapsed().as_secs_f64() * 1000.0
+        t_load.elapsed().as_secs_f64() * 1000.0
     );
 
-    // Decode loop: generate tokens one at a time (like llama.cpp's decode loop)
+    // Decode loop: generate tokens one at a time
     let mut generated = Vec::new();
     let total_decode_time = Instant::now();
     let max_tokens = 32;
+    let sampling_config = SamplingConfig {
+        temperature: 0.7,
+        top_k: 50,
+        top_p: 0.95,
+        seed: Some(42),
+    };
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
     for i in 0..max_tokens {
         let t_step = Instant::now();
 
-        // Get logits from hidden state (like llama.cpp's context.current_batch().next_token_logits())
-        let logits = model.logits(&hidden).expect("Logits failed");
-
         // Sample next token (greedy for benchmark)
-        let next_token = logits
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .unwrap()
-            .0 as u32;
+        let next_token = LlamaModel::argmax_from_logits(&logits);
 
-        // Check for EOS (like llama.cpp's model.is_eog_token())
-        let piece = tokenizer.decode(&[next_token]).expect("Failed to decode token");
+        // Check for EOS
+        let piece = tokenizer
+            .decode(&[next_token])
+            .expect("Failed to decode token");
         if piece == "< |endoftext|>" {
             println!("EOS reached at token {}", i + 1);
             break;
@@ -66,19 +73,15 @@ fn main() {
         generated.push(next_token);
 
         // Run single decode step: embed token, forward through layers
-        let t_forward = Instant::now();
-        let token_embed = model
-            .embedding(&next_token)
-            .expect("Token embed failed");
-        hidden = model.layers[0].forward_with_cache(
-            &token_embed,
-            &mut model.layers[0].cache,
-            i + prompt_tokens.len(),
-        );
-        for layer in &mut model.layers[1..] {
-            hidden = layer.forward_with_cache(&hidden, &mut layer.cache, i + prompt_tokens.len());
+        let hidden = model.embed(next_token, i + prompt_tokens.len()).expect("Token embed failed");
+        if model.dispatch.is_some() {
+            logits = model.forward_with_dispatch(&hidden, i + prompt_tokens.len())
+                .expect("Forward dispatch failed");
+        } else {
+            let hidden_out = model.forward_layers(&hidden, i + prompt_tokens.len())
+                .expect("Forward layers failed");
+            logits = model.apply_output_head(&hidden_out).expect("Apply output head failed");
         }
-        let _t_forward_elapsed = t_forward.elapsed().as_secs_f64();
 
         println!(
             "Token {} ({:?}) in {:.2}ms",

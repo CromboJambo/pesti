@@ -1,0 +1,76 @@
+// SwiGLU activation kernel: out[i] = silu(gate[i]) * up[i]
+// where silu(x) = x / (1 + exp(-x))
+//
+// Inputs: gate, up - f16 tensors of same size (row-major)
+// Output: out - f16 tensor of same size
+//
+// Each thread processes one element. Grid-stride loop handles arbitrary sizes.
+
+.version 8.7
+.target sm_80
+.address_size 64
+
+.visible .entry swiglu_kernel(
+    .param .u64 gate,
+    .param .u64 up,
+    .param .u64 out,
+    .param .u32 num_elements
+)
+{
+    .reg .pred %p0;
+    .reg .b16 %h0, %h1;
+    .reg .f32 %f0, %f1, %f2, %f3, %f4;
+    .reg .u32 %r0, %r1, %r2, %r3, %r4;
+    .reg .u64 %rd0, %rd1, %rd2, %rd3, %rd4, %rd5;
+
+    // Load parameters
+    ld.param.u64 %rd0, [gate];
+    ld.param.u64 %rd1, [up];
+    ld.param.u64 %rd2, [out];
+    ld.param.u32 %r0, [num_elements];
+
+    // Grid-stride loop
+$L_loop:
+    mov.u32 %r1, %blockIdx.x;
+    mov.u32 %r2, %threadIdx.x;
+    mul.lo.u32 %r1, %r1, 256;
+    add.u32 %r1, %r1, %r2;
+
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra $L_exit;
+
+    // Load gate[i] as f16
+    mul.wide.u32 %rd3, %r1, 2;
+    add.u64 %rd4, %rd0, %rd3;
+    ld.global.u16 %h0, [%rd4];
+
+    // Load up[i] as f16
+    add.u64 %rd5, %rd1, %rd3;
+    ld.global.u16 %h1, [%rd5];
+
+    // Convert to f32 for computation
+    cvt.f32.u16 %f0, %h0;
+    cvt.f32.u16 %f1, %h1;
+
+    // silu(x) = x / (1 + exp(-x))
+    neg.f32 %f2, %f0;
+    exp.approx.f32 %f2, %f2;
+    add.f32 %f2, 1.0, %f2;
+    div.approx.f32 %f2, %f0, %f2;
+    mul.f32 %f3, %f2, %f1;
+
+    // Convert back to f16 and store
+    cvt.rn.f16.f32 %h0, %f3;
+    add.u64 %rd4, %rd2, %rd3;
+    st.global.u16 [%rd4], %h0;
+
+    // Advance to next element for this thread
+    add.u32 %r1, %r1, 65536;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra $L_exit;
+
+    bra $L_loop;
+
+$L_exit:
+    ret;
+}

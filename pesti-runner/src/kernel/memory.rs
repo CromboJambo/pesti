@@ -395,10 +395,11 @@ impl MemoryManager {
     pub fn new() -> Self {
         if crate::cuda_runtime::is_available()
             && let Ok(rt) = crate::cuda_runtime::CudaRuntime::for_default_device()
-                && let Ok(stream) = rt.new_stream() {
-                    let device_info = rt.device_info().clone();
-                    return Self::Cuda(CudaMemoryBackend::with_device_info(stream, device_info));
-                }
+            && let Ok(stream) = rt.new_stream()
+        {
+            let device_info = rt.device_info().clone();
+            return Self::Cuda(CudaMemoryBackend::with_device_info(stream, device_info));
+        }
         Self::Cpu(CpuMemoryBackend::new(usize::MAX))
     }
 

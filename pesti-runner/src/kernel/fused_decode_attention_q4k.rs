@@ -1,7 +1,7 @@
-//! Fused attention kernel for autoregressive decode (batch=1, seq=1).
+//! Fused decode attention kernel with Q4_K quantized KV cache (Phase 4).
 //!
-//! Computes softmax(q @ K^T / sqrt(d)) @ V in a single kernel launch,
-//! replacing the CPU-only attention loop in layer.rs.
+//! Computes softmax(q @ K^T / sqrt(d)) @ V where K and V are stored in Q4_K format.
+//! Dequantization happens on-the-fly within the kernel to minimize memory bandwidth.
 
 use std::sync::Arc;
 
@@ -11,14 +11,14 @@ use cudarc::driver::{
     sys,
 };
 
-/// Configuration for fused decode attention.
+/// Configuration for Q4_K fused decode attention.
 #[derive(Debug)]
-pub struct FusedDecodeAttentionConfig {
+pub struct FusedDecodeAttentionQ4KConfig {
     pub head_dim: usize,
     pub scale: f32, // Pre-computed 1/sqrt(head_dim)
 }
 
-impl Default for FusedDecodeAttentionConfig {
+impl Default for FusedDecodeAttentionQ4KConfig {
     fn default() -> Self {
         let head_dim = 64;
         Self {
@@ -29,9 +29,9 @@ impl Default for FusedDecodeAttentionConfig {
 }
 
 #[cfg(feature = "cuda")]
-/// CUDA fused decode attention kernel.
+/// CUDA fused decode attention kernel with Q4_K quantized KV cache.
 #[derive(Clone)]
-pub struct FusedDecodeAttentionKernel {
+pub struct FusedDecodeAttentionQ4KKernel {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     module: std::sync::Arc<crate::cuda_shim::CudaModule>,
@@ -39,13 +39,32 @@ pub struct FusedDecodeAttentionKernel {
 }
 
 #[cfg(feature = "cuda")]
-impl FusedDecodeAttentionKernel {
-    /// Launch fused attention kernel for single query position.
+impl FusedDecodeAttentionQ4KKernel {
+    /// Load and compile the Q4_K fused attention kernel.
+    pub fn load(
+        context: Arc<CudaContext>,
+        stream: Arc<CudaStream>,
+    ) -> Result<Self, String> {
+        // Compile PTX source at runtime
+        let ptx_source = include_str!("ptx/fused_decode_attention_q4k.ptx");
+
+        let module = crate::cuda_shim::CudaModule::from_ptx(&context, ptx_source)?;
+        let function = module.get_function("fused_attention_q4k")?;
+
+        Ok(Self {
+            context,
+            stream,
+            module: std::sync::Arc::new(module),
+            function,
+        })
+    }
+
+    /// Launch fused attention kernel with Q4_K quantized KV cache.
     ///
     /// # Arguments
     /// * `q` - Query vector on device [head_dim] f32
-    /// * `k_cache` - Key cache on device [seq_len, head_dim] f32 (row-major)
-    /// * `v_cache` - Value cache on device [seq_len, head_dim] f32 (row-major)
+    /// * `k_quant` - Quantized K cache on device [num_blocks * 144] u8 (Q4_K format)
+    /// * `v_quant` - Quantized V cache on device [num_blocks * 144] u8 (Q4_K format)
     /// * `scale` - 1/sqrt(head_dim)
     /// * `seq_len` - Number of cached positions
     /// * `head_dim` - Head dimension
@@ -53,16 +72,16 @@ impl FusedDecodeAttentionKernel {
     pub fn launch(
         &self,
         q: u64,
-        k_cache: u64,
-        v_cache: u64,
+        k_quant: u64,
+        v_quant: u64,
         scale: f32,
         seq_len: usize,
         head_dim: usize,
         output: u64,
     ) -> Result<(), String> {
         let mut q_v: u64 = q;
-        let mut k_v: u64 = k_cache;
-        let mut v_v: u64 = v_cache;
+        let mut k_v: u64 = k_quant;
+        let mut v_v: u64 = v_quant;
         let mut scale_v: f32 = scale;
         let mut seq_len_v: i32 = seq_len as i32;
         let mut head_dim_v: i32 = head_dim as i32;
@@ -86,36 +105,11 @@ impl FusedDecodeAttentionKernel {
                 self.function.cu_function(),
                 grid,
                 block,
-                0u32,
-                crate::cuda_shim::cu_stream(&self.stream),
-                &mut params,
-            )
-            .map_err(|e| format!("kernel launch failed: {:?}", e))?;
+                params.as_mut_ptr(),
+                None,
+            )?;
         }
 
         Ok(())
     }
-}
-
-#[cfg(feature = "cuda")]
-pub fn build_fused_decode_attention_kernel(
-    context: Arc<CudaContext>,
-    stream: Arc<CudaStream>,
-) -> Result<FusedDecodeAttentionKernel, String> {
-    let ptx_src = include_str!("ptx/fused_decode_attention.ptx");
-
-    let module = crate::cuda_shim::CudaModule::load_from_ptx(&context, ptx_src)
-        .map_err(|e| format!("module load failed: {:?}", e))?;
-
-    // Entry point name from PTX compilation (no mangling for __global__ extern "C")
-    let function = module
-        .load_function("fused_attention_kernel")
-        .map_err(|e| format!("function lookup failed: {:?}", e))?;
-
-    Ok(FusedDecodeAttentionKernel {
-        context,
-        stream,
-        module,
-        function,
-    })
 }

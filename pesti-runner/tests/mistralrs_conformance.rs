@@ -10,7 +10,7 @@
 #![cfg(feature = "cuda")]
 
 use pesti_runner::kernel::candle_bridge;
-use pesti_runner::{load_gguf_weights, LlamaModel};
+use pesti_runner::{LlamaModel, load_gguf_weights};
 use rand::SeedableRng;
 use std::time::Instant;
 
@@ -73,8 +73,8 @@ fn test_candle_bridge_gemm() {
 
     // Candle bridge gemm
     let t1 = Instant::now();
-    let result = candle_bridge::gemm(&a_host, &b_host, None, m, k, n, 1.0, 0.0)
-        .expect("Bridge GEMM failed");
+    let result =
+        candle_bridge::gemm(&a_host, &b_host, None, m, k, n, 1.0, 0.0).expect("Bridge GEMM failed");
     let elapsed = t1.elapsed().as_secs_f64() * 1000.0;
 
     println!("  Candle bridge GEMM completed in {:.3}ms", elapsed);
@@ -82,7 +82,10 @@ fn test_candle_bridge_gemm() {
 
     // Verify output is reasonable
     let has_finite = result.iter().any(|&x| x.is_finite());
-    assert!(has_finite, "Bridge GEMM output contains only non-finite values");
+    assert!(
+        has_finite,
+        "Bridge GEMM output contains only non-finite values"
+    );
 
     let mean = result.iter().sum::<f32>() / result.len() as f32;
     println!("  Output mean: {:.6}", mean);
@@ -125,7 +128,10 @@ fn test_attention_via_dispatch() {
     // Run attention through dispatch layer (uses candle bridge internally on GPU)
     let t1 = Instant::now();
     let result = ctx.dispatch_attention(
-        &q_host.iter().map(|&x| half::f16::from_f32(x)).collect::<Vec<_>>(),
+        &q_host
+            .iter()
+            .map(|&x| half::f16::from_f32(x))
+            .collect::<Vec<_>>(),
         &key_cache,
         &value_cache,
         num_heads,
@@ -141,7 +147,10 @@ fn test_attention_via_dispatch() {
 
             // Verify output is reasonable (not all zeros, not NaN)
             let has_finite = output.iter().any(|&x| x.is_finite());
-            assert!(has_finite, "Attention output contains only non-finite values");
+            assert!(
+                has_finite,
+                "Attention output contains only non-finite values"
+            );
 
             let mean = output.iter().sum::<f32>() / output.len() as f32;
             println!("  Output mean: {:.6}", mean);
@@ -152,7 +161,10 @@ fn test_attention_via_dispatch() {
             // The kernel itself runs; the issue is in the result extraction layer.
             let err_str = format!("{}", e);
             if err_str.contains("D2H") || err_str.contains("transfer failed") {
-                println!("  Attention kernel dispatched, D2H transfer error (known limitation): {}", e);
+                println!(
+                    "  Attention kernel dispatched, D2H transfer error (known limitation): {}",
+                    e
+                );
                 println!("✅ Attention dispatch PASSED (kernel executed, buffer issue documented)");
             } else {
                 panic!("Attention failed with unexpected error: {}", e);
@@ -178,7 +190,8 @@ fn test_full_model_generation() {
 
     // Load weights and build model
     let t_load = Instant::now();
-    let weights = load_gguf_weights(std::path::Path::new(model_path)).expect("Failed to load GGUF weights");
+    let weights =
+        load_gguf_weights(std::path::Path::new(model_path)).expect("Failed to load GGUF weights");
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
     println!("  Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
@@ -199,16 +212,25 @@ fn test_full_model_generation() {
     // Generate tokens
     let t_gen = Instant::now();
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let result_tokens = model.generate(&prompt_tokens, max_tokens, &sampling, &mut rng, &[]).expect("Generation failed");
+    let result_tokens = model
+        .generate(&prompt_tokens, max_tokens, &sampling, &mut rng, &[])
+        .expect("Generation failed");
     let gen_time = t_gen.elapsed().as_secs_f64();
 
-    println!("  Generated {} tokens in {:.2}s", result_tokens.len(), gen_time);
+    println!(
+        "  Generated {} tokens in {:.2}s",
+        result_tokens.len(),
+        gen_time
+    );
 
     // Decode and display output (re-borrow tokenizer after generate)
     if !result_tokens.is_empty() {
         let tok = model.tokenizer.as_ref().expect("No tokenizer");
         let generated_text = tok.decode(&result_tokens).expect("Failed to decode");
-        println!("  Sample output: {}", &generated_text[..generated_text.len().min(100)]);
+        println!(
+            "  Sample output: {}",
+            &generated_text[..generated_text.len().min(100)]
+        );
     }
 
     // Verify we got reasonable output (not empty)
@@ -230,17 +252,22 @@ fn test_numerical_stability() {
         .map(|i| half::f16::from_f32(i as f32 * 0.05))
         .collect();
 
-    let first_result = ctx.dispatch_gemm(&a_host, &b_host, None, 8, 16, 8, 1.0, 0.0).expect("First GEMM failed");
+    let first_result = ctx
+        .dispatch_gemm(&a_host, &b_host, None, 8, 16, 8, 1.0, 0.0)
+        .expect("First GEMM failed");
 
     for i in 1..3 {
-        let result = ctx.dispatch_gemm(&a_host, &b_host, None, 8, 16, 8, 1.0, 0.0).expect("GEMM failed");
+        let result = ctx
+            .dispatch_gemm(&a_host, &b_host, None, 8, 16, 8, 1.0, 0.0)
+            .expect("GEMM failed");
 
         // Verify deterministic across runs
         for j in 0..result.len() {
             assert!(
                 approx_equal(result[j], first_result[j], 1e-6),
                 "Non-deterministic at index {}: run {} vs first",
-                j, i
+                j,
+                i
             );
         }
     }

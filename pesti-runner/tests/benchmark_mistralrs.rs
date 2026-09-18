@@ -1,13 +1,14 @@
 //! Tok/s benchmark comparing pesti-runner backends.
 
-use pesti_runner::{load_gguf_weights, LlamaModel};
+use pesti_runner::{LlamaModel, load_gguf_weights};
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
 
 #[test]
 fn benchmark_mistralrs_tok_per_second() {
-    let model_path = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path =
+        "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
     if !Path::new(model_path).exists() {
         println!("Skipping: model not found at {}", model_path);

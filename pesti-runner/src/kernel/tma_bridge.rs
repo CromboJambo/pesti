@@ -38,40 +38,42 @@ impl HostTmaDescriptor {
         global_height: u64,
         tile_width: u32,
         tile_height: u32,
-    ) -> Result<Self, String> { unsafe {
-        let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
-        let global_dim: [u64; 2] = [global_width, global_height];
-        // Byte stride between consecutive rows in global memory
-        let global_strides: [u64; 1] = [global_width * 2]; // f16 = 2 bytes
-        let box_dim: [u32; 2] = [tile_width, tile_height];
-        let element_strides: [u32; 2] = [1, 1];
+    ) -> Result<Self, String> {
+        unsafe {
+            let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
+            let global_dim: [u64; 2] = [global_width, global_height];
+            // Byte stride between consecutive rows in global memory
+            let global_strides: [u64; 1] = [global_width * 2]; // f16 = 2 bytes
+            let box_dim: [u32; 2] = [tile_width, tile_height];
+            let element_strides: [u32; 2] = [1, 1];
 
-        let result = sys::cuTensorMapEncodeTiled(
-            tensor_map.as_mut_ptr(),
-            sys::CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
-            2,
-            global_address,
-            global_dim.as_ptr(),
-            global_strides.as_ptr(),
-            box_dim.as_ptr(),
-            element_strides.as_ptr(),
-            sys::CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
-            sys::CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE,
-            sys::CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_NONE,
-            sys::CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
-        );
+            let result = sys::cuTensorMapEncodeTiled(
+                tensor_map.as_mut_ptr(),
+                sys::CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
+                2,
+                global_address,
+                global_dim.as_ptr(),
+                global_strides.as_ptr(),
+                box_dim.as_ptr(),
+                element_strides.as_ptr(),
+                sys::CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
+                sys::CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE,
+                sys::CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_NONE,
+                sys::CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
+            );
 
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(format!(
-                "cuTensorMapEncodeTiled failed: error code {result:?}"
-            ));
+            if result != sys::CUresult::CUDA_SUCCESS {
+                return Err(format!(
+                    "cuTensorMapEncodeTiled failed: error code {result:?}"
+                ));
+            }
+
+            let descriptor = tensor_map.assume_init();
+            Ok(Self {
+                opaque: descriptor.opaque,
+            })
         }
-
-        let descriptor = tensor_map.assume_init();
-        Ok(Self {
-            opaque: descriptor.opaque,
-        })
-    }}
+    }
 
     /// Create a TMA descriptor with SWIZZLE_128B for tensor memory compatibility.
     ///
@@ -88,37 +90,39 @@ impl HostTmaDescriptor {
         global_height: u64,
         tile_width: u32,
         tile_height: u32,
-    ) -> Result<Self, String> { unsafe {
-        let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
-        let global_dim: [u64; 2] = [global_width, global_height];
-        let global_strides: [u64; 1] = [global_width * 2]; // f16 = 2 bytes
-        let box_dim: [u32; 2] = [tile_width, tile_height];
-        let element_strides: [u32; 2] = [1, 1];
+    ) -> Result<Self, String> {
+        unsafe {
+            let mut tensor_map = MaybeUninit::<sys::CUtensorMap>::uninit();
+            let global_dim: [u64; 2] = [global_width, global_height];
+            let global_strides: [u64; 1] = [global_width * 2]; // f16 = 2 bytes
+            let box_dim: [u32; 2] = [tile_width, tile_height];
+            let element_strides: [u32; 2] = [1, 1];
 
-        let result = sys::cuTensorMapEncodeTiled(
-            tensor_map.as_mut_ptr(),
-            sys::CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
-            2,
-            global_address,
-            global_dim.as_ptr(),
-            global_strides.as_ptr(),
-            box_dim.as_ptr(),
-            element_strides.as_ptr(),
-            sys::CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
-            sys::CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B,
-            sys::CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_NONE,
-            sys::CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
-        );
+            let result = sys::cuTensorMapEncodeTiled(
+                tensor_map.as_mut_ptr(),
+                sys::CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
+                2,
+                global_address,
+                global_dim.as_ptr(),
+                global_strides.as_ptr(),
+                box_dim.as_ptr(),
+                element_strides.as_ptr(),
+                sys::CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
+                sys::CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B,
+                sys::CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_NONE,
+                sys::CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
+            );
 
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(format!(
-                "cuTensorMapEncodeTiled (SWIZZLE_128B) failed: error code {result:?}"
-            ));
+            if result != sys::CUresult::CUDA_SUCCESS {
+                return Err(format!(
+                    "cuTensorMapEncodeTiled (SWIZZLE_128B) failed: error code {result:?}"
+                ));
+            }
+
+            let descriptor = tensor_map.assume_init();
+            Ok(Self {
+                opaque: descriptor.opaque,
+            })
         }
-
-        let descriptor = tensor_map.assume_init();
-        Ok(Self {
-            opaque: descriptor.opaque,
-        })
-    }}
+    }
 }

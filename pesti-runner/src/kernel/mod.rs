@@ -116,8 +116,10 @@ pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimization
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
 #[cfg(feature = "cuda")]
 pub mod rope;
+pub mod rmsnorm;
 pub mod slow_friend;
 pub mod softmax;
+pub mod swiglu;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
 #[cfg(feature = "cuda")]
@@ -174,6 +176,8 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 pub use q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
 pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
+#[cfg(feature = "cuda")]
+pub use rope::{CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel, rope_cpu};
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]

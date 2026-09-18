@@ -16,6 +16,8 @@ use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
 use crate::kernel::gemm::GemmKernel;
 use crate::kernel::kvcache::Kvcache;
+#[cfg(feature = "cuda")]
+use crate::kernel::q4k_kvcache::Q4KVCache;
 use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
 use crate::transformer::layer::{Attention, FeedForward, TransformerLayer};
@@ -369,6 +371,10 @@ pub struct LlamaModel {
     /// One `LayerKvCache` per transformer layer. Initialized on first
     /// `forward_layers_with_cache()` call.
     pub cpu_kv_caches: Option<Vec<crate::transformer::kv_cache::LayerKvCache>>,
+    /// Optional Q4_K quantized KV cache (Phase 4). When set, attention uses
+    /// the compressed cache with on-the-fly dequantization via GPU kernel.
+    #[cfg(feature = "cuda")]
+    pub q4k_kvcache: Option<Q4KVCache>,
     /// Optional per-layer hidden-state capture for the dispatch (GPU) path.
     /// When `Some`, `forward_with_dispatch` pushes each layer's output into
     /// this vec (in layer order) so a conformance dumper can diff every layer
@@ -514,6 +520,8 @@ impl LlamaModel {
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
             cpu_kv_caches: None,
+            #[cfg(feature = "cuda")]
+            q4k_kvcache: None,
             capture_per_layer: None,
             #[cfg(feature = "cuda")]
             dispatch_layers,
@@ -732,6 +740,8 @@ impl LlamaModel {
             dispatch: Some(DispatchContext::new()),
             kv_caches: None,
             cpu_kv_caches: None,
+            #[cfg(feature = "cuda")]
+            q4k_kvcache: None,
             capture_per_layer: None,
             #[cfg(feature = "cuda")]
             dispatch_layers,
@@ -1729,6 +1739,12 @@ impl LlamaModel {
             arch,
             "llama" | "mistral" | "mixtral" | "gemma" | "phi3" | "qwen2" | "qwen3" | "starcoder2"
         )
+    }
+
+    /// Set a Q4_K quantized KV cache for compressed storage.
+    #[cfg(feature = "cuda")]
+    pub fn set_q4k_kvcache(&mut self, cache: Q4KVCache) {
+        self.q4k_kvcache = Some(cache);
     }
 
     /// Sample a token from logits using the configured sampling strategy.

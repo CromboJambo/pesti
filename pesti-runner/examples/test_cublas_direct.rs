@@ -24,15 +24,28 @@ fn main() {
 
     // A: [m,k] = [2,3] - simple values
     let a_host: Vec<f16> = vec![
-        f16::from_f32(1.0), f16::from_f32(2.0), f16::from_f32(3.0),
-        f16::from_f32(4.0), f16::from_f32(5.0), f16::from_f32(6.0),
+        f16::from_f32(1.0),
+        f16::from_f32(2.0),
+        f16::from_f32(3.0),
+        f16::from_f32(4.0),
+        f16::from_f32(5.0),
+        f16::from_f32(6.0),
     ];
 
     // B: [k,n] = [3,4] - simple values
     let b_host: Vec<f16> = vec![
-        f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0), f16::from_f32(0.0),
-        f16::from_f32(0.0), f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0),
-        f16::from_f32(0.0), f16::from_f32(0.0), f16::from_f32(1.0), f16::from_f32(0.0),
+        f16::from_f32(1.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(1.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(0.0),
+        f16::from_f32(1.0),
+        f16::from_f32(0.0),
     ];
 
     // Allocate device memory
@@ -57,17 +70,17 @@ fn main() {
             handle,
             cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
             cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T,
-            n as i32,  // result rows (n)
-            m as i32,  // result cols (m)
-            k as i32,  // inner dim (k)
+            n as i32, // result rows (n)
+            m as i32, // result cols (m)
+            k as i32, // inner dim (k)
             &alpha,
-            b_dev.as_ptr(),  // B^T treated as first operand
-            n as i32,        // leading dim of B
-            a_dev.as_ptr(),  // A^T treated as second operand
-            k as i32,        // leading dim of A
+            b_dev.as_ptr(), // B^T treated as first operand
+            n as i32,       // leading dim of B
+            a_dev.as_ptr(), // A^T treated as second operand
+            k as i32,       // leading dim of A
             &beta,
-            c_dev.as_ptr(),  // C^T output
-            n as i32,        // leading dim of C
+            c_dev.as_ptr(), // C^T output
+            n as i32,       // leading dim of C
         );
 
         match result {
@@ -84,7 +97,9 @@ fn main() {
     stream.synchronize().expect("Failed to sync");
 
     let mut c_host = vec![f16::from_f32(0.0); m * n];
-    stream.copy_d2h(&c_host, c_dev).expect("Failed to copy C back");
+    stream
+        .copy_d2h(&c_host, c_dev)
+        .expect("Failed to copy C back");
 
     println!("Result (should be A*B):");
     for row in 0..m {

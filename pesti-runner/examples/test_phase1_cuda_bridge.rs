@@ -1,7 +1,7 @@
 //! Phase 1 verification: Test CUDA cuBLAS F16 bridge end-to-end.
 
-use pesti_runner::kernel::dispatch::{DispatchContext, LinearDispatch};
 use half::f16;
+use pesti_runner::kernel::dispatch::{DispatchContext, LinearDispatch};
 use std::time::Instant;
 
 fn main() {

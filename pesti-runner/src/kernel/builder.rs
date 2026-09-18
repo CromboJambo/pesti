@@ -308,55 +308,55 @@ impl GemmKernel for KernelFromPtx {
         if self.gpu_available
             && let (Some(ctx), Some(_module), Some(func), Some(stream)) =
                 (&self.ctx, &self.module, &self.function, &self.stream)
-            {
-                // Bind context to thread
-                ctx.bind_to_thread()
-                    .map_err(|e| GemmError::LaunchFailed(e.to_string()))?;
+        {
+            // Bind context to thread
+            ctx.bind_to_thread()
+                .map_err(|e| GemmError::LaunchFailed(e.to_string()))?;
 
-                // Calculate grid/block dimensions
-                let (grid_x, grid_y, block_size) = self.get_launch_config(m, n);
+            // Calculate grid/block dimensions
+            let (grid_x, grid_y, block_size) = self.get_launch_config(m, n);
 
-                // Build kernel parameters
-                let m_val = m as u32;
-                let n_val = n as u32;
-                let k_val = k as u32;
-                let mut alpha_v = alpha;
-                let mut beta_v = beta;
-                let mut a_v: u64 = a.device_ptr();
-                let mut b_v: u64 = b.device_ptr();
-                let mut c_v: u64 = c.device_ptr();
+            // Build kernel parameters
+            let m_val = m as u32;
+            let n_val = n as u32;
+            let k_val = k as u32;
+            let mut alpha_v = alpha;
+            let mut beta_v = beta;
+            let mut a_v: u64 = a.device_ptr();
+            let mut b_v: u64 = b.device_ptr();
+            let mut c_v: u64 = c.device_ptr();
 
-                let mut kernel_params: [*mut std::ffi::c_void; 8] = [
-                    &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
-                    &mut a_v as *mut u64 as *mut std::ffi::c_void,
-                    &mut b_v as *mut u64 as *mut std::ffi::c_void,
-                    &mut beta_v as *mut f32 as *mut std::ffi::c_void,
-                    &mut c_v as *mut u64 as *mut std::ffi::c_void,
-                    &m_val as *const u32 as *mut std::ffi::c_void,
-                    &n_val as *const u32 as *mut std::ffi::c_void,
-                    &k_val as *const u32 as *mut std::ffi::c_void,
-                ];
+            let mut kernel_params: [*mut std::ffi::c_void; 8] = [
+                &mut alpha_v as *mut f32 as *mut std::ffi::c_void,
+                &mut a_v as *mut u64 as *mut std::ffi::c_void,
+                &mut b_v as *mut u64 as *mut std::ffi::c_void,
+                &mut beta_v as *mut f32 as *mut std::ffi::c_void,
+                &mut c_v as *mut u64 as *mut std::ffi::c_void,
+                &m_val as *const u32 as *mut std::ffi::c_void,
+                &n_val as *const u32 as *mut std::ffi::c_void,
+                &k_val as *const u32 as *mut std::ffi::c_void,
+            ];
 
-                // Launch kernel
-                unsafe {
-                    use crate::cuda_shim::launch_kernel;
-                    launch_kernel(
-                        func.cu_function(),
-                        (grid_x, grid_y, 1),
-                        (block_size, 1, 1),
-                        0,
-                        stream.cu_stream(),
-                        &mut kernel_params,
-                    )
-                    .map_err(|e| GemmError::LaunchFailed(format!("Kernel launch failed: {e:?}")))?;
-                }
-
-                // Synchronize (event-based: see cuda_shim::stream_synchronize)
-                crate::cuda_shim::stream_synchronize(stream)
-                    .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
-
-                return Ok(());
+            // Launch kernel
+            unsafe {
+                use crate::cuda_shim::launch_kernel;
+                launch_kernel(
+                    func.cu_function(),
+                    (grid_x, grid_y, 1),
+                    (block_size, 1, 1),
+                    0,
+                    stream.cu_stream(),
+                    &mut kernel_params,
+                )
+                .map_err(|e| GemmError::LaunchFailed(format!("Kernel launch failed: {e:?}")))?;
             }
+
+            // Synchronize (event-based: see cuda_shim::stream_synchronize)
+            crate::cuda_shim::stream_synchronize(stream)
+                .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
+
+            return Ok(());
+        }
 
         // GPU unavailable — fall back to CPU
         let _ = (alpha, beta, self.source.kernel_name.as_str(), m, n, k);

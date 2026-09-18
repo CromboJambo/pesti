@@ -12,7 +12,6 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use half::f16;
     use pesti_runner::kernel::device_buf::DeviceBuffer;
-    
 
     println!("=== GEMM-Based Attention Test (Option A) ===\n");
 

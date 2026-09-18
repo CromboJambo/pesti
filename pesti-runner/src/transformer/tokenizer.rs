@@ -20,8 +20,7 @@ use crate::error::RunnerError;
 use pesti_gguf::types::{GgufHeader, GgufKvValue};
 
 /// Tokenizer backend selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenizerBackend {
     /// Build the real tokenizer from GGUF-embedded arrays (default)
     #[default]
@@ -29,7 +28,6 @@ pub enum TokenizerBackend {
     /// Use pure Rust qwen2-bpe implementation
     Qwen2Bpe,
 }
-
 
 #[cfg(feature = "rust-tokenizer")]
 use qwen2_bpe::Qwen2Tokenizer as RustTokenizer;

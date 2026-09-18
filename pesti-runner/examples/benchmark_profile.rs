@@ -1,11 +1,12 @@
 //! Profile pesti's pure Rust inference stack — per-step timing.
 
-use std::path::Path;
-use std::time::Instant;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use rand::SeedableRng;
+use std::path::Path;
+use std::time::Instant;
 
-const MODEL_PATH: &str = "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str =
+    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 8;
 
@@ -41,20 +42,34 @@ fn main() {
             // Prefill + first token
             let sampling_cfg = &sampling;
             let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-            generated = model.generate(&input_ids, 1, sampling_cfg, &mut rng, &[]).unwrap();
+            generated = model
+                .generate(&input_ids, 1, sampling_cfg, &mut rng, &[])
+                .unwrap();
         } else {
             // Continue from previous token
             let prev_token = generated.last().unwrap();
             let sampling_cfg = &sampling;
             let mut rng = rand::rngs::StdRng::seed_from_u64(42 + i as u64);
-            let cont = model.generate(&[*prev_token], 1, sampling_cfg, &mut rng, &[]).unwrap();
+            let cont = model
+                .generate(&[*prev_token], 1, sampling_cfg, &mut rng, &[])
+                .unwrap();
             generated.push(*cont.first().unwrap());
         }
 
         let step_time = step_start.elapsed().as_secs_f64();
-        println!("Step {}: {:.3}s ({:.2} tok/s)", i + 1, step_time, 1.0 / step_time);
+        println!(
+            "Step {}: {:.3}s ({:.2} tok/s)",
+            i + 1,
+            step_time,
+            1.0 / step_time
+        );
     }
 
     let total = total_start.elapsed().as_secs_f64();
-    println!("\nTotal: {} tokens in {:.3}s = {:.2} tok/s", generated.len(), total, generated.len() as f64 / total);
+    println!(
+        "\nTotal: {} tokens in {:.3}s = {:.2} tok/s",
+        generated.len(),
+        total,
+        generated.len() as f64 / total
+    );
 }

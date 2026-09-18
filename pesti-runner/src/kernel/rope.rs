@@ -1,22 +1,30 @@
-//! GPU-accelerated RoPE (Rotary Positional Embeddings) kernel.
+//! RoPE (Rotary Positional Embeddings) kernel for GPU (Phase 3).
 //!
-//! Applies rotary embeddings to Q and K tensors in-place on the device:
-//!   q_m' = q_m * cos(pos * theta) - q_{m+head_dim/2} * sin(pos * theta)
-//!   k_m' = k_m * cos(pos * theta) - k_{m+head_dim/2} * sin(pos * theta)
-//!
-//! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
+//! Applies rotary embeddings to query and key vectors in-place.
+//! Each thread handles one rotation pair across all sequence positions and heads.
 
-use crate::cuda_runtime::CudaDeviceInfo;
-use crate::cuda_shim::CudaFunction;
-use crate::kernel::attention::{AttentionArch, AttentionError};
+use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
 use std::sync::Arc;
 
-/// GPU RoPE kernel for Blackwell tensor cores.
+/// Trait for RoPE kernels (GPU or CPU implementations).
+pub trait RopeKernel: Send + Sync {
+    /// Apply rotary embeddings to query and key tensors.
+    /// Both q and k are modified in-place.
+    fn apply(
+        &self,
+        q: &mut [f32],
+        k: &mut [f32],
+        num_heads: usize,
+        seq_len: usize,
+        start_pos: usize,
+    ) -> Result<(), String>;
+}
+
+/// GPU RoPE kernel.
 pub struct CudaRopeKernel {
-    arch: AttentionArch,
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     function: CudaFunction,
@@ -24,52 +32,27 @@ pub struct CudaRopeKernel {
 
 /// Builder for CudaRopeKernel that handles PTX loading.
 pub struct CudaRopeKernelBuilder {
-    arch: AttentionArch,
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
-    device_info: CudaDeviceInfo,
 }
 
 impl CudaRopeKernelBuilder {
-    pub fn new(
-        arch: AttentionArch,
-        context: Arc<CudaContext>,
-        stream: Arc<CudaStream>,
-        device_info: CudaDeviceInfo,
-    ) -> Self {
-        Self {
-            arch,
-            context,
-            stream,
-            device_info,
-        }
+    pub fn new(context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Self {
+        Self { context, stream }
     }
 
     /// Build the RoPE kernel by loading PTX module.
-    pub fn build(self) -> Result<CudaRopeKernel, AttentionError> {
-        use crate::cuda_shim::CudaModule;
+    pub fn build(self) -> Result<CudaRopeKernel, String> {
+        let ptx_src = include_str!("ptx/rope.ptx");
 
-        // Load PTX source
-        let ptx_src = match self.arch {
-            AttentionArch::Wgmma => include_str!("ptx/attention_rope.ptx"),
-            AttentionArch::Tcgen05 | AttentionArch::Cpu => {
-                return Err(AttentionError::UnsupportedArch(
-                    "RoPE currently only supports WGMMA".to_string(),
-                ));
-            }
-        };
-
-        // Load module from PTX
         let module = CudaModule::load_from_ptx(&self.context, ptx_src)
-            .map_err(|e| AttentionError::Cuda(format!("RoPE module load failed: {e:?}")))?;
+            .map_err(|e| format!("RoPE module load failed: {:?}", e))?;
 
-        // Resolve kernel function
         let function = module
-            .load_function("attention_rope_kernel")
-            .map_err(|e| AttentionError::Cuda(format!("RoPE function load failed: {e:?}")))?;
+            .load_function("rope_kernel")
+            .map_err(|e| format!("RoPE function load failed: {:?}", e))?;
 
         Ok(CudaRopeKernel {
-            arch: self.arch,
             context: self.context,
             stream: self.stream,
             function,
@@ -78,89 +61,162 @@ impl CudaRopeKernelBuilder {
 }
 
 impl CudaRopeKernel {
-    /// Apply RoPE to Q and K tensors in-place on GPU.
-    pub fn apply(
+    /// Apply RoPE to query and key tensors in-place on GPU.
+    ///
+    /// q: [batch, seq_len, num_heads, head_dim] flattened row-major f32
+    /// k: [batch, seq_len, num_heads, head_dim] flattened row-major f32
+    pub fn apply_gpu(
         &self,
-        q: &mut DeviceBuffer<f16>,
-        k: &mut DeviceBuffer<f16>,
+        q: &mut DeviceBuffer<f32>,
+        k: &mut DeviceBuffer<f32>,
         num_heads: usize,
-        seq_q: usize,
-        seq_k: usize,
-        head_dim: usize,
+        seq_len: usize,
         start_pos: usize,
-    ) -> Result<(), AttentionError> {
-        if !self.is_available() {
-            return Err(AttentionError::NotAvailable);
-        }
+        head_dim: usize,
+        base: f32,
+    ) -> Result<(), String> {
+        let grid_x = (seq_len * num_heads).div_ceil(256);
 
-        // Validate dimensions
-        if num_heads == 0 || head_dim == 0 || seq_q == 0 || seq_k == 0 {
-            return Err(AttentionError::InvalidDimensions {
-                num_heads,
-                head_dim,
-                seq_len: seq_q.max(seq_k),
-            });
-        }
-
-        // Get device pointers
-        let q_ptr = q.device_ptr();
-        let k_ptr = k.device_ptr();
-
-        // Build kernel parameters
-        let seq_q_val = seq_q as u32;
-        let seq_k_val = seq_k as u32;
-        let num_heads_val = num_heads as u32;
-        let head_dim_val = head_dim as u32;
-        let start_pos_val = start_pos as u32;
-
-        // Convert base to f32 bits
-        let rope_base_val = 10000.0f32.to_bits();
-
-        let mut kernel_params: [*mut std::ffi::c_void; 8] = [
-            &{ q_ptr } as *const u64 as *mut std::ffi::c_void,
-            &{ k_ptr } as *const u64 as *mut std::ffi::c_void,
-            &num_heads_val as *const u32 as *mut std::ffi::c_void,
-            &seq_q_val as *const u32 as *mut std::ffi::c_void,
-            &seq_k_val as *const u32 as *mut std::ffi::c_void,
-            &head_dim_val as *const u32 as *mut std::ffi::c_void,
-            &rope_base_val as *const u32 as *mut std::ffi::c_void,
-            &start_pos_val as *const u32 as *mut std::ffi::c_void,
+        // Kernel params: data_ptr, base, seq_len, num_heads, head_dim, start_pos
+        let mut params_q: [*mut std::ffi::c_void; 6] = [
+            &{ q.device_ptr() } as *const u64 as *mut std::ffi::c_void,
+            &base as *const f32 as *mut std::ffi::c_void,
+            &(seq_len as u32) as *const u32 as *mut std::ffi::c_void,
+            &(num_heads as u32) as *const u32 as *mut std::ffi::c_void,
+            &(head_dim as u32) as *const u32 as *mut std::ffi::c_void,
+            &(start_pos as u32) as *const u32 as *mut std::ffi::c_void,
         ];
 
-        // Launch configuration: one block per (head, pos) pair
-        let grid_x = (seq_q as u32).div_ceil(128).min(num_heads as u32);
-        let grid_y = 1;
-        let block_size = 128;
+        unsafe {
+            crate::cuda_shim::launch_kernel(
+                self.function.cu_function(),
+                ((grid_x as u32), 1, 1),
+                (256, 1, 1),
+                0,
+                self.stream.cu_stream(),
+                &mut params_q,
+            )
+            .map_err(|e| format!("RoPE kernel launch failed for Q: {:?}", e))?;
+
+            crate::cuda_shim::stream_synchronize(&self.stream)
+                .map_err(|e| format!("RoPE stream sync failed for Q: {:?}", e))?;
+        }
+
+        // Apply to K (same parameters, different tensor)
+        let mut params_k: [*mut std::ffi::c_void; 6] = [
+            &{ k.device_ptr() } as *const u64 as *mut std::ffi::c_void,
+            &base as *const f32 as *mut std::ffi::c_void,
+            &(seq_len as u32) as *const u32 as *mut std::ffi::c_void,
+            &(num_heads as u32) as *const u32 as *mut std::ffi::c_void,
+            &(head_dim as u32) as *const u32 as *mut std::ffi::c_void,
+            &(start_pos as u32) as *const u32 as *mut std::ffi::c_void,
+        ];
 
         unsafe {
-            use crate::cuda_shim::launch_kernel;
-            launch_kernel(
+            crate::cuda_shim::launch_kernel(
                 self.function.cu_function(),
-                (grid_x, grid_y, 1),
-                (block_size, 1, 1),
-                0, // shared memory
+                ((grid_x as u32), 1, 1),
+                (256, 1, 1),
+                0,
                 self.stream.cu_stream(),
-                &mut kernel_params,
+                &mut params_k,
             )
-            .map_err(|e| AttentionError::LaunchFailed(format!("RoPE launch failed: {e:?}")))?;
+            .map_err(|e| format!("RoPE kernel launch failed for K: {:?}", e))?;
 
-            // Synchronize (event-based: see cuda_shim::stream_synchronize)
             crate::cuda_shim::stream_synchronize(&self.stream)
-                .map_err(|e| AttentionError::LaunchFailed(format!("RoPE sync failed: {e:?}")))?;
+                .map_err(|e| format!("RoPE stream sync failed for K: {:?}", e))?;
         }
 
         Ok(())
     }
+}
 
-    pub fn context(&self) -> &Arc<CudaContext> {
-        &self.context
+/// CPU reference implementation of RopeKernel for conformance testing and fallback.
+pub struct CpuRopeKernel {
+    base: f32,
+}
+
+impl CpuRopeKernel {
+    pub fn new(base: f32) -> Self {
+        Self { base }
+    }
+}
+
+impl RopeKernel for CpuRopeKernel {
+    fn apply(
+        &self,
+        q: &mut [f32],
+        k: &mut [f32],
+        num_heads: usize,
+        seq_len: usize,
+        start_pos: usize,
+    ) -> Result<(), String> {
+        let head_dim = q.len() / (num_heads * seq_len);
+        rope_cpu(q, num_heads, seq_len, start_pos, head_dim, self.base);
+        rope_cpu(k, num_heads, seq_len, start_pos, head_dim, self.base);
+        Ok(())
+    }
+}
+
+/// CPU reference implementation for conformance testing.
+pub fn rope_cpu(
+    data: &mut [f32],
+    num_heads: usize,
+    seq_len: usize,
+    start_pos: usize,
+    head_dim: usize,
+    base: f32,
+) {
+    let dim_half = head_dim / 2;
+    let theta: Vec<f32> = (0..dim_half)
+        .map(|i| base.powf(-(i as f32) / dim_half as f32))
+        .collect();
+
+    for pos in 0..seq_len {
+        let actual_pos = start_pos + pos;
+        for head in 0..num_heads {
+            for (i, &freq) in theta.iter().enumerate() {
+                let angle = actual_pos as f32 * freq;
+                let cos = angle.cos();
+                let sin = angle.sin();
+
+                let idx = pos * num_heads * head_dim + head * head_dim + i;
+                let next = idx + dim_half;
+
+                let orig = data[idx];
+                data[idx] = orig * cos - data[next] * sin;
+                data[next] = orig * sin + data[next] * cos;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rope_cpu_known_values() {
+        // RoPE at position 0 should be identity (cos(0)=1, sin(0)=0)
+        let mut data = vec![1.0, 2.0, 3.0, 4.0];
+        rope_cpu(&mut data, 1, 1, 0, 4, 10000.0);
+        assert!((data[0] - 1.0).abs() < 1e-6);
+        assert!((data[1] - 2.0).abs() < 1e-6);
+
+        // At position 1, rotation should change values
+        let mut data = vec![1.0, 0.0, 0.0, 1.0];
+        rope_cpu(&mut data, 1, 1, 1, 4, 10000.0);
+        // cos(1/100) ~ 0.99995, sin(1/100) ~ 0.01
+        assert!((data[0] - 0.99995).abs() < 0.001);
     }
 
-    pub fn stream(&self) -> &Arc<CudaStream> {
-        &self.stream
-    }
-
-    pub fn is_available(&self) -> bool {
-        unsafe { !self.function.cu_function().is_null() }
+    #[test]
+    fn test_cpu_rope_kernel_trait() {
+        let kernel = CpuRopeKernel::new(10000.0);
+        let mut q = vec![1.0, 2.0, 3.0, 4.0];
+        let mut k = vec![5.0, 6.0, 7.0, 8.0];
+        
+        // Should not panic
+        kernel.apply(&mut q, &mut k, 1, 1, 0).unwrap();
     }
 }
