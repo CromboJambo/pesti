@@ -84,7 +84,10 @@ pub mod candle_bridge;
 #[cfg(feature = "cuda")]
 pub mod cuda_bridge;
 pub mod device_buf;
+pub mod device_tensor;
 pub mod dispatch;
+#[cfg(feature = "cuda")]
+pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
 pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
 #[cfg(feature = "cuda")]
@@ -159,8 +162,6 @@ pub use gemm::{CudaGemmKernel, CudaGemmKernelBuilder};
 pub use gemm_stub::{CpuGemmKernel, GemmArch, GemmConfig, GemmError, GemmKernel};
 #[cfg(feature = "cuda")]
 pub use kvcache::{KvError, Kvcache, KvcacheSlice};
-#[cfg(feature = "cuda")]
-pub use q4k_kvcache::Q4KVCache;
 #[cfg(not(feature = "cuda"))]
 pub use kvcache_stub::{KvError, Kvcache, KvcacheSlice, TmaDescriptor};
 #[cfg(feature = "cuda")]
@@ -169,6 +170,8 @@ pub use memory::{
 };
 #[cfg(not(feature = "cuda"))]
 pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManager, RawHandle};
+#[cfg(feature = "cuda")]
+pub use q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
 pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
 #[cfg(feature = "cuda")]

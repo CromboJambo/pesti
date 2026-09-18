@@ -1,27 +1,36 @@
-//! Linear layer: y = x @ W^T + b (or without bias).
+//! Linear layer with device-resident weights (Phase 2b).
 //!
-//! Stores weight matrix in row-major layout: W[i][j] = weights[i * out_features + j].
-//! Input x is [batch, in_features], output y is [batch, out_features].
+//! Key change from Phase 2a: weight matrices are uploaded to GPU ONCE at model
+//! load time via `DeviceTensor`, not re-uploaded on every forward pass. This
+//! eliminates the dominant transfer bottleneck in transformer inference.
 //!
+//! The layer now manages three memory locations for its weight matrix:
+//! - `cpu_data`: always present, f32 (model loading / CPU fallback)
+//! - `gpu_buffer`: uploaded once as f16 for GEMM efficiency (optional)
+//! - Transfers are explicit and cached
 
 #![allow(clippy::redundant_closure)]
 
+use crate::kernel::device_buf::DeviceBuffer;
 use crate::kernel::gemm::{CpuGemmKernel, GemmArch, GemmKernel};
 use half::f16;
 use std::sync::Arc;
 
-#[derive(Clone)]
+/// Linear layer with optional device-resident weights.
 pub struct Linear {
+    /// Host-side f32 weight data (always present for compatibility).
     pub weight: Vec<f32>,
+    /// Optional GPU buffer holding the transposed weight matrix in f16 format.
+    /// Uploaded once at load time, reused across all forward passes.
+    gpu_weight: Option<Arc<DeviceBuffer<f16>>>,
     pub bias: Option<Vec<f32>>,
     pub in_features: usize,
     pub out_features: usize,
-    /// Optional GPU GEMM kernel for accelerated matmul. When set and available,
-    /// forward() uses this instead of the hand-written CPU matmul.
     gemm_kernel: Option<Arc<dyn GemmKernel + Send + Sync>>,
 }
 
 impl Linear {
+    /// Create a linear layer from CPU weight data.
     pub fn new(
         weight: Vec<f32>,
         bias: Option<Vec<f32>>,
@@ -30,6 +39,7 @@ impl Linear {
     ) -> Self {
         Self {
             weight,
+            gpu_weight: None,
             bias,
             in_features,
             out_features,
@@ -48,6 +58,29 @@ impl Linear {
         self.gemm_kernel = None;
     }
 
+    /// Upload weight matrix to GPU as f16 transposed layout for GEMM efficiency.
+    /// Must be called after set_gemm_kernel() and before the first GPU forward pass.
+    pub fn upload_weights_to_gpu(&mut self) {
+        let k = self.in_features;
+        let n = self.out_features;
+
+        // Transpose weights: W is [out, in] row-major; GEMM needs B as [k, n].
+        // Convert to f16 for GPU GEMM efficiency.
+        let w_t: Vec<f16> = (0..k)
+            .flat_map(|i| {
+                (0..n).map(move |j| f16::from_f32(self.weight[j * k + i]))
+            })
+            .collect();
+
+        self.gpu_weight = Some(Arc::new(DeviceBuffer::from_host(w_t)));
+    }
+
+    /// Check if weights are resident on GPU.
+    pub fn weights_on_gpu(&self) -> bool {
+        self.gpu_weight.is_some()
+    }
+
+    /// Build from f16 weight bytes (legacy constructor).
     pub fn from_f16_weight(weight_f16: &[u8], bias: Option<Vec<f32>>) -> Self {
         let elements = weight_f16.len() / 2;
         let weight: Vec<f32> = weight_f16
@@ -57,6 +90,7 @@ impl Linear {
         let (in_features, out_features) = if elements > 0 { (1, elements) } else { (0, 0) };
         Self {
             weight,
+            gpu_weight: None,
             bias,
             in_features,
             out_features,
@@ -64,7 +98,7 @@ impl Linear {
         }
     }
 
-    /// Build a Linear layer from f32 bytes with explicit shape (preferred).
+    /// Build from f32 weight bytes with explicit shape.
     pub fn from_f32_weight_with_dims(
         weight_f32: &[u8],
         bias: Option<Vec<f32>>,
@@ -77,6 +111,7 @@ impl Linear {
             .collect();
         Self {
             weight,
+            gpu_weight: None,
             bias,
             in_features,
             out_features,
@@ -84,7 +119,7 @@ impl Linear {
         }
     }
 
-    /// Build a Linear layer from f32 bytes (used for safetensors loading).
+    /// Build from f32 weight bytes (legacy).
     pub fn from_f32_weight(weight_f32: &[u8], bias: Option<Vec<f32>>) -> Self {
         let elements = weight_f32.len() / 4;
         let weight: Vec<f32> = weight_f32
@@ -94,6 +129,7 @@ impl Linear {
         let (in_features, out_features) = if elements > 0 { (1, elements) } else { (0, 0) };
         Self {
             weight,
+            gpu_weight: None,
             bias,
             in_features,
             out_features,
@@ -101,7 +137,7 @@ impl Linear {
         }
     }
 
-    /// Build a Linear layer with explicit shape (for embeddings where we know embed_dim).
+    /// Build from f32 weight bytes with explicit shape.
     pub fn from_f32_weight_with_shape(
         weight_f32: &[u8],
         bias: Option<Vec<f32>>,
@@ -114,6 +150,7 @@ impl Linear {
             .collect();
         Self {
             weight,
+            gpu_weight: None,
             bias,
             in_features,
             out_features,
@@ -127,10 +164,10 @@ impl Linear {
         let k = self.in_features;
         let n = self.out_features;
 
-        // Try GPU GEMM path if kernel is available and CUDA feature is enabled.
+        // Try GPU GEMM path if kernel is available and weights are on device.
         #[cfg(feature = "cuda")]
         if let Some(ref gemm) = self.gemm_kernel {
-            if gemm.is_available() {
+            if gemm.is_available() && self.gpu_weight.is_some() {
                 return self.forward_gpu(gemm, x, m, k, n);
             }
         }
@@ -139,33 +176,28 @@ impl Linear {
         self.forward_cpu(x, batch_size)
     }
 
-    /// GPU GEMM path: F32→F16 convert → dispatch_gemm → F16→F32 convert.
+    /// GPU GEMM path using device-resident weights.
     #[cfg(feature = "cuda")]
     fn forward_gpu(
         &self,
         gemm: &Arc<dyn GemmKernel + Send + Sync>,
         x: &[f32],
         m: usize,
-        k: usize,
+        _k: usize,
         n: usize,
     ) -> Vec<f32> {
-        use crate::kernel::device_buf::DeviceBuffer;
-
         // Convert input to F16 for GPU GEMM.
         let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
         let a = DeviceBuffer::from_host(x_f16);
 
-        // Transpose weights: W is [out, in] row-major; GEMM needs B as [k, n].
-        let w_t: Vec<f16> = (0..k)
-            .flat_map(|i| (0..n).map(move |j| f16::from_f32(self.weight[j * k + i])))
-            .collect();
-        let b = DeviceBuffer::from_host(w_t);
+        // Use pre-uploaded GPU weight buffer (transposed, f16).
+        let b = self.gpu_weight.as_ref().expect("GPU weights not uploaded");
 
         // Allocate output buffer on device.
         let mut c = DeviceBuffer::zeros(m * n);
 
         // Launch GPU GEMM: C = alpha * A @ B + beta * C
-        gemm.matmul(1.0, &a, &b, 0.0, &mut c, m, n, k)
+        gemm.matmul(1.0, &a, b, 0.0, &mut c, m, n, self.in_features)
             .expect("GPU GEMM matmul failed");
 
         // Transfer result back to host.
@@ -328,5 +360,18 @@ mod tests {
                 exp
             );
         }
+    }
+
+    #[test]
+    fn test_gpu_weight_upload() {
+        let weight = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut linear = Linear::new(weight.clone(), None, 2, 3);
+
+        // Before upload
+        assert!(!linear.weights_on_gpu());
+
+        // Upload to GPU
+        linear.upload_weights_to_gpu();
+        assert!(linear.weights_on_gpu());
     }
 }

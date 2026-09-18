@@ -1762,6 +1762,23 @@ impl LlamaModel {
         }
     }
 
+    /// Upload all weight matrices to GPU device memory.
+    /// Call this after set_gemm_kernel() and before the first forward pass.
+    #[cfg(feature = "cuda")]
+    pub fn upload_weights_to_gpu(&mut self) {
+        for layer in &mut self.layers {
+            // Attention projections
+            layer.attention.wq.upload_weights_to_gpu();
+            layer.attention.wk.upload_weights_to_gpu();
+            layer.attention.wv.upload_weights_to_gpu();
+            layer.attention.wo.upload_weights_to_gpu();
+            // FFN layers
+            layer.feed_forward.w1.upload_weights_to_gpu();
+            layer.feed_forward.w2.upload_weights_to_gpu();
+            layer.feed_forward.w3.upload_weights_to_gpu();
+        }
+    }
+
     /// Generate tokens autoregressively with GPU acceleration support.
     ///
     /// `prompt` — input token IDs

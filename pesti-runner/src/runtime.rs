@@ -272,6 +272,15 @@ impl Runtime {
                                     Ok(gemm_kernel) => {
                                         info!("Attaching CUDA GEMM kernel to all linear layers");
                                         llama_model.set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
+                                        
+                                        // Phase 2b: Upload weights to GPU once at load time
+                                        info!("Uploading model weights to GPU device memory");
+                                        let upload_start = std::time::Instant::now();
+                                        llama_model.upload_weights_to_gpu();
+                                        info!(
+                                            elapsed_ms = upload_start.elapsed().as_millis(),
+                                            "Model weights uploaded to GPU"
+                                        );
                                     }
                                     Err(e) => {
                                         warn!("Failed to create CUDA GEMM kernel, falling back to CPU: {}", e);
