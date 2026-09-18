@@ -83,7 +83,7 @@ pub enum RunnerBackend {
     /// llama.cpp FFI runner (GGUF models).
     Llama(LlamaRunner),
     /// Pure-Rust transformer model (SafeTensors).
-    RustModel(()), // Stub - actual implementation only exists with CUDA
+    RustModel(crate::transformer::model::LlamaModel),
 }
 
 /// The unified inference runtime.
@@ -221,19 +221,93 @@ impl Runtime {
             );
 
             // Extract config from safetensors metadata
-            crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
+            let metadata = crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
                 .map_err(|e| {
                     crate::error::RunnerError::ModelLoad(format!(
                         "Failed to extract safetensors config: {e}"
                     ))
-                })
-                .map(|_| ())?;
+                })?;
 
-            // Load model from safetensors
-            // Stub - actual implementation only exists with CUDA
-            let _llama_model = ();
+            // Convert metadata to LlamaConfig
+            let llama_config = crate::transformer::model::LlamaConfig::from_safetensors_metadata(&metadata)
+                .map_err(|e| {
+                    crate::error::RunnerError::ModelLoad(format!(
+                        "Failed to build config from safetensors metadata: {e}"
+                    ))
+                })?;
 
-            *self.runner.write().await = Some(RunnerBackend::RustModel(_llama_model));
+            // Load model from safetensors using our Rust transformer implementation
+            let weights = crate::safetensors_weight_loader::load_safetensors_weights(&spec.base_path)
+                .map_err(|e| {
+                    crate::error::RunnerError::ModelLoad(format!(
+                        "Failed to load safetensors weights: {e}"
+                    ))
+                })?;
+
+            let mut llama_model = crate::transformer::LlamaModel::from_safetensors_weights(weights, llama_config)
+                .map_err(|e| {
+                    crate::error::RunnerError::ModelLoad(format!(
+                        "Failed to load model from safetensors: {e}"
+                    ))
+                })?;
+
+            // Phase 2a: Wire up GEMM kernel if CUDA is available
+            #[cfg(feature = "cuda")]
+            {
+                let cuda_rt_result = crate::cuda_runtime::CudaRuntime::new(0);
+                match cuda_rt_result {
+                    Ok(cuda_rt) => {
+                        let context = cuda_rt.context().clone();
+                        let stream_result = cuda_rt.new_stream();
+                        match stream_result {
+                            Ok(stream) => {
+                                let device_info = cuda_rt.device_info().clone();
+
+                                match crate::kernel::gemm::CudaGemmKernelBuilder::new(
+                                    crate::kernel::gemm::GemmArch::Mma,
+                                    context.clone(),
+                                    stream.clone(),
+                                    device_info,
+                                ).build() {
+                                    Ok(gemm_kernel) => {
+                                        info!("Attaching CUDA GEMM kernel to all linear layers");
+                                        llama_model.set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to create CUDA GEMM kernel, falling back to CPU: {}", e);
+                                    }
+                                }
+
+                                // Also attach fused decode attention kernel if available
+                                match crate::kernel::fused_decode_attention::build_fused_decode_attention_kernel(
+                                    context, stream
+                                ) {
+                                    Ok(fused_kernel) => {
+                                        info!("Attaching CUDA fused decode attention kernel");
+                                        // Set on each layer's dispatch attention via the model's dispatch layers
+                                        if let Some(ref mut dispatch_layers) = llama_model.dispatch_layers {
+                                            for layer_dispatch in dispatch_layers.iter_mut() {
+                                                layer_dispatch.attention.fused_decode_kernel = Some(fused_kernel.clone());
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to create fused decode kernel, falling back: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to create CUDA stream: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create CUDA runtime, falling back to CPU: {}", e);
+                    }
+                }
+            }
+
+            *self.runner.write().await = Some(RunnerBackend::RustModel(llama_model));
 
             let state = ModelState {
                 name: name.to_string(),

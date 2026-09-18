@@ -6,12 +6,19 @@
 
 #![allow(clippy::redundant_closure)]
 
-#[derive(Debug, Clone)]
+use crate::kernel::gemm::{CpuGemmKernel, GemmArch, GemmKernel};
+use half::f16;
+use std::sync::Arc;
+
+#[derive(Clone)]
 pub struct Linear {
     pub weight: Vec<f32>,
     pub bias: Option<Vec<f32>>,
     pub in_features: usize,
     pub out_features: usize,
+    /// Optional GPU GEMM kernel for accelerated matmul. When set and available,
+    /// forward() uses this instead of the hand-written CPU matmul.
+    gemm_kernel: Option<Arc<dyn GemmKernel + Send + Sync>>,
 }
 
 impl Linear {
@@ -26,7 +33,19 @@ impl Linear {
             bias,
             in_features,
             out_features,
+            gemm_kernel: None,
         }
+    }
+
+    /// Set a GPU GEMM kernel for this layer. Subsequent forward() calls will
+    /// use the GPU path when available.
+    pub fn set_gemm_kernel(&mut self, kernel: Arc<dyn GemmKernel + Send + Sync>) {
+        self.gemm_kernel = Some(kernel);
+    }
+
+    /// Clear the GPU GEMM kernel (revert to CPU matmul).
+    pub fn clear_gemm_kernel(&mut self) {
+        self.gemm_kernel = None;
     }
 
     pub fn from_f16_weight(weight_f16: &[u8], bias: Option<Vec<f32>>) -> Self {
@@ -41,14 +60,11 @@ impl Linear {
             bias,
             in_features,
             out_features,
+            gemm_kernel: None,
         }
     }
 
     /// Build a Linear layer from f32 bytes with explicit shape (preferred).
-    ///
-    /// Use this instead of `from_f32_weight` for attention/FFN weights where
-    /// `in_features > 1`. The shape-less variant defaults `in_features=1`,
-    /// which is only correct for 1D embedding lookups.
     pub fn from_f32_weight_with_dims(
         weight_f32: &[u8],
         bias: Option<Vec<f32>>,
@@ -64,14 +80,11 @@ impl Linear {
             bias,
             in_features,
             out_features,
+            gemm_kernel: None,
         }
     }
 
     /// Build a Linear layer from f32 bytes (used for safetensors loading).
-    ///
-    /// **Note:** Defaults `in_features=1`, which is only correct for 1D
-    /// embedding tensors. For attention/FFN weights, use
-    /// `from_f32_weight_with_dims` or `from_f32_weight_with_shape` instead.
     pub fn from_f32_weight(weight_f32: &[u8], bias: Option<Vec<f32>>) -> Self {
         let elements = weight_f32.len() / 4;
         let weight: Vec<f32> = weight_f32
@@ -84,6 +97,7 @@ impl Linear {
             bias,
             in_features,
             out_features,
+            gemm_kernel: None,
         }
     }
 
@@ -103,35 +117,85 @@ impl Linear {
             bias,
             in_features,
             out_features,
+            gemm_kernel: None,
         }
     }
 
     /// Forward pass: y = x @ W^T + bias.
-    ///
-    /// x: [batch_size, in_features]
-    /// Returns: [batch_size, out_features]
     pub fn forward(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
+        let m = batch_size;
+        let k = self.in_features;
+        let n = self.out_features;
+
+        // Try GPU GEMM path if kernel is available and CUDA feature is enabled.
+        #[cfg(feature = "cuda")]
+        if let Some(ref gemm) = self.gemm_kernel {
+            if gemm.is_available() {
+                return self.forward_gpu(gemm, x, m, k, n);
+            }
+        }
+
+        // CPU fallback: hand-written matmul with rayon parallelism.
+        self.forward_cpu(x, batch_size)
+    }
+
+    /// GPU GEMM path: F32→F16 convert → dispatch_gemm → F16→F32 convert.
+    #[cfg(feature = "cuda")]
+    fn forward_gpu(
+        &self,
+        gemm: &Arc<dyn GemmKernel + Send + Sync>,
+        x: &[f32],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<f32> {
+        use crate::kernel::device_buf::DeviceBuffer;
+
+        // Convert input to F16 for GPU GEMM.
+        let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
+        let a = DeviceBuffer::from_host(x_f16);
+
+        // Transpose weights: W is [out, in] row-major; GEMM needs B as [k, n].
+        let w_t: Vec<f16> = (0..k)
+            .flat_map(|i| (0..n).map(move |j| f16::from_f32(self.weight[j * k + i])))
+            .collect();
+        let b = DeviceBuffer::from_host(w_t);
+
+        // Allocate output buffer on device.
+        let mut c = DeviceBuffer::zeros(m * n);
+
+        // Launch GPU GEMM: C = alpha * A @ B + beta * C
+        gemm.matmul(1.0, &a, &b, 0.0, &mut c, m, n, k)
+            .expect("GPU GEMM matmul failed");
+
+        // Transfer result back to host.
+        let mut output = c.to_host();
+
+        // Apply bias if present (on CPU for simplicity).
+        if let Some(ref bias) = self.bias {
+            for b_idx in 0..m {
+                for o in 0..n {
+                    output[b_idx * n + o] += bias[o];
+                }
+            }
+        }
+
+        output
+    }
+
+    /// CPU fallback: hand-written matmul with rayon parallelism.
+    fn forward_cpu(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * self.out_features];
 
-        // Matmul: output[b, o] = sum_i(x[b, i] * W[o, i])
-        // Weight is [out_features, in_features] row-major.
-        //
-        // NOTE: gemm crate produces zero results on this system (SIMD dispatch bug).
-        // Using manual matmul with rayon parallelism for correctness.
         use rayon::prelude::*;
 
         let k = self.in_features;
         let n = self.out_features;
 
-        // Infer actual batch size from input length to handle dimension mismatches
-        let _actual_batch_size = x.len() / k;
-
-        // Parallelize over batch dimension
         output
             .par_chunks_mut(n)
             .enumerate()
             .for_each(|(b, out_row)| {
-                // Use inferred batch size to avoid out-of-bounds access
                 let start_idx = b * k;
                 let end_idx = std::cmp::min((b + 1) * k, x.len());
                 let x_row = &x[start_idx..end_idx];
@@ -139,7 +203,6 @@ impl Linear {
                 for o in 0..n {
                     let w_row = &self.weight[o * k..(o + 1) * k];
                     let mut acc = 0.0f32;
-                    // Manual dot product (auto-vectorized by LLVM)
                     for i in 0..std::cmp::min(k, x_row.len()) {
                         acc += x_row[i] * w_row[i];
                     }
@@ -204,7 +267,6 @@ mod tests {
 
     #[test]
     fn test_linear_forward_vs_scalar() {
-        // Simple 2x3 matrix multiply: A (2x3) @ B^T (3x2) -> C (2x2)
         let weight = vec![
             1.0, 2.0, 3.0, // row 0: W[0][0]=1, W[0][1]=2, W[0][2]=3
             4.0, 5.0, 6.0, // row 1: W[1][0]=4, W[1][1]=5, W[1][2]=6
@@ -222,10 +284,10 @@ mod tests {
         let output = linear.forward(&x, 2);
 
         // Expected: C[b,o] = sum_i(x[b,i] * W[o,i]) + bias[o]
-        // C[0,0] = 1*1 + 2*2 + 3*3 + 0.1 = 1 + 4 + 9 + 0.1 = 14.1
-        // C[0,1] = 1*4 + 2*5 + 3*6 + 0.2 = 4 + 10 + 18 + 0.2 = 32.2
-        // C[1,0] = 4*1 + 5*2 + 6*3 + 0.1 = 4 + 10 + 18 + 0.1 = 32.1
-        // C[1,1] = 4*4 + 5*5 + 6*6 + 0.2 = 16 + 25 + 36 + 0.2 = 77.2
+        // C[0,0] = 1*1 + 2*2 + 3*3 + 0.1 = 14.1
+        // C[0,1] = 1*4 + 2*5 + 3*6 + 0.2 = 32.2
+        // C[1,0] = 4*1 + 5*2 + 6*3 + 0.1 = 32.1
+        // C[1,1] = 4*4 + 5*5 + 6*6 + 0.2 = 77.2
 
         let expected = [14.1, 32.2, 32.1, 77.2];
 

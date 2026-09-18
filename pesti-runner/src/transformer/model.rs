@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 use std::path::Path;
+use std::sync::Arc;
 
 use candle_core::Tensor;
 use pesti_gguf::types::GgufHeader;
@@ -12,7 +13,8 @@ use tracing::debug;
 
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
-use crate::kernel::dispatch::DispatchContext;
+use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
+use crate::kernel::gemm::GemmKernel;
 use crate::kernel::kvcache::Kvcache;
 use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
@@ -121,20 +123,21 @@ impl LlamaConfig {
             };
             // Use gguf_model_loader's get_tensor_byte_range helper
             if let Some(tensor_info) = header.tensors.iter().find(|t| t.name == k_name)
-                && tensor_info.shape.len() >= 2 {
-                    let kv_dim = tensor_info.shape[1] as usize;
-                    let inferred = kv_dim / num_kv_heads;
-                    if inferred > 0 && inferred != head_dim {
-                        tracing::info!(
-                            head_dim_before = head_dim,
-                            head_dim_after = inferred,
-                            kv_dim,
-                            num_kv_heads,
-                            "Corrected head_dim from KV weight shape"
-                        );
-                        head_dim = inferred;
-                    }
+                && tensor_info.shape.len() >= 2
+            {
+                let kv_dim = tensor_info.shape[1] as usize;
+                let inferred = kv_dim / num_kv_heads;
+                if inferred > 0 && inferred != head_dim {
+                    tracing::info!(
+                        head_dim_before = head_dim,
+                        head_dim_after = inferred,
+                        kv_dim,
+                        num_kv_heads,
+                        "Corrected head_dim from KV weight shape"
+                    );
+                    head_dim = inferred;
                 }
+            }
         }
         let intermediate_dim = match arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 => header
@@ -203,9 +206,10 @@ impl LlamaConfig {
         let get_u64 = |keys: &[&str]| -> Option<u64> {
             for &k in keys {
                 if let Some(v) = meta.get(k)
-                    && let Ok(n) = v.trim_matches('"').parse::<u64>() {
-                        return Some(n);
-                    }
+                    && let Ok(n) = v.trim_matches('"').parse::<u64>()
+                {
+                    return Some(n);
+                }
             }
             None
         };
@@ -213,9 +217,10 @@ impl LlamaConfig {
         let get_f32 = |keys: &[&str]| -> Option<f32> {
             for &k in keys {
                 if let Some(v) = meta.get(k)
-                    && let Ok(n) = v.trim_matches('"').parse::<f32>() {
-                        return Some(n);
-                    }
+                    && let Ok(n) = v.trim_matches('"').parse::<f32>()
+                {
+                    return Some(n);
+                }
             }
             None
         };
@@ -575,6 +580,8 @@ impl LlamaModel {
             rope_base: layer.attention.rope.base,
             #[cfg(feature = "cuda")]
             fused_kernel: None, // Set later via set_fused_kernel() after CUDA init
+            #[cfg(feature = "cuda")]
+            fused_decode_kernel: None, // Set later via set_fused_decode_kernel() after CUDA init
         };
         let feed_forward = FeedForwardDispatch {
             w1: LinearDispatch::new(
@@ -1556,6 +1563,8 @@ impl LlamaModel {
                         rope_base: layer.attention.rope.base,
                         #[cfg(feature = "cuda")]
                         fused_kernel: None,
+                        #[cfg(feature = "cuda")]
+                        fused_decode_kernel: None,
                     };
 
                     let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
@@ -1734,6 +1743,23 @@ impl LlamaModel {
     /// Greedy decode: argmax over logits.
     pub fn argmax_from_logits(logits: &[f32]) -> u32 {
         crate::transformer::argmax(logits)
+    }
+
+    /// Attach a GEMM kernel to all linear layers in the model.
+    /// Call this after loading the model and creating the inference engine.
+    #[cfg(feature = "cuda")]
+    pub fn set_gemm_kernel(&mut self, kernel: Arc<dyn GemmKernel + Send + Sync>) {
+        for layer in &mut self.layers {
+            // Attention projections
+            layer.attention.wq.set_gemm_kernel(kernel.clone());
+            layer.attention.wk.set_gemm_kernel(kernel.clone());
+            layer.attention.wv.set_gemm_kernel(kernel.clone());
+            layer.attention.wo.set_gemm_kernel(kernel.clone());
+            // FFN layers
+            layer.feed_forward.w1.set_gemm_kernel(kernel.clone());
+            layer.feed_forward.w2.set_gemm_kernel(kernel.clone());
+            layer.feed_forward.w3.set_gemm_kernel(kernel.clone());
+        }
     }
 
     /// Generate tokens autoregressively with GPU acceleration support.
