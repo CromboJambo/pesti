@@ -25,6 +25,8 @@ pub enum TokenKind {
     EnumDecl,         // enum Name { variants }
     TraitDecl,        // trait Name { methods }
     ImplBlock,        // impl Trait for Type { ... }
+    UseStmt,          // use std::collections::HashMap;
+    ModDecl,          // mod foo; or pub(crate) mod bar { }
 
     // Control flow
     IfElse,           // if cond { } else { }
@@ -82,14 +84,15 @@ pub enum TokenKind {
     Keyword(String),  // Keywords that aren't structural constructs
 
     // Rust-specific features
-    MacroInvocation,  // macro!(...)
-    Attribute,        // #[derive(...)]
-    Lifetime,         // 'a in &'a T
-    GenericParams,    // <T: Trait>
-    WhereClause,      // where T: Clone
-    AsyncBlock,       // async { }
-    MoveClosure,      // move |x| x + 1
-    Closure,          // |x| x + 1
+    MacroInvocation, // macro!(...)
+    Attribute,       // #[derive(...)]
+    Lifetime,        // 'a in &'a T
+    GenericParams,   // <T: Trait>
+    WhereClause,     // where T: Clone
+    AsyncBlock,      // async { }
+    MoveClosure,     // move |x| x + 1
+    Closure,         // |x| x + 1
+    Punctuator,      // standalone punctuation not part of a larger token
 
     // Visibility and modifiers
     Pub,
@@ -153,18 +156,32 @@ impl StructuralTokenizer {
                 continue;
             }
 
-            // Skip comments
-            if self.is_comment_start(&chars, pos) {
-                let (end_pos, _) = self.skip_comment(&chars, pos);
-                pos = end_pos;
+            // Handle attributes: #[derive(...)], #![allow(...)] - check BEFORE comments
+            // because #![...] contains //! which would otherwise be seen as a doc comment
+            if chars[pos] == '#' {
+                // Check if this is actually an attribute (followed by [ or !)
+                let next_non_ws = self.find_next_non_whitespace(&chars, pos + 1);
+                if next_non_ws < chars.len() && (chars[next_non_ws] == '[' || chars[next_non_ws] == '!') {
+                    let token = self.parse_attribute(&chars, pos)?;
+                    tokens.push(token.clone());
+                    pos = token.span.1;
+                } else {
+                    // Not an attribute — emit as punctuator (e.g., markdown heading in doc comment)
+                    let token = StructuralToken {
+                        kind: TokenKind::Punctuator,
+                        text: "#".to_string(),
+                        span: (pos, pos + 1),
+                    };
+                    tokens.push(token);
+                    pos += 1;
+                }
                 continue;
             }
 
-            // Handle attributes: #[derive(...)], #[allow(...)], etc.
-            if chars[pos] == '#' {
-                let token = self.parse_attribute(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
+            // Skip comments (after attribute check so #![...] isn't misidentified)
+            if self.is_comment_start(&chars, pos) {
+                let (end_pos, _) = self.skip_comment(&chars, pos);
+                pos = end_pos;
                 continue;
             }
 
@@ -219,6 +236,14 @@ impl StructuralTokenizer {
                 pos = token.span.1;
             } else if self.match_keyword(&chars, pos, "continue") {
                 let token = self.parse_continue_expr(&chars, pos)?;
+                tokens.push(token.clone());
+                pos = token.span.1;
+            } else if self.match_keyword(&chars, pos, "use") {
+                let token = self.parse_use_stmt(&chars, pos)?;
+                tokens.push(token.clone());
+                pos = token.span.1;
+            } else if self.match_keyword(&chars, pos, "mod") {
+                let token = self.parse_mod_decl(&chars, pos)?;
                 tokens.push(token.clone());
                 pos = token.span.1;
             } else if chars[pos] == '{' {
@@ -419,6 +444,14 @@ impl StructuralTokenizer {
         pos < chars.len() && (chars[pos].is_whitespace())
     }
 
+    fn find_next_non_whitespace(&self, chars: &[char], start: usize) -> usize {
+        let mut pos = start;
+        while pos < chars.len() && self.is_whitespace(chars, pos) {
+            pos += 1;
+        }
+        pos
+    }
+
     fn parse_attribute(
         &self,
         chars: &[char],
@@ -491,28 +524,50 @@ impl StructuralTokenizer {
         if pos + 1 >= chars.len() {
             return false;
         }
-        (chars[pos] == '/' && chars[pos + 1] == '/') || (chars[pos] == '/' && chars[pos + 1] == '*')
+        // Regular comments: // or /*
+        if (chars[pos] == '/' && chars[pos + 1] == '/') || (chars[pos] == '/' && chars[pos + 1] == '*') {
+            return true;
+        }
+        // Doc line comment: /// or //!
+        if chars[pos] == '/' && pos + 2 < chars.len() && chars[pos + 1] == '/' && chars[pos + 2] == '/' {
+            return true;
+        }
+        if chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '!' {
+            return true;
+        }
+        false
     }
 
     fn skip_comment(&self, chars: &[char], start: usize) -> (usize, String) {
         let mut pos = start;
-        if pos < chars.len() && chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '/' {
-            // Line comment - skip to end of line
+        
+        // Doc line comment: /// or //!
+        if pos + 2 < chars.len() && chars[pos] == '/' && chars[pos + 1] == '/' && chars[pos + 2] == '/' {
+            while pos < chars.len() && chars[pos] != '\n' {
+                pos += 1;
+            }
+        } else if pos < chars.len() && chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '!' {
+            // Inner doc comment //! - skip to end of line
+            while pos < chars.len() && chars[pos] != '\n' {
+                pos += 1;
+            }
+        } else if pos < chars.len() && chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '/' {
+            // Regular line comment
             while pos < chars.len() && chars[pos] != '\n' {
                 pos += 1;
             }
         } else if chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '*' {
-            // Skip block comment
+            // Block or doc block comment: /* */ or /*! */
             while pos < chars.len() && !(chars[pos] == '*' && pos + 1 < chars.len() && chars[pos + 1] == '/') {
                 pos += 1;
             }
             if pos < chars.len() {
-                pos += 2;
+                pos += 2; // Skip */
             }
-        } else {
-            pos = start + 1;
         }
-        (pos, String::new())
+        
+        let text = chars[start..pos].iter().collect();
+        (pos, text)
     }
 
     fn match_keyword(&self, chars: &[char], pos: usize, keyword: &str) -> bool {
@@ -691,6 +746,82 @@ impl StructuralTokenizer {
         Ok(StructuralToken {
             kind: TokenKind::LetStmt,
             text: chars[name_start..pos].iter().collect(),
+            span: (start, pos),
+        })
+    }
+
+    fn parse_use_stmt(
+        &self,
+        chars: &[char],
+        start: usize,
+    ) -> Result<StructuralToken, TokenizeError> {
+        // Skip "use" and any pub(crate) prefix that may have been skipped already
+        let mut pos = start + 3;
+        while self.is_whitespace(&chars, pos) {
+            pos += 1;
+        }
+
+        // Find the semicolon that ends the statement
+        while pos < chars.len() && chars[pos] != ';' {
+            pos += 1;
+        }
+        if pos < chars.len() {
+            pos += 1; // skip ;
+        }
+
+        Ok(StructuralToken {
+            kind: TokenKind::UseStmt,
+            text: chars[start..pos].iter().collect(),
+            span: (start, pos),
+        })
+    }
+
+    fn find_matching_brace(&self, chars: &[char], open_pos: usize) -> usize {
+        let mut pos = open_pos + 1; // skip opening brace
+        let mut depth = 1;
+        while pos < chars.len() && depth > 0 {
+            if chars[pos] == '{' {
+                depth += 1;
+            } else if chars[pos] == '}' {
+                depth -= 1;
+            }
+            pos += 1;
+        }
+        pos - 1 // position of matching closing brace
+    }
+
+    fn parse_mod_decl(
+        &self,
+        chars: &[char],
+        start: usize,
+    ) -> Result<StructuralToken, TokenizeError> {
+        // Skip "mod" and whitespace
+        let mut pos = start + 3;
+        while self.is_whitespace(&chars, pos) {
+            pos += 1;
+        }
+
+        // If followed by '{', it's a block mod — skip the whole block
+        if chars[pos] == '{' {
+            let end = self.find_matching_brace(chars, pos);
+            return Ok(StructuralToken {
+                kind: TokenKind::ModDecl,
+                text: chars[start..end].iter().collect(),
+                span: (start, end),
+            });
+        }
+
+        // Otherwise it's `mod name;` — find the semicolon
+        while pos < chars.len() && chars[pos] != ';' {
+            pos += 1;
+        }
+        if pos < chars.len() {
+            pos += 1; // skip ;
+        }
+
+        Ok(StructuralToken {
+            kind: TokenKind::ModDecl,
+            text: chars[start..pos].iter().collect(),
             span: (start, pos),
         })
     }
