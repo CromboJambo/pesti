@@ -1,0 +1,131 @@
+// Fused GEMM + SwiGLU activation kernel for transformer FFN layers.
+//
+// Computes: y = SwiGLU(x @ W^T) where SwiGLU(z) = silu(z[:half]) * z[half:]
+// in a single kernel launch, eliminating the intermediate tensor write
+// between GEMM and activation kernels.
+//
+// Input layout: x is [batch_size, embed_dim] row-major F32 on device
+//              W is [out_features*2, embed_dim] projection weights on device (F16)
+// Output: y is [batch_size, out_features] F32 on device
+
+.version 8.0
+.target sm_89
+.address_size 64
+
+.entry fused_gemm_swiglu_kernel(
+    .param .f32 x[],
+    .param .u16 w[],
+    .param .f32 y[],
+    .param .i32 embed_dim,
+    .param .i32 out_features,
+    .param .i32 batch_size
+) {
+    .reg .f32 x_val;
+    .reg .f16 w_elem;
+    .reg .f32 z_acc_a;
+    .reg .f32 z_acc_b;
+    .reg .f32 silu_a;
+    .reg .f32 y_val;
+
+    // Load parameters
+    ld.param.f32 x, [x];
+    ld.param.u16 w, [w];
+    ld.param.f32 y, [y];
+    ld.param.i32 embed_dim, [embed_dim];
+    ld.param.i32 out_features, [out_features];
+    ld.param.i32 batch_size, [batch_size];
+
+    // Each thread block handles one output row (one position in batch)
+    .reg .u32 tid;
+    mov.u32 tid, %tid.x;
+    
+    .reg .u32 bid;
+    mov.u32 bid, %ctaid.x;
+
+    if (bid >= batch_size) {
+        ret;
+    }
+
+    // Each thread computes two output elements: z_a[i] and z_b[i+half]
+    // where half = out_features/2
+    .reg .i32 half;
+    sra.s32 half, out_features, 1;
+
+    if (tid < out_features) {
+        // Compute z_a = x @ W_a^T (first half of output features)
+        z_acc_a = 0.0f;
+        
+        .reg .i32 i;
+        for (i = 0; i < embed_dim; i++) {
+            // Load x[bid, i]
+            .reg .u64 addr_x;
+            mad.lo.u32 tmp, bid, embed_dim, i;
+            mul.wide.u32 off, tmp, 4;
+            add.s64 addr_x, x, off;
+            
+            ld.global.f32 x_val, [addr_x];
+            
+            // Load W_a[tid, i] (F16) - first half of projection weights
+            .reg .u64 addr_w;
+            mad.lo.u32 tmp2, tid, embed_dim, i;
+            mul.wide.u32 woff, tmp2, 2;
+            add.s64 addr_w, w, woff;
+            ld.global.u16 w_elem, [addr_w];
+            
+            // FMA into accumulator for z_a
+            fma.rn.f32 z_acc_a, x_val, w_elem, z_acc_a;
+        }
+
+        // Compute z_b = x @ W_b^T (second half of output features)
+        z_acc_b = 0.0f;
+        
+        for (i = 0; i < embed_dim; i++) {
+            // Load x[bid, i] again
+            .reg .u64 addr_x2;
+            mad.lo.u32 tmp3, bid, embed_dim, i;
+            mul.wide.u32 off2, tmp3, 4;
+            add.s64 addr_x2, x, off2;
+            
+            ld.global.f32 x_val, [addr_x2];
+            
+            // Load W_b[tid+half, i] (F16) - second half of projection weights
+            .reg .u64 addr_w2;
+            mad.lo.u32 tmp4, tid + half, embed_dim, i;
+            mul.wide.u32 woff2, tmp4, 2;
+            add.s64 addr_w2, w, woff2;
+            ld.global.u16 w_elem, [addr_w2];
+            
+            // FMA into accumulator for z_b
+            fma.rn.f32 z_acc_b, x_val, w_elem, z_acc_b;
+        }
+
+        // Compute silu(z_a) = z_a * sigmoid(z_a)
+        // sigmoid(x) = 1 / (1 + exp(-x))
+        .reg .f32 neg_z;
+        neg.f32 neg_z, z_acc_a;
+        
+        .reg .f32 exp_neg_z;
+        ex2.approx.ftz.f32 exp_neg_z, neg_z;
+        
+        .reg .f32 one_plus_exp;
+        add.f32 one_plus_exp, 1.0f, exp_neg_z;
+        
+        .reg .f32 sigmoid_val;
+        div.f32 sigmoid_val, 1.0f, one_plus_exp;
+        
+        mul.f32 silu_a, z_acc_a, sigmoid_val;
+
+        // Compute y = silu(z_a) * z_b
+        mul.f32 y_val, silu_a, z_acc_b;
+
+        // Store result as F32
+        .reg .u64 addr_y;
+        mad.lo.u32 tmp5, bid, out_features, tid;
+        mul.wide.u32 yoff, tmp5, 4;
+        add.s64 addr_y, y, yoff;
+        
+        st.global.f32 [addr_y], y_val;
+    }
+
+    ret;
+}
