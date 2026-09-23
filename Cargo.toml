@@ -5,6 +5,7 @@ members = [
     "pesti-safetensors",
     "pesti-gguf-cli",
     "crates/qwen2-bpe",
+    "crates/pesti-structural-tokenizer",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"
@@ -29,6 +30,7 @@ description = "Portable Execution Substrate for Transformer Inference"
 [workspace.dependencies]
 # GGUF parser
 pesti-gguf = "0.2.4"
+pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
 # Plugin system (llm-plug-in package)
 pesti-plug-in = { path = "llm-plug-in" }
 # Safetensors support

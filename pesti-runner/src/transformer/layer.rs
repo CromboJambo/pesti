@@ -214,6 +214,7 @@ impl Attention {
         let mut k_rotated = k_proj.clone();
 
         // Use GPU RoPE kernel if available, otherwise fall back to CPU.
+        #[cfg(feature = "cuda")]
         if let Some(ref rope_kernel) = self.rope_kernel {
             let _ = rope_kernel.apply(&mut q, &mut k_rotated, self.num_heads, 1, pos);
         } else {

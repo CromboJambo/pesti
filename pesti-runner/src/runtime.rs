@@ -442,11 +442,11 @@ impl Runtime {
             seed: Some(42),
         };
         #[cfg(not(feature = "cuda"))]
-        let _sampling_config = crate::transformer_stub::SamplingConfig {
+        let _sampling_config = crate::transformer::SamplingConfig {
             temperature: 0.7,
             top_k: 50,
             top_p: 0.95,
-            seed: 42,
+            seed: Some(42),
         };
         let _rng = StdRng::seed_from_u64(42);
 

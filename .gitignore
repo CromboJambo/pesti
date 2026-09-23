@@ -55,3 +55,4 @@ scratch/
 # Temporary diagnostic examples (move to git history or delete when no longer needed)
 # Keep only: coherence_check.rs, probe_input_dep.rs, probe_layer_diff.rs
 # Delete: debug_*.rs (legacy), probe_*.rs (replaced by Week 15 probes), hermes-*.rs (Hermes-specific)
+docs/

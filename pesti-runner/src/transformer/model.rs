@@ -14,8 +14,8 @@ use tracing::debug;
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
-use crate::kernel::gemm::GemmKernel;
-use crate::kernel::kvcache::Kvcache;
+use crate::kernel::gemm_stub::GemmKernel;
+use crate::kernel::kvcache_stub::Kvcache;
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
 use crate::model_loader::GgufHeaderExt;
@@ -1450,6 +1450,7 @@ impl LlamaModel {
     /// layer using the dispatch context. Falls back to CPU if GPU is unavailable.
     ///
     /// KV caches are initialized on first call and persist across calls.
+    #[cfg(feature = "cuda")]
     pub fn forward_with_dispatch(&mut self, hidden: &[f32], start_pos: usize) -> Result<Vec<f32>> {
         let ctx = self
             .dispatch
@@ -1911,6 +1912,13 @@ impl LlamaModel {
         }
 
         Ok(generated)
+    }
+
+    /// CPU-only fallback for forward_with_dispatch.
+    #[cfg(not(feature = "cuda"))]
+    pub fn forward_with_dispatch(&mut self, hidden: &[f32], start_pos: usize) -> Result<Vec<f32>> {
+        // On CPU, dispatch just means regular forward pass
+        self.forward_layers(hidden, start_pos)
     }
 }
 

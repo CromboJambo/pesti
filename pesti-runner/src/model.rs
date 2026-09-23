@@ -149,7 +149,7 @@ pub struct Model {
     #[cfg(feature = "cuda")]
     pub llama_model: crate::transformer::LlamaModel,
     #[cfg(not(feature = "cuda"))]
-    pub llama_model: crate::transformer_stub::LlamaModel,
+    pub llama_model: crate::transformer::LlamaModel,
     /// Whether to use the dispatch system (GPU-accelerated path).
     pub use_dispatch: bool,
 }
@@ -203,16 +203,36 @@ impl Model {
                 dispatch: None,
                 kv_caches: None,
                 cpu_kv_caches: None,
-                #[cfg(feature = "cuda")]
-                q4k_kvcache: None,
                 capture_per_layer: None,
-                #[cfg(feature = "cuda")]
-                dispatch_layers: None,
-                #[cfg(feature = "cuda")]
-                output_weight_t_gpu: None,
             },
             #[cfg(not(feature = "cuda"))]
-            llama_model: crate::transformer_stub::LlamaModel::default(),
+            llama_model: crate::transformer::LlamaModel {
+                config: crate::transformer::LlamaConfig {
+                    arch: crate::transformer::ModelArch::default(),
+                    num_layers: 32,
+                    num_heads: 32,
+                    num_kv_heads: 8,
+                    head_dim: 64,
+                    embed_dim: 4096,
+                    intermediate_dim: 11008,
+                    max_seq_len: 4096,
+                    rope_base: 10000.0,
+                    rope_scaling_factor: None,
+                    rope_scaling_type: None,
+                    rms_norm_eps: 1e-5,
+                },
+                token_embeddings: None,
+                output: None,
+                final_norm: None,
+                layers: vec![],
+                vocab_size: 32000,
+                tokenizer: None,
+                tokenizer_config: None,
+                dispatch: None,
+                kv_caches: None,
+                cpu_kv_caches: None,
+                capture_per_layer: None,
+            },
             use_dispatch: false,
         }
     }
@@ -261,7 +281,7 @@ impl Model {
 #[cfg(not(feature = "cuda"))]
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 #[cfg(not(feature = "cuda"))]
-use crate::transformer_stub::{GgufTokenizerConfig, TokenizerBackend, load_tokenizer_from_gguf};
+use crate::transformer::{GgufTokenizerConfig, TokenizerBackend, load_tokenizer_from_gguf};
 #[cfg(not(feature = "cuda"))]
 use std::path::Path;
 
@@ -283,7 +303,7 @@ pub struct CpuModel {
     /// Whether dispatch is enabled
     pub use_dispatch: bool,
     /// Tokenizer for encoding/decoding text to tokens
-    pub tokenizer: Option<tokenizers::Tokenizer>,
+    pub tokenizer: Option<crate::transformer::tokenizer::PestiTokenizer>,
     /// Tokenizer configuration extracted from GGUF
     pub tokenizer_config: Option<GgufTokenizerConfig>,
     /// Model configuration (for forward pass)
@@ -511,10 +531,10 @@ impl CpuModel {
         })?;
 
         let encoding = tokenizer
-            .encode(text, true)
+            .encode(text)
             .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Encoding error: {}", e)))?;
 
-        Ok(encoding.get_ids().to_vec())
+        Ok(encoding)
     }
 
     /// Decode token IDs to text.
@@ -525,7 +545,7 @@ impl CpuModel {
 
         // tokenizers library expects Vec<u32>, we already have Vec<u32>
         let encoding = tokenizer
-            .decode(tokens, true)
+            .decode(tokens)
             .map_err(|e| crate::error::RunnerError::Tokenizer(format!("Decoding error: {}", e)))?;
 
         Ok(encoding)

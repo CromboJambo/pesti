@@ -3,13 +3,17 @@
 //! Computes: silu(gate) * up where silu(x) = x * sigmoid(x)
 //! Element-wise operation, trivially parallelizable.
 
+#[cfg(feature = "cuda")]
 use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
+#[cfg(feature = "cuda")]
 use std::sync::Arc;
 
 /// GPU SwiGLU activation kernel.
+#[cfg(feature = "cuda")]
 pub struct CudaSwigluKernel {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
@@ -17,11 +21,13 @@ pub struct CudaSwigluKernel {
 }
 
 /// Builder for CudaSwigluKernel that handles PTX loading.
+#[cfg(feature = "cuda")]
 pub struct CudaSwigluKernelBuilder {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
 }
 
+#[cfg(feature = "cuda")]
 impl CudaSwigluKernelBuilder {
     pub fn new(context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Self {
         Self { context, stream }
@@ -46,6 +52,7 @@ impl CudaSwigluKernelBuilder {
     }
 }
 
+#[cfg(feature = "cuda")]
 impl CudaSwigluKernel {
     /// Compute SwiGLU activation on GPU.
     ///

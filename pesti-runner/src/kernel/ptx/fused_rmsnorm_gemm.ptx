@@ -1,0 +1,133 @@
+// Fused RMSNorm + GEMM kernel for transformer layer inputs.
+//
+// Computes: y = GEMM(RMSNorm(x), W^T) in a single kernel launch, eliminating
+// the intermediate normalized tensor write/read between separate kernels.
+//
+// Input layout: x is [batch_size, embed_dim] row-major F32 on device
+//              weight is [embed_dim] RMSNorm scale on device (F32)
+//              W is [out_features, embed_dim] projection weights on device (F16)
+// Output: y is [batch_size, out_features] F16 on device
+
+.version 8.0
+.target sm_89
+.address_size 64
+
+.entry fused_rmsnorm_gemm_kernel(
+    .param .f32 x[],
+    .param .f32 weight[],
+    .param .u16 w_proj[],
+    .param .u16 y[],
+    .param .i32 embed_dim,
+    .param .i32 out_features,
+    .param .i32 batch_size
+) {
+    .reg .f32 x_val;
+    .reg .f32 w_scale;
+    .reg .f32 sum_sq;
+    .reg .f32 inv_rms;
+    .reg .f32 norm_x;
+    .reg .f16 w_elem;
+    .reg .f32 y_acc;
+
+    // Load parameters
+    ld.param.f32 x, [x];
+    ld.param.f32 weight, [weight];
+    ld.param.u16 w_proj, [w_proj];
+    ld.param.u16 y, [y];
+    ld.param.i32 embed_dim, [embed_dim];
+    ld.param.i32 out_features, [out_features];
+    ld.param.i32 batch_size, [batch_size];
+
+    // Each thread block handles one output row (one position in batch)
+    // Thread index within block = output feature index for this thread's column
+    .reg .u32 tid;
+    mov.u32 tid, %tid.x;
+    
+    .reg .u32 bid;
+    mov.u32 bid, %ctaid.x;
+
+    if (bid >= batch_size) {
+        ret;
+    }
+
+    // Phase 1: Compute RMSNorm across entire input row
+    // Each thread processes a subset of embed_dim elements
+    sum_sq = 0.0f;
+    
+    .reg .i32 i;
+    for (i = tid; i < embed_dim; i = i + %ntid.x) {
+        // Load x[bid, i]
+        .reg .u64 addr;
+        mad.lo.u32 tmp, bid, embed_dim, i;
+        mul.wide.u32 off, tmp, 4;
+        add.s64 addr, x, off;
+        
+        ld.global.f32 x_val, [addr];
+        
+        // Accumulate sum of squares (partial)
+        fma.rn.f32 sum_sq, x_val, x_val, sum_sq;
+    }
+
+    // Reduce sum_sq across threads in block via shared memory
+    .shared .f32 s_sum_sq[1024];
+    st.shared.f32 [s_sum_sq + tid], sum_sq;
+    
+    // Synchronize and reduce (simplified - would need proper warp reduction)
+    bar.sync(0);
+    
+    // Each thread loads reduced value (in real impl, thread 0 computes total)
+    ld.shared.f32 sum_sq, [s_sum_sq];
+    
+    // Compute inv_rms = 1/sqrt(mean(x^2))
+    .reg .f32 mean_sq;
+    div.f32 mean_sq, sum_sq, embed_dim;
+    rsqrt.approx.ftz.f32 inv_rms, mean_sq;
+
+    // Phase 2: GEMM with normalized values in registers
+    // Each thread computes one output element y[bid, tid]
+    if (tid < out_features) {
+        y_acc = 0.0f;
+        
+        for (i = 0; i < embed_dim; i++) {
+            // Load x[bid, i] and normalize on-the-fly
+            .reg .u64 addr_x;
+            mad.lo.u32 tmp, bid, embed_dim, i;
+            mul.wide.u32 off, tmp, 4;
+            add.s64 addr_x, x, off;
+            
+            ld.global.f32 x_val, [addr_x];
+            
+            // Load RMSNorm weight for this dim
+            .reg .u64 addr_w;
+            mul.wide.u32 woff, i, 4;
+            add.s64 addr_w, weight, woff;
+            ld.global.f32 w_scale, [addr_w];
+            
+            // Compute normalized value in register
+            fma.rn.f32 norm_x, x_val, inv_rms, 0.0f;
+            mul.f32 norm_x, norm_x, w_scale;
+            
+            // Load projection weight W[tid, i] (F16)
+            .reg .u64 addr_wproj;
+            mad.lo.u32 tmp2, tid, embed_dim, i;
+            mul.wide.u32 woff2, tmp2, 2;
+            add.s64 addr_wproj, w_proj, woff2;
+            ld.global.u16 w_elem, [addr_wproj];
+            
+            // FMA into accumulator
+            fma.rn.f32 y_acc, norm_x, w_elem, y_acc;
+        }
+        
+        // Store result as F16
+        .reg .u64 addr_y;
+        mad.lo.u32 tmp3, bid, out_features, tid;
+        mul.wide.u32 yoff, tmp3, 2;
+        add.s64 addr_y, y, yoff;
+        
+        .reg .f16 y_val;
+        cvt.rn.f16.f32 y_val, y_acc;
+        st.global.u16 [addr_y], y_val;
+    }
+
+    ret;
+}

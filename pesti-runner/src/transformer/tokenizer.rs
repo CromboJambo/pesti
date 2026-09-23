@@ -27,6 +27,8 @@ pub enum TokenizerBackend {
     MistralRs,
     /// Use pure Rust qwen2-bpe implementation
     Qwen2Bpe,
+    /// Use PESTI's structural Rust tokenizer (syntax-boundary encoding)
+    StructuralRust,
 }
 
 #[cfg(feature = "rust-tokenizer")]
@@ -56,6 +58,8 @@ pub enum PestiTokenizer {
     /// Pure Rust qwen2-bpe backend (feature-gated)
     #[cfg(feature = "rust-tokenizer")]
     Qwen2Bpe(RustTokenizer),
+    /// PESTI structural Rust tokenizer (syntax-boundary encoding)
+    StructuralRust(pesti_structural_tokenizer::StructuralTokenizer),
 }
 
 impl PestiTokenizer {
@@ -78,6 +82,12 @@ impl PestiTokenizer {
                     "rust-tokenizer feature not enabled, falling back to GGUF-extracted tokenizer"
                 );
                 Ok(Self::MistralRs(Self::load_mistralrs_tokenizer(header)?))
+            }
+
+            TokenizerBackend::StructuralRust => {
+                debug!("Loading PESTI structural Rust tokenizer");
+                let tokenizer = pesti_structural_tokenizer::StructuralTokenizer::new();
+                Ok(Self::StructuralRust(tokenizer))
             }
         }
     }
@@ -216,6 +226,98 @@ impl PestiTokenizer {
             Self::Qwen2Bpe(inner) => inner
                 .encode(text)
                 .map_err(|e| RunnerError::Tokenizer(e.to_string())),
+
+            Self::StructuralRust(inner) => {
+                let tokens = inner.tokenize(text).map_err(|e| {
+                    RunnerError::Tokenizer(format!("Structural tokenization failed: {}", e))
+                })?;
+                // Map each structural token to a unique ID based on its kind
+                let ids: Vec<u32> = tokens
+                    .iter()
+                    .map(|t| Self::token_kind_to_id(&t.kind))
+                    .collect();
+                Ok(ids)
+            }
+        }
+    }
+
+    /// Map a TokenKind to a unique numeric ID for the model.
+    pub fn token_kind_to_id(kind: &pesti_structural_tokenizer::TokenKind) -> u32 {
+        use pesti_structural_tokenizer::TokenKind;
+        match kind {
+            // Declarations (0-5)
+            TokenKind::FnDecl => 0,
+            TokenKind::LetStmt => 1,
+            TokenKind::StructDecl => 2,
+            TokenKind::EnumDecl => 3,
+            TokenKind::TraitDecl => 4,
+            TokenKind::ImplBlock => 5,
+            // Control flow (6-12)
+            TokenKind::IfElse => 6,
+            TokenKind::WhileLoop => 7,
+            TokenKind::ForLoop => 8,
+            TokenKind::MatchExpr => 9,
+            TokenKind::ReturnExpr => 10,
+            TokenKind::BreakExpr => 11,
+            TokenKind::ContinueExpr => 12,
+            // Expressions & operations (13-18)
+            TokenKind::CallExpr => 13,
+            TokenKind::FieldAccess => 14,
+            TokenKind::MethodCall => 15,
+            TokenKind::BinaryOp => 16,
+            TokenKind::UnaryOp => 17,
+            TokenKind::ParenExpr => 18,
+            // Literals (19-26)
+            TokenKind::IntLit => 19,
+            TokenKind::FloatLit => 20,
+            TokenKind::StrLit => 21,
+            TokenKind::CharLit => 22,
+            TokenKind::BoolLit => 23,
+            TokenKind::ByteLit => 24,
+            TokenKind::ArrayLit => 25,
+            TokenKind::TupleLit => 26,
+            // Slice expression (27)
+            TokenKind::SliceExpr => 27,
+            // Types & casts (28-31)
+            TokenKind::TypeAnnotation => 28,
+            TokenKind::CastExpr => 29,
+            TokenKind::Dereference => 30,
+            TokenKind::Reference => 31,
+            // Blocks and delimiters (32-45)
+            TokenKind::BlockStart => 32,
+            TokenKind::BlockEnd => 33,
+            TokenKind::ParenOpen => 34,
+            TokenKind::ParenClose => 35,
+            TokenKind::BraceOpen => 36,
+            TokenKind::BraceClose => 37,
+            TokenKind::BracketOpen => 38,
+            TokenKind::BracketClose => 39,
+            TokenKind::Semicolon => 40,
+            TokenKind::Comma => 41,
+            TokenKind::Colon => 42,
+            TokenKind::Dot => 43,
+            TokenKind::Arrow => 44,
+            TokenKind::FatArrow => 45,
+            // Identifiers and names (46-47)
+            TokenKind::Ident(_) => 46,
+            TokenKind::Keyword(_) => 47,
+            // Rust-specific features (48-55)
+            TokenKind::MacroInvocation => 48,
+            TokenKind::Attribute => 49,
+            TokenKind::Lifetime => 50,
+            TokenKind::GenericParams => 51,
+            TokenKind::WhereClause => 52,
+            TokenKind::AsyncBlock => 53,
+            TokenKind::MoveClosure => 54,
+            TokenKind::Closure => 55,
+            // Visibility and modifiers (56-60)
+            TokenKind::Pub => 56,
+            TokenKind::Private => 57,
+            TokenKind::Static => 58,
+            TokenKind::Const => 59,
+            TokenKind::Mut => 60,
+            // Other (61+)
+            _ => 61,
         }
     }
 
@@ -234,6 +336,12 @@ impl PestiTokenizer {
             Self::Qwen2Bpe(inner) => inner
                 .decode(tokens)
                 .map_err(|e| RunnerError::Tokenizer(e.to_string())),
+
+            // Structural tokenizer doesn't decode back to source text.
+            // Return placeholder text indicating structural tokens.
+            Self::StructuralRust(_) => {
+                Ok(format!("[structural: {} token(s)]", tokens.len()))
+            }
         }
     }
 
@@ -244,6 +352,9 @@ impl PestiTokenizer {
 
             #[cfg(feature = "rust-tokenizer")]
             Self::Qwen2Bpe(inner) => inner.vocab_size(),
+
+            // Structural tokenizer has a fixed vocabulary of 62 token kinds.
+            Self::StructuralRust(_) => 62,
         }
     }
 }

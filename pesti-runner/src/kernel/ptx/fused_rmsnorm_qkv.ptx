@@ -1,0 +1,99 @@
+// Fused RMSNorm + QKV Projection Kernel
+// Computes: q = RMSNorm(x) @ Wq^T, k = RMSNorm(x) @ Wk^T, v = RMSNorm(x) @ Wv^T
+// in a single kernel pass. RMSNorm is computed on-the-fly per thread block.
+//
+// Input layout: x is [batch, embed_dim] row-major F32 on device
+//              weight is [embed_dim] RMSNorm scale on device (F32)
+//              wq is [embed_dim, embed_dim] projection weights on device (F16)
+//              wk is [embed_dim, embed_dim] projection weights on device (F16)
+//              wv is [embed_dim, embed_dim] projection weights on device (F16)
+// Output: qkv is [batch, 3*embed_dim] F16 on device (q||k||v concatenated)
+
+#include "cuda_fp16.h"
+
+__device__ __forceinline__ float rmsnorm_compute(float x, float inv_rms, float scale) {
+    return fmaf(x, inv_rms, 0.0f) * scale;
+}
+
+extern "C" __global__ void fused_rmsnorm_qkv_kernel(
+    const float* __restrict__ x,
+    const float* __restrict__ weight,
+    const half* __restrict__ wq,
+    const half* __restrict__ wk,
+    const half* __restrict__ wv,
+    half* __restrict__ qkv_out,
+    int embed_dim,
+    int batch_size)
+{
+    // Each block handles one output row (one input sequence position)
+    int row = blockIdx.x;
+    if (row >= batch_size) return;
+
+    const float* x_row = x + row * embed_dim;
+    half* q_out = qkv_out + row * 3 * embed_dim;
+    half* k_out = q_out + embed_dim;
+    half* v_out = k_out + embed_dim;
+
+    // Compute RMSNorm for this row (all threads cooperate)
+    float sum_sq = 0.0f;
+    for (int i = threadIdx.x; i < embed_dim; i += blockDim.x) {
+        float val = x_row[i];
+        sum_sq += val * val;
+    }
+
+    // Reduce within block
+    __shared__ float shared_sum[1024];
+    shared_sum[threadIdx.x] = sum_sq;
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        float total = 0.0f;
+        for (int i = 0; i < blockDim.x; i++) {
+            total += shared_sum[i];
+        }
+        float inv_rms = rsqrtf(total / embed_dim + 1e-6f);
+        // Write inv_rms to shared memory for all threads to read
+        shared_sum[0] = inv_rms;
+    }
+    __syncthreads();
+
+    float inv_rms = shared_sum[0];
+
+    // Now compute each projection: q, k, v
+    // Each thread computes one output element
+    int col_q = threadIdx.x;
+    if (col_q < embed_dim) {
+        // Compute q[col] = sum_i(norm_x[i] * wq[i][col])
+        float dot_q = 0.0f;
+        for (int i = 0; i < embed_dim; i++) {
+            float norm_val = rmsnorm_compute(x_row[i], inv_rms, weight[i]);
+            half w = __ldg(wq + i * embed_dim + col_q);
+            dot_q += norm_val * __half2float(w);
+        }
+        q_out[col_q] = __float2half(dot_q);
+    }
+
+    int col_k = threadIdx.x;
+    if (col_k < embed_dim) {
+        // Compute k[col] = sum_i(norm_x[i] * wk[i][col])
+        float dot_k = 0.0f;
+        for (int i = 0; i < embed_dim; i++) {
+            float norm_val = rmsnorm_compute(x_row[i], inv_rms, weight[i]);
+            half w = __ldg(wk + i * embed_dim + col_k);
+            dot_k += norm_val * __half2float(w);
+        }
+        k_out[col_k] = __float2half(dot_k);
+    }
+
+    int col_v = threadIdx.x;
+    if (col_v < embed_dim) {
+        // Compute v[col] = sum_i(norm_x[i] * wv[i][col])
+        float dot_v = 0.0f;
+        for (int i = 0; i < embed_dim; i++) {
+            float norm_val = rmsnorm_compute(x_row[i], inv_rms, weight[i]);
+            half w = __ldg(wv + i * embed_dim + col_v);
+            dot_v += norm_val * __half2float(w);
+        }
+        v_out[col_v] = __float2half(dot_v);
+    }
+}

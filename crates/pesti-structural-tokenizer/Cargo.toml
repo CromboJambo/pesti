@@ -1,0 +1,19 @@
+[package]
+name = "pesti-structural-tokenizer"
+version = "0.1.0"
+edition = "2024"
+description = "Structural tokenizer for Rust source code targeting LLM efficiency"
+license = "MIT"
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tiktoken-rs.workspace = true
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"

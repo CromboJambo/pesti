@@ -6,7 +6,7 @@ use crate::peft::Adapter;
 use crate::transformer::LlamaModel;
 
 #[cfg(not(feature = "cuda"))]
-use crate::transformer_stub::LlamaModel;
+use crate::transformer::LlamaModel;
 
 use super::callbacks::{Callback, Callbacks};
 use super::config::{OptimizerConfig, TrainingConfig};
