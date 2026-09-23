@@ -8,6 +8,7 @@ edition = "2024"
 pesti-gguf.workspace = true
 pesti-plug-in.workspace = true
 pesti-safetensors.workspace = true
+pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
 
 # Tokenizers - using tokenizers crate with ByteLevel BPE config
 tokenizers = { workspace = true, features = ["fancy-regex"] }
