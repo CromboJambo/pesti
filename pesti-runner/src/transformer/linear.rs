@@ -12,7 +12,7 @@
 #![allow(clippy::redundant_closure)]
 
 use crate::kernel::device_buf::DeviceBuffer;
-use crate::kernel::gemm::{CpuGemmKernel, GemmArch, GemmKernel};
+use crate::kernel::{CpuGemmKernel, GemmArch, GemmKernel};
 use half::f16;
 use std::sync::Arc;
 

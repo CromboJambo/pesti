@@ -114,7 +114,6 @@ pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
 #[cfg(feature = "cuda")]
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
-#[cfg(feature = "cuda")]
 pub mod rope;
 pub mod rmsnorm;
 pub mod slow_friend;
@@ -178,6 +177,8 @@ pub use q4k_kvcache::Q4KVCache;
 pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
 #[cfg(feature = "cuda")]
 pub use rope::{CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel, rope_cpu};
+#[cfg(not(feature = "cuda"))]
+pub use rope::{apply_rope_cpu, RopeKernel};
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]

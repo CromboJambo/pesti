@@ -44,11 +44,8 @@ pub mod safetensors_weight_loader;
 pub mod tier;
 pub mod tile_dequant; // Tile-by-tile dequantization for memory efficiency
 pub mod tokenizer;
-#[cfg(feature = "cuda")]
 pub mod transformer;
 pub mod transformer_cpu;
-#[cfg(not(feature = "cuda"))]
-pub mod transformer_stub;
 pub mod trl; // TRL-like training orchestrator
 pub mod unsloth; // Unsloth-style efficient training optimizations
 pub mod unsloth_client; // Unsloth Studio SDK bridge (sync version)
@@ -107,7 +104,7 @@ pub use transformer::{
     load_tokenizer_from_gguf, sample,
 };
 #[cfg(not(feature = "cuda"))]
-pub use transformer_stub::{
+pub use transformer::{
     GgufTokenizerConfig, LlamaModel, SamplingConfig, TokenizerBackend, argmax,
     load_tokenizer_from_gguf, sample,
 };

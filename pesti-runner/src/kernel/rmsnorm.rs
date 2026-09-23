@@ -3,13 +3,17 @@
 //! Computes: output[i] = weight[i] * x[i] / sqrt(mean(x^2) + eps)
 //! Row-wise normalization, each row processed by a block.
 
+#[cfg(feature = "cuda")]
 use crate::cuda_shim::{CudaFunction, CudaModule};
 use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
 use cudarc::driver::safe::{CudaContext, CudaStream};
 use half::f16;
+#[cfg(feature = "cuda")]
 use std::sync::Arc;
 
 /// GPU RMSNorm kernel.
+#[cfg(feature = "cuda")]
 pub struct CudaRmsnormKernel {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
@@ -17,11 +21,13 @@ pub struct CudaRmsnormKernel {
 }
 
 /// Builder for CudaRmsnormKernel that handles PTX loading.
+#[cfg(feature = "cuda")]
 pub struct CudaRmsnormKernelBuilder {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
 }
 
+#[cfg(feature = "cuda")]
 impl CudaRmsnormKernelBuilder {
     pub fn new(context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Self {
         Self { context, stream }
@@ -46,6 +52,7 @@ impl CudaRmsnormKernelBuilder {
     }
 }
 
+#[cfg(feature = "cuda")]
 impl CudaRmsnormKernel {
     /// Apply RMSNorm on GPU.
     ///

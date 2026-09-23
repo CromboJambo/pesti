@@ -16,7 +16,7 @@ pub use rope::RopeConfig;
 pub use swiglu::SwiGLUFFN;
 
 // Re-export argmax from transformer_stub to avoid duplicate (already exported in lib.rs)
-// pub use crate::transformer_stub::argmax; // Disabled - causes duplicate export
+// pub use crate::transformer::argmax; // Disabled - causes duplicate export
 
 /// CPU-only transformer model with full forward pass.
 ///
@@ -138,7 +138,7 @@ impl CpuTransformerModel {
 #[cfg(feature = "cuda")]
 pub use crate::transformer::argmax;
 #[cfg(not(feature = "cuda"))]
-pub use crate::transformer_stub::argmax;
+pub use crate::transformer::argmax;
 
 /// Softmax sampling with temperature.
 pub fn sample_with_temp(logits: &[f32], temp: f32, _rng: &mut rand::rngs::StdRng) -> u32 {

@@ -3,10 +3,12 @@
 //! Applies rotary embeddings to query and key vectors in-place.
 //! Each thread handles one rotation pair across all sequence positions and heads.
 
+#[cfg(feature = "cuda")]
 use crate::cuda_shim::{CudaFunction, CudaModule};
+#[cfg(feature = "cuda")]
 use crate::kernel::device_buf::DeviceBuffer;
+#[cfg(feature = "cuda")]
 use cudarc::driver::safe::{CudaContext, CudaStream};
-use half::f16;
 use std::sync::Arc;
 
 /// Trait for RoPE kernels (GPU or CPU implementations).
@@ -23,6 +25,7 @@ pub trait RopeKernel: Send + Sync {
     ) -> Result<(), String>;
 }
 
+#[cfg(feature = "cuda")]
 /// GPU RoPE kernel.
 pub struct CudaRopeKernel {
     context: Arc<CudaContext>,
@@ -30,12 +33,14 @@ pub struct CudaRopeKernel {
     function: CudaFunction,
 }
 
+#[cfg(feature = "cuda")]
 /// Builder for CudaRopeKernel that handles PTX loading.
 pub struct CudaRopeKernelBuilder {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
 }
 
+#[cfg(feature = "cuda")]
 impl CudaRopeKernelBuilder {
     pub fn new(context: Arc<CudaContext>, stream: Arc<CudaStream>) -> Self {
         Self { context, stream }
@@ -60,11 +65,9 @@ impl CudaRopeKernelBuilder {
     }
 }
 
+#[cfg(feature = "cuda")]
 impl CudaRopeKernel {
     /// Apply RoPE to query and key tensors in-place on GPU.
-    ///
-    /// q: [batch, seq_len, num_heads, head_dim] flattened row-major f32
-    /// k: [batch, seq_len, num_heads, head_dim] flattened row-major f32
     pub fn apply_gpu(
         &self,
         q: &mut DeviceBuffer<f32>,
@@ -152,14 +155,14 @@ impl RopeKernel for CpuRopeKernel {
         start_pos: usize,
     ) -> Result<(), String> {
         let head_dim = q.len() / (num_heads * seq_len);
-        rope_cpu(q, num_heads, seq_len, start_pos, head_dim, self.base);
-        rope_cpu(k, num_heads, seq_len, start_pos, head_dim, self.base);
+        apply_rope_cpu(q, num_heads, seq_len, start_pos, head_dim, self.base);
+        apply_rope_cpu(k, num_heads, seq_len, start_pos, head_dim, self.base);
         Ok(())
     }
 }
 
 /// CPU reference implementation for conformance testing.
-pub fn rope_cpu(
+pub fn apply_rope_cpu(
     data: &mut [f32],
     num_heads: usize,
     seq_len: usize,
@@ -199,13 +202,13 @@ mod tests {
     fn test_rope_cpu_known_values() {
         // RoPE at position 0 should be identity (cos(0)=1, sin(0)=0)
         let mut data = vec![1.0, 2.0, 3.0, 4.0];
-        rope_cpu(&mut data, 1, 1, 0, 4, 10000.0);
+        apply_rope_cpu(&mut data, 1, 1, 0, 4, 10000.0);
         assert!((data[0] - 1.0).abs() < 1e-6);
         assert!((data[1] - 2.0).abs() < 1e-6);
 
         // At position 1, rotation should change values
         let mut data = vec![1.0, 0.0, 0.0, 1.0];
-        rope_cpu(&mut data, 1, 1, 1, 4, 10000.0);
+        apply_rope_cpu(&mut data, 1, 1, 1, 4, 10000.0);
         // cos(1/100) ~ 0.99995, sin(1/100) ~ 0.01
         assert!((data[0] - 0.99995).abs() < 0.001);
     }
