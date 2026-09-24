@@ -1,7 +1,7 @@
+use serde_json::json;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use serde_json::json;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
@@ -32,10 +32,8 @@ fn process_directory(dir: &PathBuf) {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(ext) = path.extension() {
-                if ext == "rs" {
-                    if path.file_name().is_some() {
-                        process_file(path.to_str().unwrap());
-                    }
+                if ext == "rs" && path.file_name().is_some() {
+                    process_file(path.to_str().unwrap());
                 }
             }
         }
@@ -57,7 +55,7 @@ fn process_file(file: &str) {
                 "file": file,
                 "tokens": tokens.trim()
             });
-            println!("{}", event.to_string());
+            println!("{}", event);
         }
         _ => {
             eprintln!("Failed to tokenize {}", file);

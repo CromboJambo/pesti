@@ -187,6 +187,7 @@ impl std::fmt::Display for TokenKind {
 
 /// The structural tokenizer — uses syn to parse, then manually walks AST.
 pub struct StructuralTokenizer {
+    #[allow(dead_code)]
     vocab: HashMap<String, u32>,
 }
 
@@ -227,7 +228,11 @@ impl StructuralTokenizer {
                     if let syn::Fields::Named(fields) = &s.fields {
                         for field in &fields.named {
                             if let Some(ident) = &field.ident {
-                                self.emit(tokens, TokenKind::Ident(ident.to_string()), ident.to_string());
+                                self.emit(
+                                    tokens,
+                                    TokenKind::Ident(ident.to_string()),
+                                    ident.to_string(),
+                                );
                             }
                         }
                     }
@@ -236,7 +241,11 @@ impl StructuralTokenizer {
                     let name = e.ident.to_string();
                     self.emit(tokens, TokenKind::EnumDecl, name);
                     for variant in &e.variants {
-                        self.emit(tokens, TokenKind::Ident(variant.ident.to_string()), variant.ident.to_string());
+                        self.emit(
+                            tokens,
+                            TokenKind::Ident(variant.ident.to_string()),
+                            variant.ident.to_string(),
+                        );
                     }
                 }
                 Item::Trait(t) => {
@@ -273,7 +282,7 @@ impl StructuralTokenizer {
 
     fn walk_stmt(&self, stmt: &syn::Stmt, tokens: &mut Vec<StructuralToken>) {
         match stmt {
-            syn::Stmt::Local(let_stmt) => {
+            syn::Stmt::Local(_let_stmt) => {
                 self.emit_kind(tokens, TokenKind::LetStmt);
             }
             syn::Stmt::Expr(expr, semi) => {
@@ -302,7 +311,7 @@ impl StructuralTokenizer {
                     self.walk_stmt(stmt, tokens);
                 }
             }
-            syn::Expr::While(ewhile) => {
+            syn::Expr::While(_ewhile) => {
                 self.emit_kind(tokens, TokenKind::WhileLoop);
             }
             syn::Expr::ForLoop(efor) => {
@@ -312,10 +321,10 @@ impl StructuralTokenizer {
                     self.walk_stmt(stmt, tokens);
                 }
             }
-            syn::Expr::Match(ematch) => {
+            syn::Expr::Match(_ematch) => {
                 self.emit_kind(tokens, TokenKind::MatchExpr);
             }
-            syn::Expr::Return(eret) => {
+            syn::Expr::Return(_eret) => {
                 self.emit_kind(tokens, TokenKind::ReturnExpr);
             }
             syn::Expr::Break(_) => {
@@ -324,7 +333,7 @@ impl StructuralTokenizer {
             syn::Expr::Continue(_) => {
                 self.emit_kind(tokens, TokenKind::ContinueExpr);
             }
-            syn::Expr::Call(ecall) => {
+            syn::Expr::Call(_ecall) => {
                 self.emit_kind(tokens, TokenKind::CallExpr);
             }
             syn::Expr::MethodCall(emethod) => {
@@ -372,7 +381,7 @@ impl StructuralTokenizer {
                 };
                 self.emit(tokens, TokenKind::UnaryOp, op_str.to_string());
             }
-            syn::Expr::Paren(eparen) => {
+            syn::Expr::Paren(_eparen) => {
                 self.emit_kind(tokens, TokenKind::ParenExpr);
             }
             syn::Expr::Lit(elit) => match &elit.lit {
@@ -400,29 +409,33 @@ impl StructuralTokenizer {
                 }
                 _ => {}
             },
-            syn::Expr::Array(earray) => {
+            syn::Expr::Array(_earray) => {
                 self.emit_kind(tokens, TokenKind::ArrayLit);
             }
-            syn::Expr::Tuple(etuple) => {
+            syn::Expr::Tuple(_etuple) => {
                 self.emit_kind(tokens, TokenKind::TupleLit);
             }
-            syn::Expr::Index(eindex) => {
+            syn::Expr::Index(_eindex) => {
                 self.emit_kind(tokens, TokenKind::SliceExpr);
             }
-            syn::Expr::Cast(ecast) => {
+            syn::Expr::Cast(_ecast) => {
                 self.emit_kind(tokens, TokenKind::CastExpr);
             }
             // Deref is a Unary op in syn 2.x, not its own variant
             syn::Expr::Reference(eref) => {
                 self.emit_kind(tokens, TokenKind::Reference);
                 if eref.mutability.is_some() {
-                    self.emit(tokens, TokenKind::Ident("mut".to_string()), "mut".to_string());
+                    self.emit(
+                        tokens,
+                        TokenKind::Ident("mut".to_string()),
+                        "mut".to_string(),
+                    );
                 }
             }
-            syn::Expr::Async(easync) => {
+            syn::Expr::Async(_easync) => {
                 self.emit_kind(tokens, TokenKind::AsyncBlock);
             }
-            syn::Expr::Closure(eclosure) => {
+            syn::Expr::Closure(_eclosure) => {
                 // Detect move by looking for "move" in source (syn doesn't expose this directly)
                 self.emit_kind(tokens, TokenKind::Closure);
             }
@@ -450,7 +463,11 @@ impl StructuralTokenizer {
                     .map(|s| s.ident.to_string())
                     .collect::<Vec<_>>();
                 if !segments.is_empty() {
-                    self.emit(tokens, TokenKind::Ident(segments.join("::")), segments.join("::"));
+                    self.emit(
+                        tokens,
+                        TokenKind::Ident(segments.join("::")),
+                        segments.join("::"),
+                    );
                 }
             }
             _ => {}
