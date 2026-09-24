@@ -2,13 +2,20 @@
 name = "pesti-structural-tokenizer"
 version = "0.1.0"
 edition = "2024"
-description = "Structural tokenizer for Rust source code targeting LLM efficiency"
+description = "Rust structural tokenizer for LLM code understanding — encodes syntactic boundaries as token boundaries"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/crombyface/pesti"
+homepage = "https://github.com/crombyface/pesti/tree/main/crates/pesti-structural-tokenizer"
+documentation = "https://docs.rs/pesti-structural-tokenizer"
+keywords = ["tokenizer", "rust", "llm", "code-analysis", "structural"]
+categories = ["parsing", "development-tools", "text-processing"]
 
 [dependencies]
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 tiktoken-rs.workspace = true
 
 [dev-dependencies]
