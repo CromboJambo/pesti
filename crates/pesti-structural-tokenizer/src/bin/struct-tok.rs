@@ -9,7 +9,9 @@ fn main() {
 
     if args.len() < 3 {
         eprintln!("Usage: struct-tok <command> [args...]");
-        eprintln!("Commands: tokenize FILE, detokenize FILE, stats FILE, encode TEXT, decode TOKENS");
+        eprintln!(
+            "Commands: tokenize FILE, detokenize FILE, stats FILE, encode TEXT, decode TOKENS"
+        );
         process::exit(1);
     }
 
@@ -89,10 +91,13 @@ fn main() {
             let tokenizer = StructuralTokenizer::new();
             match tokenizer.tokenize(src) {
                 Ok(tokens) => {
-                    let ids: Vec<String> = tokens.iter().map(|t| {
-                        // Simple encoding: kind name + hash of text
-                        format!("{:?}:{}", t.kind, t.text.len())
-                    }).collect();
+                    let ids: Vec<String> = tokens
+                        .iter()
+                        .map(|t| {
+                            // Simple encoding: kind name + hash of text
+                            format!("{:?}:{}", t.kind, t.text.len())
+                        })
+                        .collect();
                     println!("{}", ids.join(" "));
                 }
                 Err(e) => {

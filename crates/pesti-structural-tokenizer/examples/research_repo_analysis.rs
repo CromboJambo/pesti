@@ -1,10 +1,10 @@
 use pesti_structural_tokenizer::StructuralTokenizer;
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 
 fn analyze_file(path: &str, label: &str) {
     println!("=== {} ({}) ===", label, path);
-    
+
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -12,7 +12,7 @@ fn analyze_file(path: &str, label: &str) {
             return;
         }
     };
-    
+
     let tokenizer = StructuralTokenizer::new();
     let tokens = match tokenizer.tokenize(&content) {
         Ok(t) => t,
@@ -21,11 +21,11 @@ fn analyze_file(path: &str, label: &str) {
             return;
         }
     };
-    
+
     println!("  Lines: {}", content.lines().count());
     println!("  Bytes: {}", content.len());
     println!("  Structural tokens: {}\n", tokens.len());
-    
+
     // Count by kind
     let mut counts: HashMap<String, usize> = HashMap::new();
     for tok in &tokens {
@@ -48,7 +48,7 @@ fn analyze_file(path: &str, label: &str) {
         };
         *counts.entry(kind_name.to_string()).or_insert(0) += 1;
     }
-    
+
     println!("  Top structural elements:");
     let mut entries: Vec<_> = counts.into_iter().collect();
     entries.sort_by(|a, b| b.1.cmp(&a.1));
@@ -60,11 +60,20 @@ fn analyze_file(path: &str, label: &str) {
 
 fn main() {
     let base = "/home/crombo/projects/docs/GitCloneResearch";
-    
+
     // Test on core files from different research repos
     analyze_file(&format!("{}/dora/core/src/lib.rs", base), "dora/core");
-    analyze_file(&format!("{}/mistral.rs/mistralrs-core/src/lib.rs", base), "mistral.rs");
-    analyze_file(&format!("{}/ironclaw/crates/ironclaw_agent_loop/src/lib.rs", base), "ironclaw agent loop");
+    analyze_file(
+        &format!("{}/mistral.rs/mistralrs-core/src/lib.rs", base),
+        "mistral.rs",
+    );
+    analyze_file(
+        &format!("{}/ironclaw/crates/ironclaw_agent_loop/src/lib.rs", base),
+        "ironclaw agent loop",
+    );
     analyze_file(&format!("{}/ratty/src/main.rs", base), "ratty");
-    analyze_file(&format!("{}/oxc/crates/oxc_linter/src/lib.rs", base), "oxc linter");
+    analyze_file(
+        &format!("{}/oxc/crates/oxc_linter/src/lib.rs", base),
+        "oxc linter",
+    );
 }
