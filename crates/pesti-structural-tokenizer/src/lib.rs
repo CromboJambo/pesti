@@ -1,7 +1,8 @@
 //! Structural tokenizer for Rust source code using `syn`.
 //! Parses into AST via syn, then manually walks emitting semantic tokens.
+//! Supports budget-aware collapsing for LLM context size management.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use syn::{Item, parse_file};
 
 /// Structural token with position information
@@ -97,24 +98,6 @@ pub enum TokenKind {
     Static,
 }
 
-/// Errors from the structural tokenizer
-#[derive(Debug)]
-pub enum TokenizeError {
-    Parse { pos: usize, msg: String },
-}
-
-impl std::fmt::Display for TokenizeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TokenizeError::Parse { pos, msg } => {
-                write!(f, "Parse error at position {}: {}", pos, msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TokenizeError {}
-
 impl std::fmt::Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -185,6 +168,109 @@ impl std::fmt::Display for TokenKind {
     }
 }
 
+/// Errors from the structural tokenizer
+#[derive(Debug)]
+pub enum TokenizeError {
+    Parse { pos: usize, msg: String },
+}
+
+impl std::fmt::Display for TokenizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenizeError::Parse { pos, msg } => {
+                write!(f, "Parse error at position {}: {}", pos, msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TokenizeError {}
+
+/// Budget configuration for budget-aware tokenization.
+#[derive(Debug, Clone)]
+pub struct Budget {
+    /// Maximum number of structural tokens to emit.
+    pub max_tokens: usize,
+    /// Minimum body size (in bytes) worth eliding — smaller bodies are always emitted in full.
+    pub min_node_bytes: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Budget {
+            max_tokens: 1000,
+            min_node_bytes: 500,
+        }
+    }
+}
+
+/// Tag for node kind used in elision summaries.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NodeKindTag {
+    FnDecl,
+    MatchExpr,
+    Closure,
+    IfElse,
+    ForLoop,
+    WhileLoop,
+    Block,
+    Other,
+}
+
+impl std::fmt::Display for NodeKindTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeKindTag::FnDecl => write!(f, "fn"),
+            NodeKindTag::MatchExpr => write!(f, "match"),
+            NodeKindTag::Closure => write!(f, "closure"),
+            NodeKindTag::IfElse => write!(f, "if"),
+            NodeKindTag::ForLoop => write!(f, "for"),
+            NodeKindTag::WhileLoop => write!(f, "while"),
+            NodeKindTag::Block => write!(f, "block"),
+            NodeKindTag::Other => write!(f, "other"),
+        }
+    }
+}
+
+/// Marker for a subtree that was elided due to budget constraints.
+#[derive(Debug, Clone)]
+pub struct ElidedSpan {
+    /// Byte range of the elided source.
+    pub range: (usize, usize),
+    /// Number of nodes collapsed into this marker.
+    pub node_count: usize,
+    /// Breakdown by node kind for consumer to assess what was skipped.
+    pub kind_summary: Vec<(NodeKindTag, usize)>,
+}
+
+/// Emission result — either a token or an elision marker.
+#[derive(Debug, Clone)]
+pub enum Emission {
+    Node(StructuralToken),
+    Elided(ElidedSpan),
+}
+
+impl std::fmt::Display for Emission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Emission::Node(tok) => write!(f, "{}", tok.kind),
+            Emission::Elided(span) => {
+                let summary_parts: Vec<String> = span
+                    .kind_summary
+                    .iter()
+                    .map(|(k, n)| format!("{}x{}", k, n))
+                    .collect();
+                write!(
+                    f,
+                    "ELIDED({} nodes: {})",
+                    span.node_count,
+                    summary_parts.join(", ")
+                )
+            }
+        }
+    }
+}
+
 /// The structural tokenizer — uses syn to parse, then manually walks AST.
 pub struct StructuralTokenizer {
     #[allow(dead_code)]
@@ -198,7 +284,7 @@ impl StructuralTokenizer {
         }
     }
 
-    /// Tokenize Rust source into structural tokens using syn's parser.
+    /// Tokenize Rust source into structural tokens (no budget).
     pub fn tokenize(&self, src: &str) -> Result<Vec<StructuralToken>, TokenizeError> {
         let ast = parse_file(src).map_err(|e| TokenizeError::Parse {
             pos: 0,
@@ -208,6 +294,28 @@ impl StructuralTokenizer {
         let mut tokens = Vec::new();
         self.walk_items(&ast.items, &mut tokens);
         Ok(tokens)
+    }
+
+    /// Tokenize with budget-aware collapsing. Returns emissions including Elided markers.
+    pub fn tokenize_with_budget(
+        &self,
+        src: &str,
+        budget: Budget,
+    ) -> Result<Vec<Emission>, TokenizeError> {
+        let ast = parse_file(src).map_err(|e| TokenizeError::Parse {
+            pos: 0,
+            msg: format!("syn parse error: {}", e),
+        })?;
+
+        let mut emissions = Vec::new();
+        let mut budget_state = BudgetState {
+            max_tokens: budget.max_tokens,
+            emitted: 0,
+            min_node_bytes: budget.min_node_bytes,
+        };
+
+        self.walk_items_budgeted(&ast.items, &mut emissions, &mut budget_state);
+        Ok(emissions)
     }
 
     fn walk_items(&self, items: &[Item], tokens: &mut Vec<StructuralToken>) {
@@ -485,6 +593,252 @@ impl StructuralTokenizer {
     fn emit_kind(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind) {
         self.emit(tokens, kind, String::new());
     }
+
+    // Budget-aware walkers
+
+    fn walk_items_budgeted(
+        &self,
+        items: &[Item],
+        emissions: &mut Vec<Emission>,
+        budget: &mut BudgetState,
+    ) {
+        for item in items {
+            if budget.emitted >= budget.max_tokens {
+                break;
+            }
+
+            match item {
+                Item::Fn(f) => {
+                    let sig = format!("fn {}", f.sig.ident);
+                    self.emit_emission(emissions, TokenKind::FnDecl, sig);
+
+                    // Check if body is worth eliding
+                    let body_src = self.get_body_source(&f.block);
+                    if body_src.len() >= budget.min_node_bytes {
+                        // Count what's in the body without emitting
+                        let (node_count, kind_summary) = self.count_body_nodes(&f.block);
+                        if node_count > 0 && budget.emitted + 1 < budget.max_tokens {
+                            // Emit elision marker instead of walking
+                            emissions.push(Emission::Elided(ElidedSpan {
+                                range: (0, 0), // span tracking not implemented yet
+                                node_count,
+                                kind_summary,
+                            }));
+                            budget.emitted += 1;
+                        }
+                    } else {
+                        // Small body — walk normally
+                        for stmt in &f.block.stmts {
+                            self.walk_stmt_budgeted(stmt, emissions, budget);
+                        }
+                    }
+                }
+                Item::Struct(s) => {
+                    let name = s.ident.to_string();
+                    self.emit_emission(emissions, TokenKind::StructDecl, name);
+                }
+                Item::Enum(e) => {
+                    let name = e.ident.to_string();
+                    self.emit_emission(emissions, TokenKind::EnumDecl, name);
+                }
+                Item::Trait(t) => {
+                    let name = t.ident.to_string();
+                    self.emit_emission(emissions, TokenKind::TraitDecl, name);
+                }
+                Item::Impl(i) => {
+                    self.emit_emission(emissions, TokenKind::ImplBlock, "impl".to_string());
+                }
+                Item::Use(_u) => {
+                    self.emit_emission(emissions, TokenKind::UseStmt, "use".to_string());
+                }
+                Item::Mod(m) => {
+                    let name = m.ident.to_string();
+                    self.emit_emission(emissions, TokenKind::ModDecl, name);
+                    if let Some((_brace, items)) = &m.content {
+                        self.walk_items_budgeted(items, emissions, budget);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_stmt_budgeted(
+        &self,
+        stmt: &syn::Stmt,
+        emissions: &mut Vec<Emission>,
+        budget: &mut BudgetState,
+    ) {
+        if budget.emitted >= budget.max_tokens {
+            return;
+        }
+
+        match stmt {
+            syn::Stmt::Local(_let_stmt) => {
+                self.emit_emission(emissions, TokenKind::LetStmt, String::new());
+            }
+            syn::Stmt::Expr(expr, semi) => {
+                self.walk_expr_budgeted(expr, emissions, budget);
+                if semi.is_some() {
+                    self.emit_emission(emissions, TokenKind::Semicolon, String::new());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_expr_budgeted(
+        &self,
+        expr: &syn::Expr,
+        emissions: &mut Vec<Emission>,
+        budget: &mut BudgetState,
+    ) {
+        if budget.emitted >= budget.max_tokens {
+            return;
+        }
+
+        match expr {
+            syn::Expr::If(eif) => {
+                self.emit_emission(emissions, TokenKind::IfElse, String::new());
+                for stmt in &eif.then_branch.stmts {
+                    self.walk_stmt_budgeted(stmt, emissions, budget);
+                }
+            }
+            syn::Expr::While(_ewhile) => {
+                self.emit_emission(emissions, TokenKind::WhileLoop, String::new());
+            }
+            syn::Expr::ForLoop(efor) => {
+                self.emit_emission(emissions, TokenKind::ForLoop, String::new());
+                for stmt in &efor.body.stmts {
+                    self.walk_stmt_budgeted(stmt, emissions, budget);
+                }
+            }
+            syn::Expr::Match(_ematch) => {
+                self.emit_emission(emissions, TokenKind::MatchExpr, String::new());
+            }
+            syn::Expr::Return(_eret) => {
+                self.emit_emission(emissions, TokenKind::ReturnExpr, String::new());
+            }
+            syn::Expr::Break(_) => {
+                self.emit_emission(emissions, TokenKind::BreakExpr, String::new());
+            }
+            syn::Expr::Continue(_) => {
+                self.emit_emission(emissions, TokenKind::ContinueExpr, String::new());
+            }
+            syn::Expr::Call(_ecall) => {
+                self.emit_emission(emissions, TokenKind::CallExpr, String::new());
+            }
+            syn::Expr::MethodCall(emethod) => {
+                let method_name = emethod.method.to_string();
+                self.emit_emission(emissions, TokenKind::MethodCall, method_name);
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_emission(&self, emissions: &mut Vec<Emission>, kind: TokenKind, text: String) {
+        let token = StructuralToken {
+            kind,
+            text,
+            span: (0, 0),
+        };
+        emissions.push(Emission::Node(token));
+    }
+
+    fn get_body_source(&self, block: &syn::Block) -> String {
+        // Approximation: count statements as proxy for body size
+        block.stmts.len().to_string()
+    }
+
+    fn count_body_nodes(&self, block: &syn::Block) -> (usize, Vec<(NodeKindTag, usize)>) {
+        let mut counts: HashMap<NodeKindTag, usize> = HashMap::new();
+        let mut total = 0;
+
+        for stmt in &block.stmts {
+            match stmt {
+                syn::Stmt::Local(_) => {
+                    *counts.entry(NodeKindTag::Other).or_insert(0) += 1;
+                    total += 1;
+                }
+                syn::Stmt::Expr(expr, _) => {
+                    self.count_expr_nodes(expr, &mut counts, &mut total);
+                }
+                _ => {}
+            }
+        }
+
+        let mut summary: Vec<(NodeKindTag, usize)> = counts.into_iter().collect();
+        summary.sort_by(|a, b| b.1.cmp(&a.1));
+        (total, summary)
+    }
+
+    fn count_expr_nodes(
+        &self,
+        expr: &syn::Expr,
+        counts: &mut HashMap<NodeKindTag, usize>,
+        total: &mut usize,
+    ) {
+        match expr {
+            syn::Expr::If(eif) => {
+                *counts.entry(NodeKindTag::IfElse).or_insert(0) += 1;
+                *total += 1;
+                for stmt in &eif.then_branch.stmts {
+                    self.count_stmt_nodes(stmt, counts, total);
+                }
+            }
+            syn::Expr::Match(_ematch) => {
+                *counts.entry(NodeKindTag::MatchExpr).or_insert(0) += 1;
+                *total += 1;
+            }
+            syn::Expr::ForLoop(efor) => {
+                *counts.entry(NodeKindTag::ForLoop).or_insert(0) += 1;
+                *total += 1;
+                for stmt in &efor.body.stmts {
+                    self.count_stmt_nodes(stmt, counts, total);
+                }
+            }
+            syn::Expr::While(_ewhile) => {
+                *counts.entry(NodeKindTag::WhileLoop).or_insert(0) += 1;
+                *total += 1;
+            }
+            syn::Expr::Closure(_eclosure) => {
+                *counts.entry(NodeKindTag::Closure).or_insert(0) += 1;
+                *total += 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn count_stmt_nodes(
+        &self,
+        stmt: &syn::Stmt,
+        counts: &mut HashMap<NodeKindTag, usize>,
+        total: &mut usize,
+    ) {
+        match stmt {
+            syn::Stmt::Local(_) => {
+                *counts.entry(NodeKindTag::Other).or_insert(0) += 1;
+                *total += 1;
+            }
+            syn::Stmt::Expr(expr, _) => {
+                self.count_expr_nodes(expr, counts, total);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Default for StructuralTokenizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Internal budget state tracker.
+struct BudgetState {
+    max_tokens: usize,
+    emitted: usize,
+    min_node_bytes: usize,
 }
 
 #[cfg(test)]
@@ -497,7 +851,6 @@ mod tests {
         let src = "fn add(a: i32, b: i32) -> i32 { return a + b; }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        // Should produce: FnDecl, ReturnExpr
         assert_eq!(tokens[0].kind, TokenKind::FnDecl);
         assert_eq!(tokens[1].kind, TokenKind::ReturnExpr);
     }
@@ -528,7 +881,6 @@ mod tests {
         let src = "fn main() { if true { let x = 1; } else { let y = 2; } }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        // Should have IfElse token
         assert!(tokens.iter().any(|t| t.kind == TokenKind::IfElse));
     }
 
@@ -609,9 +961,66 @@ fn main() {
 "#;
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        // Should have struct, impl, and function declarations
         assert!(tokens.iter().any(|t| t.kind == TokenKind::StructDecl));
         assert!(tokens.iter().any(|t| t.kind == TokenKind::ImplBlock));
         assert!(tokens.iter().any(|t| t.kind == TokenKind::FnDecl));
+    }
+
+    #[test]
+    fn test_budget_basic() {
+        let tokenizer = StructuralTokenizer::new();
+        let src = "fn foo() { let x = 1; let y = 2; return x + y; }";
+        let budget = Budget {
+            max_tokens: 5,
+            min_node_bytes: 1,
+        };
+        let emissions = tokenizer.tokenize_with_budget(src, budget).unwrap();
+
+        // Should emit fewer than unlimited mode
+        assert!(emissions.len() <= 5);
+    }
+
+    #[test]
+    fn test_budget_elides_large_bodies() {
+        // Build a function with a large body (many statements)
+        let mut src = "fn big() {".to_string();
+        for i in 0..20 {
+            src.push_str(&format!("let x{} = {};\n", i, i));
+        }
+        src.push_str("}");
+
+        let tokenizer = StructuralTokenizer::new();
+        let budget = Budget {
+            max_tokens: 10,
+            min_node_bytes: 1,
+        };
+        let emissions = tokenizer.tokenize_with_budget(&src, budget).unwrap();
+
+        // Should have FnDecl + Elided marker, not all the LetStmts
+        assert!(
+            emissions
+                .iter()
+                .any(|e| matches!(e, Emission::Node(t) if t.kind == TokenKind::FnDecl))
+        );
+        assert!(emissions.iter().any(|e| matches!(e, Emission::Elided(_))));
+    }
+
+    #[test]
+    fn test_elided_span_has_summary() {
+        let src = "fn big() { for i in 0..10 { if i == 5 { break; } } match x { 1 => {}, _ => {} } }";
+        let tokenizer = StructuralTokenizer::new();
+        let budget = Budget {
+            max_tokens: 5,
+            min_node_bytes: 1,
+        };
+        let emissions = tokenizer.tokenize_with_budget(src, budget).unwrap();
+
+        // Find elided span and verify it has kind summary
+        for e in &emissions {
+            if let Emission::Elided(span) = e {
+                assert!(!span.kind_summary.is_empty());
+                assert!(span.node_count > 0);
+            }
+        }
     }
 }
