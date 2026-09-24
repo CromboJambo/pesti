@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use pesti_structural_tokenizer::{StructuralTokenizer, TokenKind};
+use pesti_structural_tokenizer::StructuralTokenizer;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();

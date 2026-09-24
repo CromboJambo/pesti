@@ -33,7 +33,7 @@ fn process_directory(dir: &PathBuf) {
             let path = entry.path();
             if let Some(ext) = path.extension() {
                 if ext == "rs" {
-                    if let Some(name) = path.file_name() {
+                    if path.file_name().is_some() {
                         process_file(path.to_str().unwrap());
                     }
                 }
