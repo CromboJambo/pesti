@@ -60,6 +60,9 @@ ndarray = "0.16"
 tokenizers = { version = "0.22.0", default-features = false }
 tiktoken-rs = "0.11.0"
 
+# Rust source parsing (structural tokenizer)
+syn = { version = "2", features = ["full", "visit"] }
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -81,7 +84,7 @@ tracing = "0.1"
 tracing-appender = "0.2"
 
 # Device backend
-cudarc = { version = "0.19.4", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "f8", "cuda-12050", "dynamic-linking"], default-features = false }
+cudarc = { version = "0.19.10", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "f8"], default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
 nvml-wrapper = "0.11"

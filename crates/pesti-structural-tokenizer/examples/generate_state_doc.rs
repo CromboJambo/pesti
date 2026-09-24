@@ -16,14 +16,26 @@ fn main() {
         .unwrap_or_else(|e| panic!("Failed to read {}: {}", input_path, e));
 
     let tokenizer = StructuralTokenizer::new();
-    let tokens = tokenizer.tokenize(&content);
-    let doc = tokenizer.generate_structural_doc(&tokens);
+    let tokens = tokenizer.tokenize(&content).expect("tokenize failed");
+
+    // Build a simple text representation of the token stream
+    let mut doc = String::new();
+    for tok in &tokens {
+        doc.push_str(&format!("{}\n", tok.kind));
+    }
 
     // Write markdown state doc
-    let mut md = format!("# Structural Analysis: {}\n\n", PathBuf::from(input_path).file_name().unwrap_or_default());
+    let filename = PathBuf::from(input_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let mut md = format!("# Structural Analysis: {}\n\n", filename);
     md.push_str(&format!("**Lines:** {}\n\n", content.lines().count()));
     md.push_str("## Structural Tokens\n\n");
+    md.push_str("```\n");
     md.push_str(&doc);
+    md.push_str("```\n");
 
     fs::write(output_path, &md)
         .unwrap_or_else(|e| panic!("Failed to write {}: {}", output_path, e));

@@ -17,6 +17,7 @@ tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiktoken-rs.workspace = true
+syn = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

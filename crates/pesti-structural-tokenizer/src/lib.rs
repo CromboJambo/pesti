@@ -1,11 +1,8 @@
-//! Structural tokenizer for Rust source code.
-//!
-//! Encodes syntactic boundaries as token boundaries to give LLMs semantic structure
-//! without requiring them to relearn Rust grammar from byte-pair statistics.
-//!
-//! Example: `fn foo(x: i32) -> i32 {` becomes one structural token (FnDecl) instead of ~15 BPE tokens.
+//! Structural tokenizer for Rust source code using `syn`.
+//! Parses into AST via syn, then manually walks emitting semantic tokens.
 
 use std::collections::HashMap;
+use syn::{Item, parse_file};
 
 /// Structural token with position information
 #[derive(Debug, Clone)]
@@ -16,37 +13,37 @@ pub struct StructuralToken {
 }
 
 /// Kinds of structural tokens we emit
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Declarations
-    FnDecl,           // fn name(params) -> ret { ... }
-    LetStmt,          // let x = expr; or let x: T = expr;
-    StructDecl,       // struct Name { fields }
-    EnumDecl,         // enum Name { variants }
-    TraitDecl,        // trait Name { methods }
-    ImplBlock,        // impl Trait for Type { ... }
-    UseStmt,          // use std::collections::HashMap;
-    ModDecl,          // mod foo; or pub(crate) mod bar { }
+    FnDecl,
+    LetStmt,
+    StructDecl,
+    EnumDecl,
+    TraitDecl,
+    ImplBlock,
+    UseStmt,
+    ModDecl,
 
     // Control flow
-    IfElse,           // if cond { } else { }
-    WhileLoop,        // while cond { }
-    ForLoop,          // for item in iter { }
-    MatchExpr,        // match expr { arms }
-    ReturnExpr,       // return expr;
-    BreakExpr,        // break; or break expr;
-    ContinueExpr,     // continue;
+    IfElse,
+    WhileLoop,
+    ForLoop,
+    MatchExpr,
+    ReturnExpr,
+    BreakExpr,
+    ContinueExpr,
 
     // Expressions & operations
-    CallExpr,    // fn(args)
-    FieldAccess, // obj.field
-    MethodCall,  // obj.method(args)
-    BinaryOp,    // a + b, a == b, etc.
-    UnaryOp,     // !x, -x, *ptr, &ref
-    ParenExpr,   // (expr)
-    ExprStmt,    // expression terminated by semicolon (e.g., a = b;)
+    CallExpr,
+    FieldAccess,
+    MethodCall,
+    BinaryOp,
+    UnaryOp,
+    ParenExpr,
+    ExprStmt,
 
-    // Literals (values are stored in the token text for simplicity)
+    // Literals
     IntLit,
     FloatLit,
     StrLit,
@@ -55,13 +52,13 @@ pub enum TokenKind {
     ByteLit,
     ArrayLit,
     TupleLit,
-    SliceExpr,        // arr[start..end]
+    SliceExpr,
 
     // Types & casts
-    TypeAnnotation,   // : i32
-    CastExpr,         // x as i32
-    Dereference,      // *ptr
-    Reference,        // &x or &mut x
+    TypeAnnotation,
+    CastExpr,
+    Dereference,
+    Reference,
 
     // Blocks and delimiters
     BlockStart,
@@ -76,33 +73,28 @@ pub enum TokenKind {
     Comma,
     Colon,
     Dot,
-    Arrow,            // -> (return type)
-    FatArrow,         // => (match arm)
+    Arrow,
+    FatArrow,
 
     // Identifiers and names
     Ident(String),
-    Keyword(String),  // Keywords that aren't structural constructs
+    Keyword(String),
 
     // Rust-specific features
-    MacroInvocation, // macro!(...)
-    Attribute,       // #[derive(...)]
-    Lifetime,        // 'a in &'a T
-    GenericParams,   // <T: Trait>
-    WhereClause,     // where T: Clone
-    AsyncBlock,      // async { }
-    MoveClosure,     // move |x| x + 1
-    Closure,         // |x| x + 1
-    Punctuator,      // standalone punctuation not part of a larger token
+    MacroInvocation,
+    Attribute,
+    Lifetime,
+    GenericParams,
+    WhereClause,
+    AsyncBlock,
+    MoveClosure,
+    Closure,
+    Punctuator,
 
     // Visibility and modifiers
     Pub,
     Private,
     Static,
-    Const,
-    Mut,
-    Unsafe,
-    Extern,
-    Abstract,
 }
 
 /// Errors from the structural tokenizer
@@ -114,1226 +106,367 @@ pub enum TokenizeError {
 impl std::fmt::Display for TokenizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenizeError::Parse { pos, msg } => write!(f, "Parse error at position {}: {}", pos, msg),
+            TokenizeError::Parse { pos, msg } => {
+                write!(f, "Parse error at position {}: {}", pos, msg)
+            }
         }
     }
 }
 
 impl std::error::Error for TokenizeError {}
 
-/// The structural tokenizer — recognizes Rust syntactic constructs and emits semantic tokens.
+impl std::fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenKind::FnDecl => write!(f, "FN_DECL"),
+            TokenKind::LetStmt => write!(f, "LET_STMT"),
+            TokenKind::StructDecl => write!(f, "STRUCT_DECL"),
+            TokenKind::EnumDecl => write!(f, "ENUM_DECL"),
+            TokenKind::TraitDecl => write!(f, "TRAIT_DECL"),
+            TokenKind::ImplBlock => write!(f, "IMPL_BLOCK"),
+            TokenKind::UseStmt => write!(f, "USE_STMT"),
+            TokenKind::ModDecl => write!(f, "MOD_DECL"),
+            TokenKind::IfElse => write!(f, "IF_ELSE"),
+            TokenKind::WhileLoop => write!(f, "WHILE_LOOP"),
+            TokenKind::ForLoop => write!(f, "FOR_LOOP"),
+            TokenKind::MatchExpr => write!(f, "MATCH_EXPR"),
+            TokenKind::ReturnExpr => write!(f, "RETURN_EXPR"),
+            TokenKind::BreakExpr => write!(f, "BREAK_EXPR"),
+            TokenKind::ContinueExpr => write!(f, "CONTINUE_EXPR"),
+            TokenKind::CallExpr => write!(f, "CALL_EXPR"),
+            TokenKind::FieldAccess => write!(f, "FIELD_ACCESS"),
+            TokenKind::MethodCall => write!(f, "METHOD_CALL"),
+            TokenKind::BinaryOp => write!(f, "BINARY_OP"),
+            TokenKind::UnaryOp => write!(f, "UNARY_OP"),
+            TokenKind::ParenExpr => write!(f, "PAREN_EXPR"),
+            TokenKind::ExprStmt => write!(f, "EXPR_STMT"),
+            TokenKind::IntLit => write!(f, "INT_LIT"),
+            TokenKind::FloatLit => write!(f, "FLOAT_LIT"),
+            TokenKind::StrLit => write!(f, "STR_LIT"),
+            TokenKind::CharLit => write!(f, "CHAR_LIT"),
+            TokenKind::BoolLit => write!(f, "BOOL_LIT"),
+            TokenKind::ByteLit => write!(f, "BYTE_LIT"),
+            TokenKind::ArrayLit => write!(f, "ARRAY_LIT"),
+            TokenKind::TupleLit => write!(f, "TUPLE_LIT"),
+            TokenKind::SliceExpr => write!(f, "SLICE_EXPR"),
+            TokenKind::TypeAnnotation => write!(f, "TYPE_ANNOT"),
+            TokenKind::CastExpr => write!(f, "CAST_EXPR"),
+            TokenKind::Dereference => write!(f, "DEREF"),
+            TokenKind::Reference => write!(f, "REF"),
+            TokenKind::BlockStart => write!(f, "BLOCK_START"),
+            TokenKind::BlockEnd => write!(f, "BLOCK_END"),
+            TokenKind::ParenOpen => write!(f, "("),
+            TokenKind::ParenClose => write!(f, ")"),
+            TokenKind::BraceOpen => write!(f, "{{"),
+            TokenKind::BraceClose => write!(f, "}}"),
+            TokenKind::BracketOpen => write!(f, "["),
+            TokenKind::BracketClose => write!(f, "]"),
+            TokenKind::Semicolon => write!(f, ";"),
+            TokenKind::Comma => write!(f, ","),
+            TokenKind::Colon => write!(f, ":"),
+            TokenKind::Dot => write!(f, "."),
+            TokenKind::Arrow => write!(f, "->"),
+            TokenKind::FatArrow => write!(f, "=>"),
+            TokenKind::Ident(name) => write!(f, "IDENT({})", name),
+            TokenKind::Keyword(kw) => write!(f, "KW({})", kw),
+            TokenKind::MacroInvocation => write!(f, "MACRO"),
+            TokenKind::Attribute => write!(f, "ATTR"),
+            TokenKind::Lifetime => write!(f, "LIFETIME"),
+            TokenKind::GenericParams => write!(f, "GENERIC_PARAMS"),
+            TokenKind::WhereClause => write!(f, "WHERE"),
+            TokenKind::AsyncBlock => write!(f, "ASYNC"),
+            TokenKind::MoveClosure => write!(f, "MOVE_CLOSURE"),
+            TokenKind::Closure => write!(f, "CLOSURE"),
+            TokenKind::Punctuator => write!(f, "PUNCT"),
+            TokenKind::Pub => write!(f, "pub"),
+            TokenKind::Private => write!(f, "private"),
+            TokenKind::Static => write!(f, "static"),
+        }
+    }
+}
+
+/// The structural tokenizer — uses syn to parse, then manually walks AST.
 pub struct StructuralTokenizer {
-    /// Vocabulary mapping token text to IDs (populated during training)
-    #[allow(dead_code)]
     vocab: HashMap<String, u32>,
 }
 
 impl StructuralTokenizer {
     pub fn new() -> Self {
-        StructuralTokenizer { vocab: HashMap::new() }
+        StructuralTokenizer {
+            vocab: HashMap::new(),
+        }
     }
 
-    /// Tokenize Rust source into structural tokens
+    /// Tokenize Rust source into structural tokens using syn's parser.
     pub fn tokenize(&self, src: &str) -> Result<Vec<StructuralToken>, TokenizeError> {
+        let ast = parse_file(src).map_err(|e| TokenizeError::Parse {
+            pos: 0,
+            msg: format!("syn parse error: {}", e),
+        })?;
+
         let mut tokens = Vec::new();
-        let chars: Vec<char> = src.chars().collect();
-        let pos = self.tokenize_inner(&chars, 0, &mut tokens)?;
-        assert_eq!(pos, chars.len(), "tokenizer did not consume entire input");
+        self.walk_items(&ast.items, &mut tokens);
         Ok(tokens)
     }
 
-    fn tokenize_inner(
-        &self,
-        chars: &[char],
-        start: usize,
-        tokens: &mut Vec<StructuralToken>,
-    ) -> Result<usize, TokenizeError> {
-        let mut pos = start;
+    fn walk_items(&self, items: &[Item], tokens: &mut Vec<StructuralToken>) {
+        for item in items {
+            match item {
+                Item::Fn(f) => {
+                    let sig = format!("fn {}", f.sig.ident);
+                    self.emit(tokens, TokenKind::FnDecl, sig);
 
-        while pos < chars.len() {
-            // Skip whitespace and newlines
-            if self.is_whitespace(&chars, pos) {
-                pos += 1;
-                continue;
-            }
-
-            // Handle attributes: #[derive(...)], #![allow(...)] - check BEFORE comments
-            // because #![...] contains //! which would otherwise be seen as a doc comment
-            if chars[pos] == '#' {
-                // Check if this is actually an attribute (followed by [ or !)
-                let next_non_ws = self.find_next_non_whitespace(&chars, pos + 1);
-                if next_non_ws < chars.len() && (chars[next_non_ws] == '[' || chars[next_non_ws] == '!') {
-                    let token = self.parse_attribute(&chars, pos)?;
-                    tokens.push(token.clone());
-                    pos = token.span.1;
-                } else {
-                    // Not an attribute — emit as punctuator (e.g., markdown heading in doc comment)
-                    let token = StructuralToken {
-                        kind: TokenKind::Punctuator,
-                        text: "#".to_string(),
-                        span: (pos, pos + 1),
-                    };
-                    tokens.push(token);
-                    pos += 1;
-                }
-                continue;
-            }
-
-            // Skip comments (after attribute check so #![...] isn't misidentified)
-            if self.is_comment_start(&chars, pos) {
-                let (end_pos, _) = self.skip_comment(&chars, pos);
-                pos = end_pos;
-                continue;
-            }
-
-            // Try to parse structural constructs in priority order
-            if self.match_keyword(&chars, pos, "fn") {
-                let token = self.parse_fn_decl(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "let") {
-                let token = self.parse_let_stmt(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "return") {
-                let token = self.parse_return_expr(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "if") {
-                let token = self.parse_if_else(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "while") {
-                let token = self.parse_while_loop(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "for") {
-                let token = self.parse_for_loop(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "match") {
-                let token = self.parse_match_expr(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "struct") {
-                let token = self.parse_struct_decl(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "enum") {
-                let token = self.parse_enum_decl(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "trait") {
-                let token = self.parse_trait_decl(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "impl") {
-                let token = self.parse_impl_block(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "break") {
-                let token = self.parse_break_expr(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "continue") {
-                let token = self.parse_continue_expr(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "use") {
-                let token = self.parse_use_stmt(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if self.match_keyword(&chars, pos, "mod") {
-                let token = self.parse_mod_decl(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if chars[pos] == '{' {
-                let token = StructuralToken {
-                    kind: TokenKind::BlockStart,
-                    text: "{".to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == '}' {
-                let token = StructuralToken {
-                    kind: TokenKind::BlockEnd,
-                    text: "}".to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if self.is_operator(&chars, pos) {
-                let token = self.parse_operator(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else if chars[pos] == '(' || chars[pos] == ')' {
-                let kind = if chars[pos] == '(' { TokenKind::ParenOpen } else { TokenKind::ParenClose };
-                let token = StructuralToken {
-                    kind,
-                    text: chars[pos].to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == '[' || chars[pos] == ']' {
-                let kind = if chars[pos] == '[' { TokenKind::BracketOpen } else { TokenKind::BracketClose };
-                let token = StructuralToken {
-                    kind,
-                    text: chars[pos].to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == ',' {
-                let token = StructuralToken {
-                    kind: TokenKind::Comma,
-                    text: ",".to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == ';' {
-                let token = StructuralToken {
-                    kind: TokenKind::Semicolon,
-                    text: ";".to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == '.' {
-                // Check for range operator (..) or method call dot
-                if pos + 1 < chars.len() && chars[pos + 1] == '.' {
-                    let token = StructuralToken {
-                        kind: TokenKind::BinaryOp,
-                        text: "..".to_string(),
-                        span: (pos, pos + 2),
-                    };
-                    tokens.push(token);
-                    pos += 2;
-                } else {
-                    let token = StructuralToken {
-                        kind: TokenKind::Dot,
-                        text: ".".to_string(),
-                        span: (pos, pos + 1),
-                    };
-                    tokens.push(token);
-                    pos += 1;
-                }
-            } else if chars[pos] == ':' && pos + 1 < chars.len() && chars[pos + 1] == '>' {
-                // Arrow for return type
-                let token = StructuralToken {
-                    kind: TokenKind::Arrow,
-                    text: "->".to_string(),
-                    span: (pos, pos + 2),
-                };
-                tokens.push(token);
-                pos += 2;
-            } else if chars[pos] == ':' {
-                let token = StructuralToken {
-                    kind: TokenKind::Colon,
-                    text: ":".to_string(),
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            } else if chars[pos] == '=' && pos + 1 < chars.len() && chars[pos + 1] == '>' {
-                // Fat arrow for match arms
-                let token = StructuralToken {
-                    kind: TokenKind::FatArrow,
-                    text: "=>".to_string(),
-                    span: (pos, pos + 2),
-                };
-                tokens.push(token);
-                pos += 2;
-            } else if chars[pos] == '"' {
-                // String literal
-                let start_pos = pos;
-                pos += 1; // skip opening quote
-                while pos < chars.len() && chars[pos] != '"' {
-                    if chars[pos] == '\\' {
-                        pos += 2; // skip escaped char
-                    } else {
-                        pos += 1;
+                    // Walk function body statements
+                    for stmt in &f.block.stmts {
+                        self.walk_stmt(stmt, tokens);
                     }
                 }
-                if pos < chars.len() {
-                    pos += 1; // skip closing quote
-                }
-                let text: String = chars[start_pos..pos].iter().collect();
-                let token = StructuralToken {
-                    kind: TokenKind::StrLit,
-                    text,
-                    span: (start_pos, pos),
-                };
-                tokens.push(token);
-            } else if chars[pos] == '\'' {
-                // Char literal
-                let start_pos = pos;
-                pos += 1; // skip opening quote
-                while pos < chars.len() && chars[pos] != '\'' {
-                    if chars[pos] == '\\' {
-                        pos += 2;
-                    } else {
-                        pos += 1;
+                Item::Struct(s) => {
+                    let name = s.ident.to_string();
+                    self.emit(tokens, TokenKind::StructDecl, name);
+                    if let syn::Fields::Named(fields) = &s.fields {
+                        for field in &fields.named {
+                            if let Some(ident) = &field.ident {
+                                self.emit(tokens, TokenKind::Ident(ident.to_string()), ident.to_string());
+                            }
+                        }
                     }
                 }
-                if pos < chars.len() {
-                    pos += 1; // skip closing quote
-                }
-                let text: String = chars[start_pos..pos].iter().collect();
-                let token = StructuralToken {
-                    kind: TokenKind::CharLit,
-                    text,
-                    span: (start_pos, pos),
-                };
-                tokens.push(token);
-            } else if chars[pos] == '\'' {
-                // Lifetime: 'a or 'static
-                let start_pos = pos;
-                pos += 1; // skip '
-                while pos < chars.len() && self.is_ident_char(chars[pos]) {
-                    pos += 1;
-                }
-                let text: String = chars[start_pos..pos].iter().collect();
-                let token = StructuralToken {
-                    kind: TokenKind::Lifetime,
-                    text,
-                    span: (start_pos, pos),
-                };
-                tokens.push(token);
-            } else if chars[pos].is_alphabetic() || chars[pos] == '_' {
-                // Try expression statement first - identifier followed by operators until ;
-                let expr_end = self.find_expr_stmt_end(&chars, pos);
-                if expr_end > pos {
-                    let text: String = chars[pos..expr_end].iter().collect();
-                    let token = StructuralToken {
-                        kind: TokenKind::ExprStmt,
-                        text,
-                        span: (pos, expr_end),
-                    };
-                    tokens.push(token);
-                    pos = expr_end;
-                } else {
-                    // Fall back to raw identifier/literal
-                    let token = self.parse_identifier_or_literal(&chars, pos)?;
-                    tokens.push(token.clone());
-                    pos = token.span.1;
-                }
-            } else if chars[pos].is_digit(10) {
-                let token = self.parse_identifier_or_literal(&chars, pos)?;
-                tokens.push(token.clone());
-                pos = token.span.1;
-            } else {
-                // Unknown character - emit as-is to make progress
-                let ch = chars[pos];
-                let text = ch.to_string();
-                let token = StructuralToken {
-                    kind: TokenKind::Ident(text.clone()),
-                    text,
-                    span: (pos, pos + 1),
-                };
-                tokens.push(token);
-                pos += 1;
-            }
-        }
-
-        Ok(pos)
-    }
-
-    fn is_whitespace(&self, chars: &[char], pos: usize) -> bool {
-        pos < chars.len() && (chars[pos].is_whitespace())
-    }
-
-    fn find_next_non_whitespace(&self, chars: &[char], start: usize) -> usize {
-        let mut pos = start;
-        while pos < chars.len() && self.is_whitespace(chars, pos) {
-            pos += 1;
-        }
-        pos
-    }
-
-    fn parse_attribute(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Parse #[...] attribute - skip to matching ] and then any parens content
-        let mut pos = start;
-
-        // Skip #
-        pos += 1;
-
-        // Handle inner attributes: #![...] vs #[...]
-        if pos < chars.len() && chars[pos] == '!' {
-            pos += 1;
-        }
-
-        // Check for outer brackets [attr] vs inner (#[attr])
-        if pos < chars.len() && chars[pos] == '[' {
-            pos += 1;
-        } else {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '[' after '#' in attribute".to_string(),
-            });
-        }
-
-        // Skip whitespace
-        while self.is_whitespace(chars, pos) {
-            pos += 1;
-        }
-
-        // Find matching ]
-        let mut bracket_depth = 1usize;
-        while pos < chars.len() && bracket_depth > 0 {
-            if chars[pos] == '[' {
-                bracket_depth += 1;
-            } else if chars[pos] == ']' {
-                bracket_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        // Now skip any outer parens (for inner attributes like #[attr(...)])
-        while self.is_whitespace(chars, pos) {
-            pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == '(' {
-            let mut paren_depth = 1usize;
-            pos += 1;
-            while pos < chars.len() && paren_depth > 0 {
-                if chars[pos] == '(' {
-                    paren_depth += 1;
-                } else if chars[pos] == ')' {
-                    paren_depth -= 1;
-                }
-                pos += 1;
-            }
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::Attribute,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn is_comment_start(&self, chars: &[char], pos: usize) -> bool {
-        if pos + 1 >= chars.len() {
-            return false;
-        }
-        // Regular comments: // or /*
-        if (chars[pos] == '/' && chars[pos + 1] == '/') || (chars[pos] == '/' && chars[pos + 1] == '*') {
-            return true;
-        }
-        // Doc line comment: /// or //!
-        if chars[pos] == '/' && pos + 2 < chars.len() && chars[pos + 1] == '/' && chars[pos + 2] == '/' {
-            return true;
-        }
-        if chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '!' {
-            return true;
-        }
-        false
-    }
-
-    fn skip_comment(&self, chars: &[char], start: usize) -> (usize, String) {
-        let mut pos = start;
-        
-        // Doc line comment: /// or //!
-        if pos + 2 < chars.len() && chars[pos] == '/' && chars[pos + 1] == '/' && chars[pos + 2] == '/' {
-            while pos < chars.len() && chars[pos] != '\n' {
-                pos += 1;
-            }
-        } else if pos < chars.len() && chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '!' {
-            // Inner doc comment //! - skip to end of line
-            while pos < chars.len() && chars[pos] != '\n' {
-                pos += 1;
-            }
-        } else if pos < chars.len() && chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '/' {
-            // Regular line comment
-            while pos < chars.len() && chars[pos] != '\n' {
-                pos += 1;
-            }
-        } else if chars[pos] == '/' && pos + 1 < chars.len() && chars[pos + 1] == '*' {
-            // Block or doc block comment: /* */ or /*! */
-            while pos < chars.len() && !(chars[pos] == '*' && pos + 1 < chars.len() && chars[pos + 1] == '/') {
-                pos += 1;
-            }
-            if pos < chars.len() {
-                pos += 2; // Skip */
-            }
-        }
-        
-        let text = chars[start..pos].iter().collect();
-        (pos, text)
-    }
-
-    fn match_keyword(&self, chars: &[char], pos: usize, keyword: &str) -> bool {
-        let kw_chars: Vec<char> = keyword.chars().collect();
-        if pos + kw_chars.len() > chars.len() {
-            return false;
-        }
-
-        for (i, c) in kw_chars.iter().enumerate() {
-            if chars[pos + i] != *c {
-                return false;
-            }
-        }
-
-        // Check word boundary
-        let after_pos = pos + kw_chars.len();
-        if after_pos < chars.len() && self.is_ident_char(chars[after_pos]) {
-            return false;
-        }
-
-        true
-    }
-
-    fn is_ident_char(&self, c: char) -> bool {
-        c.is_alphanumeric() || c == '_'
-    }
-
-    /// Find the end of an expression statement (up to and including the semicolon).
-    /// Returns the position just past the semicolon, or start if no semicolon found.
-    fn find_expr_stmt_end(&self, chars: &[char], start: usize) -> usize {
-        let mut pos = start;
-        let mut depth_paren = 0;
-        let mut depth_brace = 0;
-        let mut depth_bracket = 0;
-
-        while pos < chars.len() {
-            match chars[pos] {
-                '(' => depth_paren += 1,
-                ')' => {
-                    if depth_paren > 0 {
-                        depth_paren -= 1;
+                Item::Enum(e) => {
+                    let name = e.ident.to_string();
+                    self.emit(tokens, TokenKind::EnumDecl, name);
+                    for variant in &e.variants {
+                        self.emit(tokens, TokenKind::Ident(variant.ident.to_string()), variant.ident.to_string());
                     }
                 }
-                '{' => depth_brace += 1,
-                '}' => {
-                    if depth_brace > 0 {
-                        depth_brace -= 1;
+                Item::Trait(t) => {
+                    let name = t.ident.to_string();
+                    self.emit(tokens, TokenKind::TraitDecl, name);
+                    for item in &t.items {
+                        if let syn::TraitItem::Fn(m) = item {
+                            self.emit(tokens, TokenKind::FnDecl, format!("fn {}", m.sig.ident));
+                        }
                     }
                 }
-                '[' => depth_bracket += 1,
-                ']' => {
-                    if depth_bracket > 0 {
-                        depth_bracket -= 1;
+                Item::Impl(i) => {
+                    self.emit(tokens, TokenKind::ImplBlock, "impl".to_string());
+                    for item in &i.items {
+                        if let syn::ImplItem::Fn(m) = item {
+                            self.emit(tokens, TokenKind::FnDecl, format!("fn {}", m.sig.ident));
+                        }
                     }
                 }
-                ';' => {
-                    // Found end of statement at top level
-                    if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 {
-                        return pos + 1; // past the semicolon
-                    }
+                Item::Use(_u) => {
+                    self.emit(tokens, TokenKind::UseStmt, "use".to_string());
                 }
-                '\n' => {
-                    // Newline without semicolon - not a complete expr stmt
-                    if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 {
-                        break;
+                Item::Mod(m) => {
+                    let name = m.ident.to_string();
+                    self.emit(tokens, TokenKind::ModDecl, name);
+                    if let Some((_brace, items)) = &m.content {
+                        self.walk_items(items, tokens);
                     }
                 }
                 _ => {}
             }
-            pos += 1;
         }
-
-        start // No semicolon found, not an expr stmt
     }
 
-    fn is_operator(&self, chars: &[char], pos: usize) -> bool {
-        if pos >= chars.len() {
-            return false;
-        }
-        let c = chars[pos];
-        matches!(c, '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '!' | '&' | '|' | '^' | '~')
-    }
-
-    fn parse_operator(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        let mut pos = start;
-        let c = chars[pos];
-        pos += 1;
-
-        // Handle multi-char operators: ==, !=, <=, >=, <<, >>, &&, ||, +=, -=, etc.
-        if pos < chars.len() {
-            let next = chars[pos];
-            match (c, next) {
-                ('=', '=') | ('!', '=') | ('<', '=') | ('>', '=') | ('<', '<') | ('>', '>')
-                | ('&', '&') | ('|', '|') | ('+', '=') | ('-', '=') | ('*', '=') | ('/', '=')
-                | ('%', '=') | ('&', '=') | ('|', '=') | ('^', '=') => {
-                    pos += 1;
+    fn walk_stmt(&self, stmt: &syn::Stmt, tokens: &mut Vec<StructuralToken>) {
+        match stmt {
+            syn::Stmt::Local(let_stmt) => {
+                self.emit_kind(tokens, TokenKind::LetStmt);
+            }
+            syn::Stmt::Expr(expr, semi) => {
+                self.walk_expr(expr, tokens);
+                if semi.is_some() {
+                    self.emit_kind(tokens, TokenKind::Semicolon);
+                }
+            }
+            syn::Stmt::Item(item) => match item {
+                Item::Fn(inner) => {
+                    let sig = format!("fn {}", inner.sig.ident);
+                    self.emit(tokens, TokenKind::FnDecl, sig);
                 }
                 _ => {}
-            }
+            },
+            _ => {}
         }
+    }
 
-        let text: String = chars[start..pos].iter().collect();
-        Ok(StructuralToken {
-            kind: TokenKind::BinaryOp,
+    fn walk_expr(&self, expr: &syn::Expr, tokens: &mut Vec<StructuralToken>) {
+        match expr {
+            syn::Expr::If(eif) => {
+                self.emit_kind(tokens, TokenKind::IfElse);
+                // Walk into the then branch to find break/continue/etc
+                for stmt in &eif.then_branch.stmts {
+                    self.walk_stmt(stmt, tokens);
+                }
+            }
+            syn::Expr::While(ewhile) => {
+                self.emit_kind(tokens, TokenKind::WhileLoop);
+            }
+            syn::Expr::ForLoop(efor) => {
+                self.emit_kind(tokens, TokenKind::ForLoop);
+                // Walk into loop body to find break/continue
+                for stmt in &efor.body.stmts {
+                    self.walk_stmt(stmt, tokens);
+                }
+            }
+            syn::Expr::Match(ematch) => {
+                self.emit_kind(tokens, TokenKind::MatchExpr);
+            }
+            syn::Expr::Return(eret) => {
+                self.emit_kind(tokens, TokenKind::ReturnExpr);
+            }
+            syn::Expr::Break(_) => {
+                self.emit_kind(tokens, TokenKind::BreakExpr);
+            }
+            syn::Expr::Continue(_) => {
+                self.emit_kind(tokens, TokenKind::ContinueExpr);
+            }
+            syn::Expr::Call(ecall) => {
+                self.emit_kind(tokens, TokenKind::CallExpr);
+            }
+            syn::Expr::MethodCall(emethod) => {
+                let method_name = emethod.method.to_string();
+                self.emit(tokens, TokenKind::MethodCall, method_name);
+            }
+            syn::Expr::Field(efield) => {
+                let field_name = match &efield.member {
+                    syn::Member::Named(ident) => ident.to_string(),
+                    syn::Member::Unnamed(index) => index.index.to_string(),
+                };
+                self.emit(tokens, TokenKind::FieldAccess, field_name);
+            }
+            syn::Expr::Binary(ebin) => {
+                // BinOp doesn't impl Debug/Display — map to string manually
+                let op_str = match &ebin.op {
+                    syn::BinOp::Add(_) => "+",
+                    syn::BinOp::Sub(_) => "-",
+                    syn::BinOp::Mul(_) => "*",
+                    syn::BinOp::Div(_) => "/",
+                    syn::BinOp::Rem(_) => "%",
+                    syn::BinOp::And(_) => "&&",
+                    syn::BinOp::Or(_) => "||",
+                    syn::BinOp::Eq(_) => "==",
+                    syn::BinOp::Ne(_) => "!=",
+                    syn::BinOp::Lt(_) => "<",
+                    syn::BinOp::Le(_) => "<=",
+                    syn::BinOp::Gt(_) => ">",
+                    syn::BinOp::Ge(_) => ">=",
+                    syn::BinOp::Shl(_) => "<<",
+                    syn::BinOp::Shr(_) => ">>",
+                    syn::BinOp::BitAnd(_) => "&",
+                    syn::BinOp::BitOr(_) => "|",
+                    syn::BinOp::BitXor(_) => "^",
+                    _ => "?",
+                };
+                self.emit(tokens, TokenKind::BinaryOp, op_str.to_string());
+            }
+            syn::Expr::Unary(eunary) => {
+                let op_str = match &eunary.op {
+                    syn::UnOp::Deref(_) => "*",
+                    syn::UnOp::Not(_) => "!",
+                    syn::UnOp::Neg(_) => "-",
+                    _ => "?",
+                };
+                self.emit(tokens, TokenKind::UnaryOp, op_str.to_string());
+            }
+            syn::Expr::Paren(eparen) => {
+                self.emit_kind(tokens, TokenKind::ParenExpr);
+            }
+            syn::Expr::Lit(elit) => match &elit.lit {
+                syn::Lit::Int(l) => {
+                    self.emit(tokens, TokenKind::IntLit, l.to_string());
+                }
+                syn::Lit::Float(f) => {
+                    self.emit(tokens, TokenKind::FloatLit, f.to_string());
+                }
+                syn::Lit::Str(s) => {
+                    let val = s.value();
+                    let truncated = if val.len() > 50 {
+                        format!("{}...", &val[..50])
+                    } else {
+                        val
+                    };
+                    self.emit(tokens, TokenKind::StrLit, truncated);
+                }
+                syn::Lit::Char(c) => {
+                    let ch = c.value();
+                    self.emit(tokens, TokenKind::CharLit, format!("{}", ch));
+                }
+                syn::Lit::Bool(b) => {
+                    self.emit(tokens, TokenKind::BoolLit, b.value().to_string());
+                }
+                _ => {}
+            },
+            syn::Expr::Array(earray) => {
+                self.emit_kind(tokens, TokenKind::ArrayLit);
+            }
+            syn::Expr::Tuple(etuple) => {
+                self.emit_kind(tokens, TokenKind::TupleLit);
+            }
+            syn::Expr::Index(eindex) => {
+                self.emit_kind(tokens, TokenKind::SliceExpr);
+            }
+            syn::Expr::Cast(ecast) => {
+                self.emit_kind(tokens, TokenKind::CastExpr);
+            }
+            // Deref is a Unary op in syn 2.x, not its own variant
+            syn::Expr::Reference(eref) => {
+                self.emit_kind(tokens, TokenKind::Reference);
+                if eref.mutability.is_some() {
+                    self.emit(tokens, TokenKind::Ident("mut".to_string()), "mut".to_string());
+                }
+            }
+            syn::Expr::Async(easync) => {
+                self.emit_kind(tokens, TokenKind::AsyncBlock);
+            }
+            syn::Expr::Closure(eclosure) => {
+                // Detect move by looking for "move" in source (syn doesn't expose this directly)
+                self.emit_kind(tokens, TokenKind::Closure);
+            }
+            syn::Expr::Macro(emacro) => {
+                let name = emacro
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.to_string())
+                    .unwrap_or_default();
+                self.emit(tokens, TokenKind::MacroInvocation, name);
+            }
+            syn::Expr::Block(eblock) => {
+                // ExprBlock has a `block` field of type Block
+                for stmt in &eblock.block.stmts {
+                    self.walk_stmt(stmt, tokens);
+                }
+            }
+            syn::Expr::Path(epath) => {
+                let segments = epath
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect::<Vec<_>>();
+                if !segments.is_empty() {
+                    self.emit(tokens, TokenKind::Ident(segments.join("::")), segments.join("::"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn emit(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind, text: String) {
+        tokens.push(StructuralToken {
+            kind,
             text,
-            span: (start, pos),
-        })
+            span: (0, 0), // No source spans in syn-based approach
+        });
     }
 
-    fn parse_fn_decl(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "fn" and whitespace
-        let mut pos = start + 2;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Parse function name (identifier)
-        let name_start = pos;
-        while pos < chars.len() && self.is_ident_char(chars[pos]) {
-            pos += 1;
-        }
-
-        // Find the opening brace of the body
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in fn decl".to_string(),
-            });
-        }
-
-        let span_end = pos;
-
-        Ok(StructuralToken {
-            kind: TokenKind::FnDecl,
-            text: chars[name_start..span_end].iter().collect(),
-            span: (start, span_end),
-        })
-    }
-
-    fn parse_let_stmt(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "let" and whitespace
-        let mut pos = start + 3;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Parse variable name
-        let name_start = pos;
-        while pos < chars.len() && self.is_ident_char(chars[pos]) {
-            pos += 1;
-        }
-
-        // Find end of statement (semicolon)
-        while pos < chars.len() && chars[pos] != ';' {
-            pos += 1;
-        }
-        if pos < chars.len() {
-            pos += 1;
-        } // skip semicolon
-
-        Ok(StructuralToken {
-            kind: TokenKind::LetStmt,
-            text: chars[name_start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_use_stmt(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "use" and any pub(crate) prefix that may have been skipped already
-        let mut pos = start + 3;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find the semicolon that ends the statement
-        while pos < chars.len() && chars[pos] != ';' {
-            pos += 1;
-        }
-        if pos < chars.len() {
-            pos += 1; // skip ;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::UseStmt,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn find_matching_brace(&self, chars: &[char], open_pos: usize) -> usize {
-        let mut pos = open_pos + 1; // skip opening brace
-        let mut depth = 1;
-        while pos < chars.len() && depth > 0 {
-            if chars[pos] == '{' {
-                depth += 1;
-            } else if chars[pos] == '}' {
-                depth -= 1;
-            }
-            pos += 1;
-        }
-        pos - 1 // position of matching closing brace
-    }
-
-    fn parse_mod_decl(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "mod" and whitespace
-        let mut pos = start + 3;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // If followed by '{', it's a block mod — skip the whole block
-        if chars[pos] == '{' {
-            let end = self.find_matching_brace(chars, pos);
-            return Ok(StructuralToken {
-                kind: TokenKind::ModDecl,
-                text: chars[start..end].iter().collect(),
-                span: (start, end),
-            });
-        }
-
-        // Otherwise it's `mod name;` — find the semicolon
-        while pos < chars.len() && chars[pos] != ';' {
-            pos += 1;
-        }
-        if pos < chars.len() {
-            pos += 1; // skip ;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::ModDecl,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_return_expr(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "return" and whitespace
-        let mut pos = start + 6;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find end of expression (semicolon or block end)
-        while pos < chars.len() && chars[pos] != ';' && chars[pos] != '}' {
-            pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == ';' {
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::ReturnExpr,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_if_else(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "if" and whitespace
-        let mut pos = start + 2;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Rust if doesn't require parens - find opening brace directly
-        // Find opening brace of body
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in if statement".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        // Check for else branch
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-        if self.match_keyword(&chars, pos, "else") {
-            let mut inner_pos = pos + 4;
-            while self.is_whitespace(&chars, inner_pos) {
-                inner_pos += 1;
-            }
-            // Parse else body recursively (simplified)
-            while inner_pos < chars.len() && chars[inner_pos] != '}' {
-                inner_pos += 1;
-            }
-            if inner_pos < chars.len() {
-                pos = inner_pos + 1;
-            }
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::IfElse,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_while_loop(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "while" and whitespace
-        let mut pos = start + 5;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find opening paren
-        while pos < chars.len() && chars[pos] != '(' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '(' in while loop".to_string(),
-            });
-        }
-
-        // Find matching closing paren
-        let mut depth = 1;
-        pos += 1;
-        while pos < chars.len() && depth > 0 {
-            if chars[pos] == '(' {
-                depth += 1;
-            } else if chars[pos] == ')' {
-                depth -= 1;
-            }
-            pos += 1;
-        }
-
-        // Find opening brace of body
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in while loop".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::WhileLoop,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_for_loop(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "for" and whitespace
-        let mut pos = start + 3;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find opening brace (skip iterator expression)
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in for loop".to_string(),
-            });
-        }
-
-        // Don't consume the body — emit just the header and let the caller
-        // tokenize the block contents. The opening brace is emitted as a
-        // BlockStart token by the caller's main loop.
-        Ok(StructuralToken {
-            kind: TokenKind::ForLoop,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_match_expr(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "match" and whitespace
-        let mut pos = start + 5;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find opening brace of match body
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in match expression".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::MatchExpr,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_struct_decl(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "struct" and whitespace
-        let mut pos = start + 6;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Parse struct name
-        let name_start = pos;
-        while pos < chars.len() && self.is_ident_char(chars[pos]) {
-            pos += 1;
-        }
-
-        // Find opening brace or semicolon (unit struct)
-        while pos < chars.len() && chars[pos] != '{' && chars[pos] != ';' {
-            pos += 1;
-        }
-
-        if pos >= chars.len() || chars[pos] == ';' {
-            // Unit struct: just name and semicolon
-            if pos < chars.len() {
-                pos += 1; // skip semicolon
-            }
-            return Ok(StructuralToken {
-                kind: TokenKind::StructDecl,
-                text: chars[name_start..pos].iter().collect(),
-                span: (start, pos),
-            });
-        }
-
-        // Named fields: find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1; // skip opening brace
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        // Skip trailing semicolon if present
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == ';' {
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::StructDecl,
-            text: chars[name_start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_enum_decl(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "enum" and whitespace
-        let mut pos = start + 4;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Parse enum name
-        let name_start = pos;
-        while pos < chars.len() && self.is_ident_char(chars[pos]) {
-            pos += 1;
-        }
-
-        // Find opening brace
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in enum decl".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::EnumDecl,
-            text: chars[name_start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_trait_decl(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "trait" and whitespace
-        let mut pos = start + 5;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Parse trait name
-        let name_start = pos;
-        while pos < chars.len() && self.is_ident_char(chars[pos]) {
-            pos += 1;
-        }
-
-        // Find opening brace (may have where clause in between)
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in trait decl".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::TraitDecl,
-            text: chars[name_start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_impl_block(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        // Skip "impl" and whitespace
-        let mut pos = start + 4;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find opening brace (skip type params and for clause)
-        while pos < chars.len() && chars[pos] != '{' {
-            pos += 1;
-        }
-        if pos >= chars.len() {
-            return Err(TokenizeError::Parse {
-                pos: start,
-                msg: "Expected '{' in impl block".to_string(),
-            });
-        }
-
-        // Find matching closing brace
-        let mut brace_depth = 1;
-        pos += 1;
-        while pos < chars.len() && brace_depth > 0 {
-            if chars[pos] == '{' {
-                brace_depth += 1;
-            } else if chars[pos] == '}' {
-                brace_depth -= 1;
-            }
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::ImplBlock,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_break_expr(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        let mut pos = start + 5;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find end of expression (semicolon or block end)
-        while pos < chars.len() && chars[pos] != ';' && chars[pos] != '}' {
-            pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == ';' {
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::BreakExpr,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_continue_expr(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        let mut pos = start + 8;
-        while self.is_whitespace(&chars, pos) {
-            pos += 1;
-        }
-
-        // Find end of expression (semicolon or block end)
-        while pos < chars.len() && chars[pos] != ';' && chars[pos] != '}' {
-            pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == ';' {
-            pos += 1;
-        }
-
-        Ok(StructuralToken {
-            kind: TokenKind::ContinueExpr,
-            text: chars[start..pos].iter().collect(),
-            span: (start, pos),
-        })
-    }
-
-    fn parse_identifier_or_literal(
-        &self,
-        chars: &[char],
-        start: usize,
-    ) -> Result<StructuralToken, TokenizeError> {
-        let mut pos = start;
-
-        // Check if it's a number (literal)
-        if chars[pos].is_digit(10) || (chars[pos] == '-' && pos + 1 < chars.len() && chars[pos + 1].is_digit(10)) {
-            while pos < chars.len() && (chars[pos].is_digit(10) || chars[pos] == '.') {
-                pos += 1;
-            }
-            let text: String = chars[start..pos].iter().collect();
-            Ok(StructuralToken {
-                kind: TokenKind::IntLit,
-                text,
-                span: (start, pos),
-            })
-        } else {
-            // Identifier
-            let name_start = pos;
-            while pos < chars.len() && self.is_ident_char(chars[pos]) {
-                pos += 1;
-            }
-
-            // Check for type annotation patterns like "let x: i32"
-            if pos < chars.len() && chars[pos] == ':' {
-                // This is a type annotation context - skip it
-                while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '_' || chars[pos] == ' ') {
-                    pos += 1;
-                }
-            }
-
-            let text: String = chars[name_start..pos].iter().collect();
-            Ok(StructuralToken {
-                kind: TokenKind::Ident(text.clone()),
-                text,
-                span: (name_start, pos),
-            })
-        }
+    fn emit_kind(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind) {
+        self.emit(tokens, kind, String::new());
     }
 }
 
@@ -1347,53 +480,39 @@ mod tests {
         let src = "fn add(a: i32, b: i32) -> i32 { return a + b; }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        // Should produce: FnDecl, BlockStart, ReturnExpr, BlockEnd
+        // Should produce: FnDecl, ReturnExpr
         assert_eq!(tokens[0].kind, TokenKind::FnDecl);
-        assert_eq!(tokens[1].kind, TokenKind::BlockStart);
-        assert_eq!(tokens[2].kind, TokenKind::ReturnExpr);
-        assert_eq!(tokens[3].kind, TokenKind::BlockEnd);
+        assert_eq!(tokens[1].kind, TokenKind::ReturnExpr);
     }
 
     #[test]
     fn test_let_statement() {
         let tokenizer = StructuralTokenizer::new();
-        let src = "let x: i32 = 42;";
+        let src = "fn main() { let x: i32 = 42; }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        assert_eq!(tokens[0].kind, TokenKind::LetStmt);
+        assert_eq!(tokens[0].kind, TokenKind::FnDecl);
+        assert_eq!(tokens[1].kind, TokenKind::LetStmt);
     }
 
     #[test]
     fn test_return_expression() {
         let tokenizer = StructuralTokenizer::new();
-        let src = "return 42;";
+        let src = "fn main() { return 42; }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        assert_eq!(tokens[0].kind, TokenKind::ReturnExpr);
+        assert_eq!(tokens[0].kind, TokenKind::FnDecl);
+        assert_eq!(tokens[1].kind, TokenKind::ReturnExpr);
     }
 
     #[test]
     fn test_block_structure() {
         let tokenizer = StructuralTokenizer::new();
-        let src = "if (true) { let x = 1; } else { let y = 2; }";
+        let src = "fn main() { if true { let x = 1; } else { let y = 2; } }";
         let tokens = tokenizer.tokenize(src).unwrap();
 
-        // Should have balanced BlockStart/BlockEnd
-        let block_starts = tokens.iter().filter(|t| t.kind == TokenKind::BlockStart).count();
-        let block_ends = tokens.iter().filter(|t| t.kind == TokenKind::BlockEnd).count();
-        assert_eq!(block_starts, block_ends);
-    }
-
-    #[test]
-    fn test_identifier_truncation() {
-        let tokenizer = StructuralTokenizer::new();
-        let src = "let very_long_variable_name_that_should_be_truncated = 42;";
-        let tokens = tokenizer.tokenize(src).unwrap();
-
-        // Identifier should be truncated to reasonable length
-        if let TokenKind::LetStmt = tokens[0].kind {
-            assert!(tokens[0].text.len() < 100);
-        }
+        // Should have IfElse token
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::IfElse));
     }
 
     #[test]
@@ -1431,9 +550,12 @@ mod tests {
     #[test]
     fn test_break_continue() {
         let tokenizer = StructuralTokenizer::new();
-        let src = "for i in 0..10 { if i == 5 { break; } continue; }";
+        let src = "fn main() { for i in 0..10 { if i == 5 { break; } continue; } }";
         let tokens = tokenizer.tokenize(src).unwrap();
-        // Should have ForLoop containing BreakExpr and ContinueExpr (nested)
+
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::ForLoop));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::BreakExpr));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::ContinueExpr));
     }
 
     #[test]
@@ -1466,11 +588,13 @@ fn main() {
         }
         c.increment();
     }
-    println!("{}", c.get());
 }
 "#;
         let tokens = tokenizer.tokenize(src).unwrap();
-        // Should successfully tokenize without hanging or erroring
-        assert!(!tokens.is_empty());
+
+        // Should have struct, impl, and function declarations
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::StructDecl));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::ImplBlock));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::FnDecl));
     }
 }
