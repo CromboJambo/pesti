@@ -124,6 +124,7 @@ impl std::error::Error for TokenizeError {}
 /// The structural tokenizer — recognizes Rust syntactic constructs and emits semantic tokens.
 pub struct StructuralTokenizer {
     /// Vocabulary mapping token text to IDs (populated during training)
+    #[allow(dead_code)]
     vocab: HashMap<String, u32>,
 }
 
@@ -464,9 +465,7 @@ impl StructuralTokenizer {
         pos += 1;
 
         // Handle inner attributes: #![...] vs #[...]
-        let mut is_inner = false;
         if pos < chars.len() && chars[pos] == '!' {
-            is_inner = true;
             pos += 1;
         }
 

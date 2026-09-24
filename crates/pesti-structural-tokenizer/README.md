@@ -111,8 +111,8 @@ Visualize Rust code structure for teaching/learning purposes.
 
 ## Relationship to pesti-runner
 
-This crate is a dependency of [pesti-runner](https://github.com/crombyface/pesti), PESTI's inference engine. However, it's designed to be useful independently for any tool that needs to analyze or generate Rust code with structural awareness.
+This crate is a dependency of [pesti-runner](https://github.com/CromboJambo/pesti), PESTI's inference engine. However, it's designed to be useful independently for any tool that needs to analyze or generate Rust code with structural awareness.
 
 ## License
 
-MIT
+AGPL-3.0-or-later
