@@ -19,20 +19,60 @@ fn main() {
     match cmd.as_str() {
         "tokenize" => {
             if args.len() < 3 {
-                eprintln!("Usage: struct-tok tokenize FILE");
+                eprintln!("Usage: struct-tok tokenize FILE [--budget N]");
                 process::exit(1);
             }
             let src = fs::read_to_string(&args[2]).expect("Failed to read file");
             let tokenizer = StructuralTokenizer::new();
-            match tokenizer.tokenize(&src) {
-                Ok(tokens) => {
-                    for (i, tok) in tokens.iter().enumerate() {
-                        println!("{}: {:?} \"{}\"", i, tok.kind, tok.text);
+
+            // Check for --budget flag
+            let budget_idx = args.iter().position(|a| a == "--budget");
+            if let Some(idx) = budget_idx {
+                if idx + 1 >= args.len() {
+                    eprintln!("--budget requires a value");
+                    process::exit(1);
+                }
+                let max_tokens: usize = args[idx + 1].parse().expect("Invalid budget value");
+                let budget = Budget {
+                    max_tokens,
+                    min_node_bytes: 500,
+                };
+                match tokenizer.tokenize_with_budget(&src, budget) {
+                    Ok(emissions) => {
+                        for e in &emissions {
+                            println!("{}", e);
+                        }
+                        let node_count = emissions
+                            .iter()
+                            .filter(|e| matches!(e, pesti_structural_tokenizer::Emission::Node(_)))
+                            .count();
+                        let elided_count = emissions
+                            .iter()
+                            .filter(|e| {
+                                matches!(e, pesti_structural_tokenizer::Emission::Elided(_))
+                            })
+                            .count();
+                        eprintln!(
+                            "Emitted {} nodes + {} elided spans (budget: {})",
+                            node_count, elided_count, max_tokens
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Tokenize error: {}", e);
+                        process::exit(1);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Tokenize error: {}", e);
-                    process::exit(1);
+            } else {
+                match tokenizer.tokenize(&src) {
+                    Ok(tokens) => {
+                        for (i, tok) in tokens.iter().enumerate() {
+                            println!("{}: {:?} \"{}\"", i, tok.kind, tok.text);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Tokenize error: {}", e);
+                        process::exit(1);
+                    }
                 }
             }
         }

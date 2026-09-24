@@ -745,9 +745,9 @@ impl StructuralTokenizer {
         emissions.push(Emission::Node(token));
     }
 
-    fn get_body_source(&self, block: &syn::Block) -> String {
-        // Approximation: count statements as proxy for body size
-        block.stmts.len().to_string()
+    fn get_body_size(&self, block: &syn::Block) -> usize {
+        // Count statements as proxy for body complexity/size
+        block.stmts.len()
     }
 
     fn count_body_nodes(&self, block: &syn::Block) -> (usize, Vec<(NodeKindTag, usize)>) {
@@ -1007,7 +1007,8 @@ fn main() {
 
     #[test]
     fn test_elided_span_has_summary() {
-        let src = "fn big() { for i in 0..10 { if i == 5 { break; } } match x { 1 => {}, _ => {} } }";
+        let src =
+            "fn big() { for i in 0..10 { if i == 5 { break; } } match x { 1 => {}, _ => {} } }";
         let tokenizer = StructuralTokenizer::new();
         let budget = Budget {
             max_tokens: 5,
