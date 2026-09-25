@@ -21,8 +21,10 @@ fn fibonacci(n: u32) -> u32 {
     return b;
 }
 
-let result = fibonacci(10);
-println!("{}", result);
+fn main() {
+    let result = fibonacci(10);
+    println!("{}", result);
+}
 "#;
 
     println!("=== Structural Tokenization Demo ===\n");

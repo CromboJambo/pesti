@@ -35,7 +35,7 @@ fn main() {
                 let max_tokens: usize = args[idx + 1].parse().expect("Invalid budget value");
                 let budget = Budget {
                     max_tokens,
-                    min_node_bytes: 500,
+                    min_body_stmts: 10,
                 };
                 match tokenizer.tokenize_with_budget(&src, budget) {
                     Ok(emissions) => {

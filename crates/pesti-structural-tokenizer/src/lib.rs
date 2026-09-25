@@ -191,15 +191,15 @@ impl std::error::Error for TokenizeError {}
 pub struct Budget {
     /// Maximum number of structural tokens to emit.
     pub max_tokens: usize,
-    /// Minimum body size (in bytes) worth eliding — smaller bodies are always emitted in full.
-    pub min_node_bytes: usize,
+    /// Minimum statement count in a body worth eliding — smaller bodies are always emitted in full.
+    pub min_body_stmts: usize,
 }
 
 impl Default for Budget {
     fn default() -> Self {
         Budget {
             max_tokens: 1000,
-            min_node_bytes: 500,
+            min_body_stmts: 5,
         }
     }
 }
@@ -311,7 +311,7 @@ impl StructuralTokenizer {
         let mut budget_state = BudgetState {
             max_tokens: budget.max_tokens,
             emitted: 0,
-            min_node_bytes: budget.min_node_bytes,
+            min_body_stmts: budget.min_body_stmts,
         };
 
         self.walk_items_budgeted(&ast.items, &mut emissions, &mut budget_state);
@@ -611,13 +611,14 @@ impl StructuralTokenizer {
                 Item::Fn(f) => {
                     let sig = format!("fn {}", f.sig.ident);
                     self.emit_emission(emissions, TokenKind::FnDecl, sig);
+                    budget.emitted += 1;
 
-                    // Check if body is worth eliding
-                    let body_src = self.get_body_source(&f.block);
-                    if body_src.len() >= budget.min_node_bytes {
+                    // Check if body is worth eliding (many statements)
+                    let body_size = self.get_body_size(&f.block);
+                    if body_size >= budget.min_body_stmts {
                         // Count what's in the body without emitting
                         let (node_count, kind_summary) = self.count_body_nodes(&f.block);
-                        if node_count > 0 && budget.emitted + 1 < budget.max_tokens {
+                        if node_count > 0 && budget.emitted < budget.max_tokens {
                             // Emit elision marker instead of walking
                             emissions.push(Emission::Elided(ElidedSpan {
                                 range: (0, 0), // span tracking not implemented yet
@@ -629,6 +630,9 @@ impl StructuralTokenizer {
                     } else {
                         // Small body — walk normally
                         for stmt in &f.block.stmts {
+                            if budget.emitted >= budget.max_tokens {
+                                break;
+                            }
                             self.walk_stmt_budgeted(stmt, emissions, budget);
                         }
                     }
@@ -636,24 +640,30 @@ impl StructuralTokenizer {
                 Item::Struct(s) => {
                     let name = s.ident.to_string();
                     self.emit_emission(emissions, TokenKind::StructDecl, name);
+                    budget.emitted += 1;
                 }
                 Item::Enum(e) => {
                     let name = e.ident.to_string();
                     self.emit_emission(emissions, TokenKind::EnumDecl, name);
+                    budget.emitted += 1;
                 }
                 Item::Trait(t) => {
                     let name = t.ident.to_string();
                     self.emit_emission(emissions, TokenKind::TraitDecl, name);
+                    budget.emitted += 1;
                 }
                 Item::Impl(i) => {
                     self.emit_emission(emissions, TokenKind::ImplBlock, "impl".to_string());
+                    budget.emitted += 1;
                 }
                 Item::Use(_u) => {
                     self.emit_emission(emissions, TokenKind::UseStmt, "use".to_string());
+                    budget.emitted += 1;
                 }
                 Item::Mod(m) => {
                     let name = m.ident.to_string();
                     self.emit_emission(emissions, TokenKind::ModDecl, name);
+                    budget.emitted += 1;
                     if let Some((_brace, items)) = &m.content {
                         self.walk_items_budgeted(items, emissions, budget);
                     }
@@ -676,11 +686,13 @@ impl StructuralTokenizer {
         match stmt {
             syn::Stmt::Local(_let_stmt) => {
                 self.emit_emission(emissions, TokenKind::LetStmt, String::new());
+                budget.emitted += 1;
             }
             syn::Stmt::Expr(expr, semi) => {
                 self.walk_expr_budgeted(expr, emissions, budget);
                 if semi.is_some() {
                     self.emit_emission(emissions, TokenKind::Semicolon, String::new());
+                    budget.emitted += 1;
                 }
             }
             _ => {}
@@ -700,37 +712,46 @@ impl StructuralTokenizer {
         match expr {
             syn::Expr::If(eif) => {
                 self.emit_emission(emissions, TokenKind::IfElse, String::new());
+                budget.emitted += 1;
                 for stmt in &eif.then_branch.stmts {
                     self.walk_stmt_budgeted(stmt, emissions, budget);
                 }
             }
             syn::Expr::While(_ewhile) => {
                 self.emit_emission(emissions, TokenKind::WhileLoop, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::ForLoop(efor) => {
                 self.emit_emission(emissions, TokenKind::ForLoop, String::new());
+                budget.emitted += 1;
                 for stmt in &efor.body.stmts {
                     self.walk_stmt_budgeted(stmt, emissions, budget);
                 }
             }
             syn::Expr::Match(_ematch) => {
                 self.emit_emission(emissions, TokenKind::MatchExpr, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::Return(_eret) => {
                 self.emit_emission(emissions, TokenKind::ReturnExpr, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::Break(_) => {
                 self.emit_emission(emissions, TokenKind::BreakExpr, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::Continue(_) => {
                 self.emit_emission(emissions, TokenKind::ContinueExpr, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::Call(_ecall) => {
                 self.emit_emission(emissions, TokenKind::CallExpr, String::new());
+                budget.emitted += 1;
             }
             syn::Expr::MethodCall(emethod) => {
                 let method_name = emethod.method.to_string();
                 self.emit_emission(emissions, TokenKind::MethodCall, method_name);
+                budget.emitted += 1;
             }
             _ => {}
         }
@@ -838,7 +859,7 @@ impl Default for StructuralTokenizer {
 struct BudgetState {
     max_tokens: usize,
     emitted: usize,
-    min_node_bytes: usize,
+    min_body_stmts: usize,
 }
 
 #[cfg(test)]
@@ -972,7 +993,7 @@ fn main() {
         let src = "fn foo() { let x = 1; let y = 2; return x + y; }";
         let budget = Budget {
             max_tokens: 5,
-            min_node_bytes: 1,
+            min_body_stmts: 1,
         };
         let emissions = tokenizer.tokenize_with_budget(src, budget).unwrap();
 
@@ -992,7 +1013,7 @@ fn main() {
         let tokenizer = StructuralTokenizer::new();
         let budget = Budget {
             max_tokens: 10,
-            min_node_bytes: 1,
+            min_body_stmts: 1,
         };
         let emissions = tokenizer.tokenize_with_budget(&src, budget).unwrap();
 
@@ -1012,7 +1033,7 @@ fn main() {
         let tokenizer = StructuralTokenizer::new();
         let budget = Budget {
             max_tokens: 5,
-            min_node_bytes: 1,
+            min_body_stmts: 1,
         };
         let emissions = tokenizer.tokenize_with_budget(src, budget).unwrap();
 
