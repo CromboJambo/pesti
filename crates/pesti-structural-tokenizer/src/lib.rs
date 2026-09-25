@@ -5,6 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use syn::{Item, parse_file};
 
+mod folder;
+pub use folder::{Span, SpanItem, SpanKind, fold};
+
 /// Structural token with position information
 #[derive(Debug, Clone)]
 pub struct StructuralToken {

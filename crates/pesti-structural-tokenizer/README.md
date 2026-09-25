@@ -8,6 +8,75 @@ Traditional byte-pair encoding (BPE) tokenizers treat source code as opaque text
 
 The result is that LLMs get explicit signals about code structure without having to infer it from whitespace and punctuation alone — and the token count drops dramatically (57KB → 2KB structural digests). This improves code understanding, generation accuracy, and reduces hallucination of syntactically invalid code.
 
+## Folded Map Structural Folding
+
+The folded-map approach transforms flat token streams into hierarchical spans by matching delimiter pairs (`{ }`). This produces a tree structure that represents the actual nesting in the source code.
+
+**Before (flat tokens):**
+```
+[FN_DECL] [IDENT:"add"] [PAREN_OPEN] [PARAM_DECL] [PAREN_CLOSE] [BRACE_OPEN] [RETURN_EXPR] [BINARY_OP] [BRACE_CLOSE]
+```
+
+**After (folded spans):**
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+```
+
+### Live Demo
+
+Run the fold demo to see structural folding in action:
+
+```bash
+cargo run -p pesti-structural-tokenizer --example fold_demo
+```
+
+Example output showing nested block folding:
+```
+Input: 18 raw tokens with nested braces
+[ROOT]
+  KW(if) (if)
+  ( (())
+  IDENT(x) (x)
+  ) (()))
+  [BLOCK OPEN]
+    KW(let) (let)
+    IDENT(y) (y)
+    BINARY_OP (=)
+    INT_LIT (1)
+    ; (;)
+    [BLOCK OPEN]
+      KW(return) (return)
+      IDENT(y) (y)
+      BINARY_OP (+)
+      INT_LIT (1)
+      ; (;)
+    [BLOCK CLOSE]
+  [BLOCK CLOSE]
+
+Folded into 3 nested span nodes
+```
+
+## Generated API Documentation
+
+The folded span tree can be traversed to automatically generate API documentation from source code. Run the api_docs example:
+
+```bash
+cargo run -p pesti-structural-tokenizer --example api_docs
+```
+
+Example output for a Rust module with multiple functions:
+```
+## API Documentation
+
+- `fn add(a: i32, b: i32) -> i32`
+- `fn multiply(a: i32, b: i32) -> i32`
+- `fn main()`
+```
+
+This demonstrates how folded spans enable automatic documentation generation from the structural understanding of code.
+
 ## Why Structural Tokenization?
 
 LLMs trained on raw BPE tokens must learn Rust's syntax implicitly. Structural tokenization makes this knowledge **explicit**:
@@ -115,6 +184,7 @@ This crate is a dependency of [pesti-runner](https://github.com/CromboJambo/pest
 - **Parsing**: `syn` crate parses source into complete AST (replaces hand-written recursive descent parser from v0.1.0)
 - **Walking**: Manual AST walker traverses items, statements, and expressions
 - **Emission**: Structural tokens emitted based on node kind; function bodies elided except for declaration signatures
+- **Folded Map**: Stack-based `{ }` folding transforms flat token streams into nested `Span` objects representing code structure
 
 ## License
 
