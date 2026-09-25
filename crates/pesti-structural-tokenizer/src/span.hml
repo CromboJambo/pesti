@@ -1,0 +1,67 @@
+// Folded Map Structural Tokenizer
+// Input: flat token stream → Output: tree of spans with structure
+
+import { tokenize } from "./tokenizer.hml";
+
+// Span represents a structured unit of code
+define Span {
+    kind: string,       // "function", "block", "statement", etc.
+    open: array,        // Opening tokens (signature, declaration)
+    body: array,        // Child spans or terminal tokens
+    close: array,       // Closing tokens
+}
+
+// Fold a flat token stream into structured spans
+fn fold(tokens: array): Span {
+    let stack = [];
+    let current = null;
+
+    for (let i = 0; i < tokens.length; i++) {
+        let tok = tokens[i];
+
+        if (tok == "{" || tok == "(" || tok == "[") {
+            // Opening bracket - push new span onto stack
+            let span = { kind: "block", open: [tok], body: [], close: [] };
+            if (current != null) {
+                current.body.push(span);
+            } else {
+                stack.push(span);
+            }
+            current = span;
+        } else if (tok == "}" || tok == ")" || tok == "]") {
+            // Closing bracket - pop span from stack
+            let closing = null;
+            while (stack.length > 0) {
+                let s = stack.pop();
+                if (s.open[0] == "{" && tok == "}") { closing = s; break; }
+                if (s.open[0] == "(" && tok == ")") { closing = s; break; }
+                if (s.open[0] == "[" && tok == "]") { closing = s; break; }
+            }
+            if (closing != null) {
+                closing.close.push(tok);
+                current = stack.length > 0 ? stack[stack.length - 1] : null;
+            } else {
+                // Unmatched close - attach to current span's body
+                if (current != null) {
+                    current.body.push({ kind: "token", value: tok });
+                }
+            }
+        } else {
+            // Regular token - add to current span's body
+            if (current != null) {
+                current.body.push({ kind: "token", value: tok });
+            }
+        }
+    }
+
+    // Return top-level span (or first in stack)
+    return stack.length > 0 ? stack[0] : null;
+}
+
+// Test with a simple function
+let code = "fn add(a, b) { return a + b; }";
+let tokens = tokenize(code);
+let folded = fold(tokens);
+
+print("Folded structure:");
+print(folded.kind);
