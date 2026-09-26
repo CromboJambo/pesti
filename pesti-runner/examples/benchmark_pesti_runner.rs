@@ -18,9 +18,11 @@ fn main() {
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
     // Tokenize prompt using the tokenizer directly
-    let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
     let t_encode = Instant::now();
-    let prompt_tokens = tokenizer.encode(prompt).expect("Failed to encode prompt");
+    let prompt_tokens = {
+        let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
+        tokenizer.encode(prompt).expect("Failed to encode prompt")
+    };
     println!(
         "Encoded {} tokens in {:.2}ms",
         prompt_tokens.len(),
@@ -69,9 +71,10 @@ fn main() {
         let next_token = LlamaModel::argmax_from_logits(&logits);
 
         // Check for EOS
-        let piece = tokenizer
-            .decode(&[next_token])
-            .expect("Failed to decode token");
+        let piece = {
+            let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
+            tokenizer.decode(&[next_token]).expect("Failed to decode token")
+        };
         if piece == "< |endoftext|>" {
             println!("EOS reached at token {}", i + 1);
             break;
