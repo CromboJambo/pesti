@@ -1,8 +1,9 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
 //! Mirrors the llama.cpp generate() flow using pesti-runner's transformer stack.
 
-use pesti_runner::transformer::{SamplingConfig, LlamaModel};
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
+use pesti_runner::transformer::{LlamaModel, SamplingConfig};
+use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
 
@@ -32,10 +33,16 @@ fn main() {
     for (i, &tok) in prompt_tokens.iter().enumerate() {
         let hidden = model.embed(tok, i).expect("Embedding failed");
         if model.dispatch.is_some() {
-            logits = model.forward_with_dispatch(&hidden, i).expect("Forward dispatch failed");
+            logits = model
+                .forward_with_dispatch(&hidden, i)
+                .expect("Forward dispatch failed");
         } else {
-            let hidden_out = model.forward_layers(&hidden, i).expect("Forward layers failed");
-            logits = model.apply_output_head(&hidden_out).expect("Apply output head failed");
+            let hidden_out = model
+                .forward_layers(&hidden, i)
+                .expect("Forward layers failed");
+            logits = model
+                .apply_output_head(&hidden_out)
+                .expect("Apply output head failed");
         }
     }
     println!(
@@ -73,14 +80,20 @@ fn main() {
         generated.push(next_token);
 
         // Run single decode step: embed token, forward through layers
-        let hidden = model.embed(next_token, i + prompt_tokens.len()).expect("Token embed failed");
+        let hidden = model
+            .embed(next_token, i + prompt_tokens.len())
+            .expect("Token embed failed");
         if model.dispatch.is_some() {
-            logits = model.forward_with_dispatch(&hidden, i + prompt_tokens.len())
+            logits = model
+                .forward_with_dispatch(&hidden, i + prompt_tokens.len())
                 .expect("Forward dispatch failed");
         } else {
-            let hidden_out = model.forward_layers(&hidden, i + prompt_tokens.len())
+            let hidden_out = model
+                .forward_layers(&hidden, i + prompt_tokens.len())
                 .expect("Forward layers failed");
-            logits = model.apply_output_head(&hidden_out).expect("Apply output head failed");
+            logits = model
+                .apply_output_head(&hidden_out)
+                .expect("Apply output head failed");
         }
 
         println!(
