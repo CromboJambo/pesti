@@ -64,6 +64,10 @@ pub enum TokenKind {
     Dereference,
     Reference,
 
+    // Rust keywords
+    Const,
+    Mut,
+
     // Blocks and delimiters
     BlockStart,
     BlockEnd,
@@ -139,6 +143,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::CastExpr => write!(f, "CAST_EXPR"),
             TokenKind::Dereference => write!(f, "DEREF"),
             TokenKind::Reference => write!(f, "REF"),
+            TokenKind::Const => write!(f, "CONST"),
+            TokenKind::Mut => write!(f, "MUT"),
             TokenKind::BlockStart => write!(f, "BLOCK_START"),
             TokenKind::BlockEnd => write!(f, "BLOCK_END"),
             TokenKind::ParenOpen => write!(f, "("),
