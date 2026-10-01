@@ -318,7 +318,7 @@ impl InferenceEngine {
                 warn!(m, n, k, "GEMM: GPU not available, falling back to CPU");
                 self.cpu_gemm
                     .matmul(alpha, a, b, beta, c, m, n, k)
-                    .map_err(|e| RunnerError::Tensor(format!("GEMM CPU fallback failed: {e}")))
+                    .map_err(|e| RunnerError::Kernel(format!("GEMM CPU fallback failed: {e}")))
             }
             Err(e) => {
                 warn!(error = %e, m, n, k, "GEMM: GPU kernel failed, falling back to CPU");
@@ -359,7 +359,7 @@ impl InferenceEngine {
     pub fn infer(&self, model: &impl Module, input: Tensor) -> Result<Tensor> {
         model
             .forward(&input)
-            .map_err(|e: candle_core::Error| RunnerError::Tensor(e.to_string()))
+            .map_err(|e: candle_core::Error| RunnerError::Kernel(e.to_string()))
     }
 
     /// Get device info.
@@ -417,13 +417,13 @@ impl InferenceEngine {
                 warn!("Attention: GPU not available, falling back to CPU");
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|e| RunnerError::Tensor(format!("Attention CPU fallback failed: {e}")))
+                    .map_err(|e| RunnerError::Kernel(format!("Attention CPU fallback failed: {e}")))
             }
             Err(e) => {
                 warn!(error = %e, "Attention: GPU kernel failed, falling back to CPU");
                 self.cpu_attention
                     .forward(query, key_cache, value_cache, mask, config)
-                    .map_err(|e| RunnerError::Tensor(format!("Attention CPU fallback failed: {e}")))
+                    .map_err(|e| RunnerError::Kernel(format!("Attention CPU fallback failed: {e}")))
             }
         }
     }

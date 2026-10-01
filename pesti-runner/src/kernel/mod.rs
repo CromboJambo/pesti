@@ -86,6 +86,7 @@ pub mod cuda_bridge;
 pub mod device_buf;
 pub mod device_tensor;
 pub mod dispatch;
+pub mod linear;
 #[cfg(feature = "cuda")]
 pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
 #[cfg(feature = "cuda")]
@@ -174,11 +175,15 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 #[cfg(feature = "cuda")]
 pub use q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
-pub use rope::{CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel, rope_cpu};
+pub use rope::{apply_rope_cpu, CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel};
 #[cfg(not(feature = "cuda"))]
 pub use rope::{RopeKernel, apply_rope_cpu};
 #[cfg(feature = "cuda")]
-pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
+pub use rmsnorm::rmsnorm_cpu;
+#[cfg(feature = "cuda")]
+pub use softmax::{softmax_cpu, CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
+#[cfg(feature = "cuda")]
+pub use swiglu::swiglu_cpu;
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]

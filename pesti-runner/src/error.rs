@@ -47,8 +47,8 @@ pub enum RunnerError {
         detail: AttentionError,
     },
 
-    #[error("tensor computation error: {0}")]
-    Tensor(String),
+    #[error("kernel execution error: {0}")]
+    Kernel(String),
 
     #[error("CUDA error: {0}")]
     Cuda(#[from] CudaError),

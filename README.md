@@ -97,7 +97,7 @@ cargo run -p pesti-runner --release --features cuda \
 - **GPU end-to-end inference stack** (Weeks 23-31, ongoing) — 5-phase refactor:
   - Phase 1 ✅ Fused attention kernel (passes numerical conformance vs llama.cpp)
   - Phase 2a ✅ GPU GEMM integration into inference path
-  - Phase 2b 🚧 Device-resident tensors (F16 on device, minimize host round-trips)
+  - Phase 2b ✅ Device-resident tensors (F16 on device, minimize host round-trips)
   - Phase 3 🚧 Non-matmul GPU kernels: SwiGLU, RMSNorm, RoPE, Softmax
   - Phase 4 🚧 Q4_K KV cache with on-the-fly dequantization
   - Phase 5 ⏳ Execution graph & kernel fusion

@@ -1,0 +1,89 @@
+// Softmax kernel (numerically stable)
+// Two-pass: compute max, then exp(x-max)/sum(exp(x-max))
+// Each block handles one row.
+
+.version 8.0
+.target sm_89
+.address_size 64
+
+.shared float warp_max[32];
+.shared float warp_sum[32];
+
+.global func softmax_kernel(
+    const half* __restrict__ logits,
+    half* __restrict__ out,
+    int num_rows,
+    int dim
+) {
+    // Each block handles one row
+    int row = blockIdx.x;
+    if (row >= num_rows) return;
+
+    const half* row_logits = logits + row * dim;
+    half* row_out = out + row * dim;
+
+    // Pass 1: Find max value in row
+    float local_max = -INFINITY;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        float val = __half2float(row_logits[i]);
+        if (val > local_max) local_max = val;
+    }
+
+    // Warp-level max reduction
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        float other = __shfl_down_sync(0xffffffff, local_max, offset);
+        if (other > local_max) local_max = other;
+    }
+
+    // Warp leader writes to shared memory
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        warp_max[threadIdx.x / warpSize] = local_max;
+    }
+    __syncthreads();
+
+    // Block-level max reduction
+    float block_max = -INFINITY;
+    int num_warps = (blockDim.x + warpSize - 1) / warpSize;
+    if (threadIdx.x < num_warps) {
+        float candidate = warp_max[threadIdx.x];
+        if (candidate > block_max) block_max = candidate;
+    }
+    __syncthreads();
+
+    // Pass 2: Compute exp(x - max) and accumulate sum
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        float val = __half2float(row_logits[i]);
+        float shifted = expf(val - block_max);
+        row_out[i] = __float2half_rn(shifted);  // Temporarily store exp values
+        local_sum += shifted;
+    }
+
+    // Warp-level sum reduction
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        float other = __shfl_down_sync(0xffffffff, local_sum, offset);
+        if ((threadIdx.x & (warpSize - 1)) < warpSize / 2) {
+            local_sum += other;
+        }
+    }
+
+    // Warp leader writes to shared memory
+    if ((threadIdx.x & (warpSize - 1)) == 0) {
+        warp_sum[threadIdx.x / warpSize] = local_sum;
+    }
+    __syncthreads();
+
+    // Block-level sum reduction
+    float block_sum = 0.0f;
+    if (threadIdx.x < num_warps) {
+        block_sum += warp_sum[threadIdx.x];
+    }
+    __syncthreads();
+
+    // Pass 3: Normalize by dividing by sum
+    float inv_sum = 1.0f / block_sum;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        float val = __half2float(row_out[i]);
+        row_out[i] = __float2half_rn(val * inv_sum);
+    }
+}

@@ -1,147 +1,123 @@
-// RMSNorm kernel: output[i] = weight[i] * x[i] / sqrt(mean(x^2) + eps)
-// Row-wise normalization, each row processed by a block of 256 threads.
-//
-// Inputs:
-//   x: [num_rows, hidden_dim] f16 (row-major)
-//   weight: [hidden_dim] f16 (learned scale)
-// Outputs:
-//   out: [num_rows, hidden_dim] f16
+// RMSNorm kernel: output[i] = weight[i % hidden] * x[i] / sqrt(mean(x^2) + eps)
+// Row-wise normalization. Each block handles one row with warp-level reduction.
 
-.version 8.7
-.target sm_80
+.version 8.0
+.target sm_89
 .address_size 64
 
-.shared .f32 s_sum[256];
+.shared float s_sums[32];
 
 .visible .entry rmsnorm_kernel(
-    .param .u64 x,
-    .param .u64 weight,
-    .param .u64 out,
+    .param .u64 x_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 out_ptr,
     .param .u32 num_rows,
     .param .u32 hidden_dim,
     .param .f32 eps
-)
-{
-    .reg .pred %p0;
-    .reg .b16 %h0, %h1, %h2;
-    .reg .f32 %f0, %f1, %f2, %f3, %f4, %f5, %f6;
-    .reg .u32 %r0, %r1, %r2, %r3, %r4, %r5;
-    .reg .u64 %rd0, %rd1, %rd2, %rd3, %rd4;
+) {
+    .reg .pred p_done;
+    .reg .b16 h_in, h_w, h_out;
+    .reg .f32 f_val, f_sum_sq, f_other, f_inv_rms, f_norm;
+    .reg .u32 r_row, r_dim, r_i, r_stride, r_warp_id, r_lane;
 
     // Load parameters
-    ld.param.u64 %rd0, [x];
-    ld.param.u64 %rd1, [weight];
-    ld.param.u64 %rd2, [out];
-    ld.param.u32 %r0, [num_rows];
-    ld.param.u32 %r1, [hidden_dim];
-    ld.param.f32 %f0, [eps];
+    ld.param.u64 x_ptr, [x_ptr];
+    ld.param.u64 weight_ptr, [weight_ptr];
+    ld.param.u64 out_ptr, [out_ptr];
+    ld.param.u32 num_rows, [num_rows];
+    ld.param.u32 hidden_dim, [hidden_dim];
+    ld.param.f32 eps, [eps];
 
-    // Each block processes one row
-    mov.u32 %r2, %blockIdx.x;
-    setp.ge.u32 %p0, %r2, %r0;
-    @%p0 bra $L_exit;
+    // Each block handles one row
+    mov.u32 r_row, %ctaid.x;
+    setp.ge.u32 p_done, r_row, num_rows;
+    @p_done ret;
 
-    // Row offset in elements
-    mul.wide.u32 %rd3, %r2, %r1;
+    // Compute sum of squares for this row
+    fmaf.f32 f_sum_sq, 0.0f, 0.0f, 0.0f;
+    mov.u32 r_i, %tid.x;
+    mov.u32 r_stride, %blockDim.x;
 
-    // Thread-local sum of squares
-    mov.f32 %f1, 0.0;
+sum_loop:
+    setp.ge.u32 p_done, r_i, hidden_dim;
+    @p_done bra sum_done;
 
-$L_sum_loop:
-    mov.u32 %r3, %threadIdx.x;
-    add.u32 %r4, %r3, 0;
-    setp.ge.u32 %p0, %r4, %r1;
-    @%p0 bra $L_sum_done;
-
-$L_inner:
-    // Load x[row][col] as f16
-    add.u64 %rd4, %rd3, %r4;
-    mul.wide.u32 %rd5, %rd4, 2;
-    add.u64 %rd6, %rd0, %rd5;
-    ld.global.u16 %h0, [%rd6];
+    // Load x[row][i] as f16
+    mul.wide.u32 tmp_addr, r_row, hidden_dim;
+    add.u32 tmp_addr, tmp_addr, r_i;
+    mul.wide.u32 byte_off, tmp_addr, 2;
+    add.u64 addr, x_ptr, byte_off;
+    ld.global.half h_in, [addr];
 
     // Convert to f32 and accumulate square
-    cvt.f32.u16 %f2, %h0;
-    mul.f32 %f3, %f2, %f2;
-    add.f32 %f1, %f1, %f3;
+    cvt.rn.f32.half f_val, h_in;
+    mul.f32 f_sum_sq, f_val, f_val;
 
-    // Advance by block size
-    mov.u32 %r5, 256;
-    add.u32 %r4, %r4, %r5;
-    setp.ge.u32 %p0, %r4, %r1;
-    @%p0 bra $L_sum_done;
+    // Advance
+    add.u32 r_i, r_i, r_stride;
+    bra sum_loop;
 
-    bra $L_inner;
+sum_done:
+    // Warp-level reduction using shuffle
+    mov.u32 r_lane, %laneid;
+    for (let offset = 16; offset > 0; offset >>= 1) {
+        f_other = __shfl_down_sync(0xffffffff, f_sum_sq, offset);
+        if (r_lane < 16) {
+            f_sum_sq = f_sum_sq + f_other;
+        }
+    }
 
-$L_sum_done:
-    // Reduce sum of squares across threads using shared memory
-    mov.f32 %f4, 0.0;
-    mov.u32 %r6, %threadIdx.x;
-    st.shared.f32 [s_sum + %r6*4], %f1;
+    // Warp leader writes to shared memory
+    if (r_lane == 0) {
+        s_sums[r_row] = f_sum_sq;
+    }
+    __syncthreads();
 
-    // Synchronize and reduce in log steps
-    bar.sync 0;
+    // Block-level reduction across warps
+    f_inv_rms = s_sums[0];
+    for (let w = 1; w < 32; w++) {
+        f_inv_rms = f_inv_rms + s_sums[w];
+    }
+    __syncthreads();
 
-    // Simple tree reduction (first pass only)
-    mov.u32 %r7, 128;
-$L_reduce:
-    setp.ge.u32 %p0, %r6, %r7;
-    @%p0 bra $L_reduce_done;
-    ld.shared.f32 %f5, [s_sum + (%r6 + %r7)*4];
-    add.f32 %f4, %f1, %f5;
-    st.shared.f32 [s_sum + %r6*4], %f4;
-$L_reduce_done:
-    bar.sync 0;
+    // Compute inverse RMS: 1/sqrt(mean(x^2) + eps)
+    div.f32 f_mean, f_inv_rms, hidden_dim;
+    add.f32 f_mean, f_mean, eps;
+    rsqrt.approx.f32 f_inv_rms, f_mean;
 
-    // After reduction, thread 0 has the sum
-    setp.eq.u32 %p0, %r6, 0;
-    @%p0 bra $L_compute_inv_rms;
-    bra $L_exit;
+    // Normalize and scale each element
+    mov.u32 r_i, %tid.x;
+norm_loop:
+    setp.ge.u32 p_done, r_i, hidden_dim;
+    @p_done bra norm_done;
 
-$L_compute_inv_rms:
-    // Compute inverse RMS: 1/sqrt(sum/dim + eps)
-    div.f32 %f5, %f4, %r1;
-    add.f32 %f5, %f5, %f0;
-    rsqrt.approx.f32 %f6, %f5;
+    // Load x[row][i]
+    mul.wide.u32 tmp_addr, r_row, hidden_dim;
+    add.u32 tmp_addr, tmp_addr, r_i;
+    mul.wide.u32 byte_off, tmp_addr, 2;
+    add.u64 addr, x_ptr, byte_off;
+    ld.global.half h_in, [addr];
 
-    // Now normalize and scale: each thread handles its elements
-$L_norm_loop:
-    mov.u32 %r3, %threadIdx.x;
-    add.u32 %r4, %r3, 0;
-    setp.ge.u32 %p0, %r4, %r1;
-    @%p0 bra $L_exit;
+    // Load weight[i]
+    mul.wide.u32 w_byte, r_i, 2;
+    add.u64 w_addr, weight_ptr, w_byte;
+    ld.global.half h_w, [w_addr];
 
-$L_norm_inner:
-    // Load x[row][col]
-    add.u64 %rd4, %rd3, %r4;
-    mul.wide.u32 %rd5, %rd4, 2;
-    add.u64 %rd6, %rd0, %rd5;
-    ld.global.u16 %h0, [%rd6];
+    // Normalize: x * inv_rms * weight
+    cvt.rn.f32.half f_val, h_in;
+    mul.f32 f_norm, f_val, f_inv_rms;
+    cvt.rn.f32.half f_w, h_w;
+    mul.f32 f_norm, f_norm, f_w;
 
-    // Load weight[col]
-    mul.wide.u32 %rd7, %r4, 2;
-    add.u64 %rd8, %rd1, %rd7;
-    ld.global.u16 %h1, [%rd8];
+    // Store output
+    cvt.rn.half.f32 h_out, f_norm;
+    add.u64 out_addr, out_ptr, byte_off;
+    st.global.half [out_addr], h_out;
 
-    // Convert to f32, normalize, scale
-    cvt.f32.u16 %f2, %h0;
-    mul.f32 %f3, %f2, %f6;  // x * inv_rms
-    cvt.f32.u16 %f4, %h1;
-    mul.f32 %f5, %f3, %f4;  // * weight
+    // Advance
+    add.u32 r_i, r_i, r_stride;
+    bra norm_loop;
 
-    // Convert back to f16 and store
-    cvt.rn.f16.f32 %h2, %f5;
-    add.u64 %rd9, %rd2, %rd5;
-    st.global.u16 [%rd9], %h2;
-
-    // Advance by block size
-    mov.u32 %r5, 256;
-    add.u32 %r4, %r4, %r5;
-    setp.ge.u32 %p0, %r4, %r1;
-    @%p0 bra $L_exit;
-
-    bra $L_norm_inner;
-
-$L_exit:
+norm_done:
     ret;
 }

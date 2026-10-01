@@ -3,7 +3,7 @@
 //! Validates that the rotary embeddings implementation correctly applies
 //! position-dependent rotations to query and key vectors.
 
-use pesti_runner::kernel::rope::{CpuRopeKernel, RopeKernel, rope_cpu};
+use pesti_runner::kernel::rope::{apply_rope_cpu, CpuRopeKernel, RopeKernel};
 
 #[test]
 fn test_rope_identity_at_zero() {
@@ -17,7 +17,7 @@ fn test_rope_identity_at_zero() {
     let input: Vec<f32> = (0..embed_dim).map(|i| (i as f32) * 0.1 - 5.0).collect();
 
     let mut q_rotated = input.clone();
-    rope_cpu(&mut q_rotated, num_heads, seq_len, 0, head_dim, base);
+    apply_rope_cpu(&mut q_rotated, num_heads, seq_len, 0, head_dim, base);
 
     // Should be nearly identical to input at position 0
     let diff = input
@@ -44,10 +44,10 @@ fn test_rope_positional_variation() {
     let input: Vec<f32> = (0..embed_dim).map(|i| (i as f32) * 0.1 - 5.0).collect();
 
     let mut q_pos0 = input.clone();
-    rope_cpu(&mut q_pos0, num_heads, seq_len, 0, head_dim, base);
+    apply_rope_cpu(&mut q_pos0, num_heads, seq_len, 0, head_dim, base);
 
     let mut q_pos1 = input.clone();
-    rope_cpu(&mut q_pos1, num_heads, seq_len, 1, head_dim, base);
+    apply_rope_cpu(&mut q_pos1, num_heads, seq_len, 1, head_dim, base);
 
     // Results at different positions should differ significantly
     let diff = q_pos0
@@ -76,7 +76,7 @@ fn test_rope_preserves_norm() {
     let orig_norm = input.iter().map(|v| v * v).sum::<f32>().sqrt();
 
     let mut rotated = input.clone();
-    rope_cpu(&mut rotated, num_heads, seq_len, 10, head_dim, base);
+    apply_rope_cpu(&mut rotated, num_heads, seq_len, 10, head_dim, base);
 
     // Compute rotated norm
     let rot_norm = rotated.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -132,10 +132,10 @@ fn test_rope_gqa_different_head_counts() {
         .collect();
 
     let mut q_rotated = q.clone();
-    rope_cpu(&mut q_rotated, num_q_heads, seq_len, 3, head_dim, base);
+    apply_rope_cpu(&mut q_rotated, num_q_heads, seq_len, 3, head_dim, base);
 
     let mut k_rotated = k.clone();
-    rope_cpu(&mut k_rotated, num_kv_heads, seq_len, 3, head_dim, base);
+    apply_rope_cpu(&mut k_rotated, num_kv_heads, seq_len, 3, head_dim, base);
 
     // Both should complete without errors (different head counts handled correctly)
     assert_eq!(q_rotated.len(), q.len());

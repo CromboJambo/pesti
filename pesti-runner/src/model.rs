@@ -204,6 +204,9 @@ impl Model {
                 kv_caches: None,
                 cpu_kv_caches: None,
                 capture_per_layer: None,
+                dispatch_layers: None,
+                output_weight_t_gpu: None,
+                q4k_kvcache: None,
             },
             #[cfg(not(feature = "cuda"))]
             llama_model: crate::transformer::LlamaModel {
@@ -232,6 +235,9 @@ impl Model {
                 kv_caches: None,
                 cpu_kv_caches: None,
                 capture_per_layer: None,
+                dispatch_layers: None,
+                output_weight_t_gpu: None,
+                q4k_kvcache: None,
             },
             use_dispatch: false,
         }

@@ -14,8 +14,8 @@ use tracing::debug;
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
-use crate::kernel::gemm_stub::GemmKernel;
-use crate::kernel::kvcache_stub::Kvcache;
+use crate::kernel::linear::{LinearLayer, new_linear_layer};
+use crate::kernel::{GemmKernel, Kvcache};
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
 use crate::model_loader::GgufHeaderExt;
@@ -544,43 +544,51 @@ impl LlamaModel {
 
     /// Build a single `LayerDispatch` from a `TransformerLayer`.
     ///
-    /// Each `LinearDispatch` caches its transposed weight tensor on the bridge
-    /// GPU device (see `LinearDispatch::new`), so `forward_with_dispatch` no
-    /// longer re-uploads the full weight matrices on every forward call. Shared
-    /// by the constructor (builds all layers once) and the on-demand fallback.
+    /// Uses the trait-based linear layer API: each projection is wrapped in a
+    /// `LinearLayer` trait object that handles device dispatch internally.
+    /// Weight transpose and GPU upload happen once at construction time, not
+    /// per forward call.
     fn build_layer_dispatch(layer: &TransformerLayer) -> crate::kernel::dispatch::LayerDispatch {
         use crate::kernel::dispatch::{
-            AttentionDispatch, FeedForwardDispatch, LayerDispatch, LinearDispatch, RmsNormDispatch,
+            AttentionDispatch, FeedForwardDispatch, LayerDispatch, RmsNormDispatch,
         };
+
+        // Build LinearDispatch wrappers from layer weights.
+        // Weights are f32 in the transformer layer; convert to f16 for LinearDispatch.
+        let wq = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.attention.wq.weight),
+            layer.attention.wq.weight.clone(),
+            layer.attention.wq.bias.clone(),
+            layer.attention.wq.in_features,
+            layer.attention.wq.out_features,
+        );
+        let wk = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.attention.wk.weight),
+            layer.attention.wk.weight.clone(),
+            layer.attention.wk.bias.clone(),
+            layer.attention.wk.in_features,
+            layer.attention.wk.out_features,
+        );
+        let wv = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.attention.wv.weight),
+            layer.attention.wv.weight.clone(),
+            layer.attention.wv.bias.clone(),
+            layer.attention.wv.in_features,
+            layer.attention.wv.out_features,
+        );
+        let wo = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.attention.wo.weight),
+            layer.attention.wo.weight.clone(),
+            layer.attention.wo.bias.clone(),
+            layer.attention.wo.in_features,
+            layer.attention.wo.out_features,
+        );
+
         let attention = AttentionDispatch {
-            wq: LinearDispatch::new(
-                f32_to_f16(&layer.attention.wq.weight),
-                layer.attention.wq.weight.clone(),
-                layer.attention.wq.bias.clone(),
-                layer.attention.wq.in_features,
-                layer.attention.wq.out_features,
-            ),
-            wk: LinearDispatch::new(
-                f32_to_f16(&layer.attention.wk.weight),
-                layer.attention.wk.weight.clone(),
-                layer.attention.wk.bias.clone(),
-                layer.attention.wk.in_features,
-                layer.attention.wk.out_features,
-            ),
-            wv: LinearDispatch::new(
-                f32_to_f16(&layer.attention.wv.weight),
-                layer.attention.wv.weight.clone(),
-                layer.attention.wv.bias.clone(),
-                layer.attention.wv.in_features,
-                layer.attention.wv.out_features,
-            ),
-            wo: LinearDispatch::new(
-                f32_to_f16(&layer.attention.wo.weight),
-                layer.attention.wo.weight.clone(),
-                layer.attention.wo.bias.clone(),
-                layer.attention.wo.in_features,
-                layer.attention.wo.out_features,
-            ),
+            wq,
+            wk,
+            wv,
+            wo,
             num_heads: layer.attention.num_heads,
             num_kv_heads: layer.attention.num_kv_heads,
             head_dim: layer.attention.head_dim,
@@ -591,30 +599,36 @@ impl LlamaModel {
             #[cfg(feature = "cuda")]
             fused_decode_kernel: None, // Set later via set_fused_decode_kernel() after CUDA init
         };
+
+        let w1 = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.feed_forward.w1.weight),
+            layer.feed_forward.w1.weight.clone(),
+            layer.feed_forward.w1.bias.clone(),
+            layer.feed_forward.w1.in_features,
+            layer.feed_forward.w1.out_features,
+        );
+        let w2 = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.feed_forward.w2.weight),
+            layer.feed_forward.w2.weight.clone(),
+            layer.feed_forward.w2.bias.clone(),
+            layer.feed_forward.w2.in_features,
+            layer.feed_forward.w2.out_features,
+        );
+        let w3 = crate::kernel::dispatch::LinearDispatch::new(
+            f32_to_f16(&layer.feed_forward.w3.weight),
+            layer.feed_forward.w3.weight.clone(),
+            layer.feed_forward.w3.bias.clone(),
+            layer.feed_forward.w3.in_features,
+            layer.feed_forward.w3.out_features,
+        );
+
         let feed_forward = FeedForwardDispatch {
-            w1: LinearDispatch::new(
-                f32_to_f16(&layer.feed_forward.w1.weight),
-                layer.feed_forward.w1.weight.clone(),
-                layer.feed_forward.w1.bias.clone(),
-                layer.feed_forward.w1.in_features,
-                layer.feed_forward.w1.out_features,
-            ),
-            w2: LinearDispatch::new(
-                f32_to_f16(&layer.feed_forward.w2.weight),
-                layer.feed_forward.w2.weight.clone(),
-                layer.feed_forward.w2.bias.clone(),
-                layer.feed_forward.w2.in_features,
-                layer.feed_forward.w2.out_features,
-            ),
-            w3: LinearDispatch::new(
-                f32_to_f16(&layer.feed_forward.w3.weight),
-                layer.feed_forward.w3.weight.clone(),
-                layer.feed_forward.w3.bias.clone(),
-                layer.feed_forward.w3.in_features,
-                layer.feed_forward.w3.out_features,
-            ),
+            w1,
+            w2,
+            w3,
             intermediate_dim: layer.feed_forward.intermediate_dim,
         };
+
         LayerDispatch {
             attention,
             feed_forward,
@@ -1455,7 +1469,7 @@ impl LlamaModel {
         let ctx = self
             .dispatch
             .as_ref()
-            .ok_or_else(|| RunnerError::Tensor("dispatch context not initialized".into()))?;
+            .ok_or_else(|| RunnerError::Kernel("dispatch context not initialized".into()))?;
 
         // DEBUG: Log which path we're taking
         if start_pos == 0 {
@@ -1502,7 +1516,7 @@ impl LlamaModel {
         let (key_caches, value_caches) = self
             .kv_caches
             .as_mut()
-            .ok_or_else(|| RunnerError::Tensor("kv caches not initialized".into()))?;
+            .ok_or_else(|| RunnerError::Kernel("kv caches not initialized".into()))?;
 
         // DEBUG: Log current KV cache state before forward pass
         println!(
@@ -1537,89 +1551,11 @@ impl LlamaModel {
                 {
                     Cow::Borrowed(cached)
                 } else {
-                    // Build LayerDispatch from this layer's weights
-                    let attention_dispatch = crate::kernel::dispatch::AttentionDispatch {
-                        wq: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.attention.wq.weight),
-                            layer.attention.wq.weight.clone(),
-                            layer.attention.wq.bias.clone(),
-                            layer.attention.wq.in_features,
-                            layer.attention.wq.out_features,
-                        ),
-                        wk: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.attention.wk.weight),
-                            layer.attention.wk.weight.clone(),
-                            layer.attention.wk.bias.clone(),
-                            layer.attention.wk.in_features,
-                            layer.attention.wk.out_features,
-                        ),
-                        wv: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.attention.wv.weight),
-                            layer.attention.wv.weight.clone(),
-                            layer.attention.wv.bias.clone(),
-                            layer.attention.wv.in_features,
-                            layer.attention.wv.out_features,
-                        ),
-                        wo: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.attention.wo.weight),
-                            layer.attention.wo.weight.clone(),
-                            layer.attention.wo.bias.clone(),
-                            layer.attention.wo.in_features,
-                            layer.attention.wo.out_features,
-                        ),
-                        num_heads: layer.attention.num_heads,
-                        num_kv_heads: layer.attention.num_kv_heads,
-                        head_dim: layer.attention.head_dim,
-                        kv_dim: layer.attention.kv_dim,
-                        rope_base: layer.attention.rope.base,
-                        #[cfg(feature = "cuda")]
-                        fused_kernel: None,
-                        #[cfg(feature = "cuda")]
-                        fused_decode_kernel: None,
-                    };
-
-                    let feed_forward_dispatch = crate::kernel::dispatch::FeedForwardDispatch {
-                        w1: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.feed_forward.w1.weight),
-                            layer.feed_forward.w1.weight.clone(),
-                            layer.feed_forward.w1.bias.clone(),
-                            layer.feed_forward.w1.in_features,
-                            layer.feed_forward.w1.out_features,
-                        ),
-                        w2: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.feed_forward.w2.weight),
-                            layer.feed_forward.w2.weight.clone(),
-                            layer.feed_forward.w2.bias.clone(),
-                            layer.feed_forward.w2.in_features,
-                            layer.feed_forward.w2.out_features,
-                        ),
-                        w3: crate::kernel::dispatch::LinearDispatch::new(
-                            f32_to_f16(&layer.feed_forward.w3.weight),
-                            layer.feed_forward.w3.weight.clone(),
-                            layer.feed_forward.w3.bias.clone(),
-                            layer.feed_forward.w3.in_features,
-                            layer.feed_forward.w3.out_features,
-                        ),
-                        intermediate_dim: layer.feed_forward.intermediate_dim,
-                    };
-
-                    let attention_norm = crate::kernel::dispatch::RmsNormDispatch::new(
-                        layer.attention_norm.weight.clone(),
-                        layer.attention_norm.eps,
-                    );
-
-                    let ffn_norm = crate::kernel::dispatch::RmsNormDispatch::new(
-                        layer.ffn_norm.weight.clone(),
-                        layer.ffn_norm.eps,
-                    );
-
-                    let built = crate::kernel::dispatch::LayerDispatch {
-                        attention: attention_dispatch,
-                        feed_forward: feed_forward_dispatch,
-                        attention_norm,
-                        ffn_norm,
-                    };
-                    // Cache it so subsequent steps don't rebuild.
+                    // Build LayerDispatch from this layer's weights using the
+                    // same path as construction (LinearDispatch::new with f16
+                    // conversion). No per-call rebuild expected — cache should
+                    // be populated by build_dispatch_layers().
+                    let built = Self::build_layer_dispatch(layer);
                     if let Some(cache) = self.dispatch_layers.as_mut() {
                         cache.push(built.clone());
                     }
@@ -1744,13 +1680,13 @@ impl LlamaModel {
 
     /// Set Q4_K quantized KV cache (enables compressed KV storage).
     #[cfg(feature = "cuda")]
-    pub fn set_q4k_kvcache(&mut self, cache: Arc<Q4KVCache>) {
+    pub fn set_q4k_kvcache(&mut self, cache: Q4KVCache) {
         self.q4k_kvcache = Some(cache);
     }
 
     /// Get the Q4_K KV cache if enabled.
     #[cfg(feature = "cuda")]
-    pub fn q4k_kvcache(&self) -> Option<&Arc<Q4KVCache>> {
+    pub fn q4k_kvcache(&self) -> Option<&Q4KVCache> {
         self.q4k_kvcache.as_ref()
     }
 
@@ -1787,19 +1723,15 @@ impl LlamaModel {
 
     /// Upload all weight matrices to GPU device memory.
     /// Call this after set_gemm_kernel() and before the first forward pass.
+    ///
+    /// Note: With trait-based linear layers, weight upload is handled internally
+    /// by each LinearLayer at construction time (in build_layer_dispatch). This
+    /// method exists for backward compatibility but is now a no-op when using
+    /// the GPU dispatch path.
     #[cfg(feature = "cuda")]
     pub fn upload_weights_to_gpu(&mut self) {
-        for layer in &mut self.layers {
-            // Attention projections
-            layer.attention.wq.upload_weights_to_gpu();
-            layer.attention.wk.upload_weights_to_gpu();
-            layer.attention.wv.upload_weights_to_gpu();
-            layer.attention.wo.upload_weights_to_gpu();
-            // FFN layers
-            layer.feed_forward.w1.upload_weights_to_gpu();
-            layer.feed_forward.w2.upload_weights_to_gpu();
-            layer.feed_forward.w3.upload_weights_to_gpu();
-        }
+        // Weight uploads are handled internally by LinearLayer trait objects
+        // at construction time in build_layer_dispatch(). No per-layer calls needed.
     }
 
     /// Generate tokens autoregressively with GPU acceleration support.

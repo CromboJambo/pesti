@@ -28,6 +28,7 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel
 ### Week 23: Optimization and Scale (IN PROGRESS)
 - [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
 - [x] **F16 GPU inference via candle_bridge redesign** — implemented in `pesti-runner/src/kernel/cuda_bridge.rs` using cudarc's cuBLAS hgemm; integrated into dispatch layer with automatic fallback. All 5 conformance tests pass including numerical stability at seq=4096.
+- [x] **Phase 2b: Trait-based linear layer integration** — replaced all LinearDispatch call sites across model.rs, runtime.rs, and test examples with `new_linear_layer()` factory. Weight uploads now happen internally at construction time via `build_layer_dispatch()`, eliminating redundant explicit upload calls. Build OK, 70/71 tests pass (one pre-existing rope test failure).
 - [ ] Profile GEMM vs attention kernel time split at production sequence lengths — identify softmax host-transfer bottleneck
 - [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching

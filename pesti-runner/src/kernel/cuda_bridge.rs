@@ -120,9 +120,27 @@ impl CudaBridge {
     }
 }
 
-/// Initialize the CUDA bridge (create cuBLAS handle).
-pub fn init_cuda_bridge() -> Result<(), String> {
-    Ok(())
+/// Free function wrapper for GEMM (f16 input/output, returns f32).
+/// Creates/uses a shared CUDA bridge instance internally.
+pub fn gemm_f16(
+    x: &[half::f16],
+    weights: &[half::f16],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> crate::error::Result<Vec<f32>> {
+    static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
+
+    let bridge = BRIDGE.get_or_init(|| {
+        match CudaBridge::new() {
+            Ok(b) => b,
+            Err(e) => panic!("CUDA bridge init failed: {}", e),
+        }
+    });
+
+    bridge.gemm_f16(x, weights, m, n, k).map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cuBLAS GEMM failed: {}", e))
+    })
 }
 
 /// Check if CUDA bridge is available.

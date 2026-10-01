@@ -15,121 +15,107 @@
     .param .u32 num_heads,       // Number of attention heads
     .param .u32 head_dim,        // Dimension per head (must be even)
     .param .u32 start_pos        // Starting position for RoPE angles
-)
-{
-    .reg .f32 %cos_val;
-    .reg .f32 %sin_val;
-    .reg .f32 %x;
-    .reg .f32 %y;
-    .reg .f32 %x_new;
-    .reg .f32 %y_new;
-    .reg .f32 %freq;
-    .reg .f32 %angle;
-    .reg .f32 %pos_f;
-    .reg .u32 %thread_idx;
-    .reg .u32 %block_idx;
-    .reg .u32 %total_threads;
-    .reg .u32 %global_tid;
-    .reg .u32 %i;
-    .reg .u32 %half_dim;
-    .reg .u32 %head_offset;
-    .reg .u64 %data_addr;
-    .reg .u64 %elem_addr;
+) {
+    .reg .f32 f_cos, f_sin, f_x, f_y, f_x_new, f_y_new;
+    .reg .f32 f_freq, f_angle, f_pos, f_log_base, f_exponent;
+    .reg .u32 u_thread, u_block, u_total, u_global;
+    .reg .u32 u_i, u_half_dim, u_head_off, u_pair, u_actual_pos;
+    .reg .u64 u_data_addr, u_elem_addr;
 
     // Load parameters
-    ld.param.u64 %data_addr, [data_ptr];
-    ld.param.f32 %base, [base];
-    ld.param.u32 %seq_len, [seq_len];
-    ld.param.u32 %num_heads, [num_heads];
-    ld.param.u32 %head_dim, [head_dim];
-    ld.param.u32 %start_pos, [start_pos];
+    ld.param.u64 u_data_addr, [data_ptr];
+    ld.param.f32 f_log_base, [base];
+    ld.param.u32 seq_len, [seq_len];
+    ld.param.u32 num_heads, [num_heads];
+    ld.param.u32 head_dim, [head_dim];
+    ld.param.u32 start_pos, [start_pos];
 
     // Compute half dimension (number of rotation pairs)
-    shr.u32 %half_dim, %head_dim, 1;
+    shr.u32 u_half_dim, head_dim, 1;
 
     // Each thread processes one element position across all heads and sequence positions
-    mov.u32 %thread_idx, %tid.x;
-    mov.u32 %block_idx, %ctaid.x;
-    mul.u32 %total_threads, %gridDim.x, %blockDim.x;
-    mad.lo.u32 %global_tid, %block_idx, %blockDim.x, %thread_idx;
+    mov.u32 u_thread, %tid.x;
+    mov.u32 u_block, %ctaid.x;
+    mul.u32 u_total, %gridDim.x, %blockDim.x;
+    mad.lo.u32 u_global, u_block, %blockDim.x, u_thread;
 
     // Total elements to process: seq_len * num_heads * head_dim / 2 pairs
     // Each thread handles strided pairs
-    mul.u32 %i, %seq_len, %num_heads;
-    mul.u32 %i, %i, %half_dim;
-    sub.u32 %i, %i, %global_tid;
+    mul.u32 u_i, seq_len, num_heads;
+    mul.u32 u_i, u_i, u_half_dim;
+    sub.u32 u_i, u_i, u_global;
 
 loop:
     // Compute which (pos, head, pair) this iteration handles
-    mov.u32 %pair_idx, %i;
-    mad.lo.u32 %i, %total_threads, %i, 1;
+    mov.u32 u_pair, u_i;
+    mad.lo.u32 u_i, u_total, u_i, 1;
 
     // Decompose index: pair_idx -> (pos, head, dim_pair)
-    shr.u32 %dim_pair, %pair_idx, 0;
-    and.b32 %dim_pair, %dim_pair, %half_dim;
-    xor.b32 %tmp_u, %pair_idx, %dim_pair;
-    shr.u32 %head_offset, %tmp_u, 1;
-    and.b32 %head_offset, %head_offset, %num_heads;
-    xor.b32 %tmp_u, %head_offset, %pair_idx;
-    shr.u32 %pos, %tmp_u, 1;
+    shr.u32 u_dim_pair, u_pair, 0;
+    and.b32 u_dim_pair, u_dim_pair, u_half_dim;
+    xor.b32 tmp_u, u_pair, u_dim_pair;
+    shr.u32 u_head_off, tmp_u, 1;
+    and.b32 u_head_off, u_head_off, num_heads;
+    xor.b32 tmp_u, u_head_off, u_pair;
+    shr.u32 u_pos, tmp_u, 1;
 
     // Compute actual position for RoPE angle
-    add.u32 %actual_pos, %start_pos, %pos;
-    cvt.rn.f32.u32 %pos_f, %actual_pos;
+    add.u32 u_actual_pos, start_pos, u_pos;
+    cvt.rn.f32.u32 f_pos, u_actual_pos;
 
     // Compute frequency: theta_i = base^(-2i/dim) where i is the pair index within head
     // Simplified: use exp(-log(base) * 2 * dim_pair / head_dim)
-    mul.f32 %freq, %dim_pair, -2.0;
-    div.f32 %freq, %freq, %head_dim;
-    log.f32 %log_base, %base;
-    mul.f32 %exponent, %freq, %log_base;
-    exp.f32 %freq, %exponent;
+    mul.f32 f_freq, u_dim_pair, -2.0;
+    div.f32 f_freq, f_freq, head_dim;
+    log.f32 f_log_base, base;
+    mul.f32 f_exponent, f_freq, f_log_base;
+    exp.f32 f_freq, f_exponent;
 
     // Compute angle = pos * freq
-    mul.f32 %angle, %pos_f, %freq;
+    mul.f32 f_angle, f_pos, f_freq;
 
     // Compute cos and sin (approximate using built-ins)
     // For simplicity in PTX, use the approximation: cos(x) ~ 1 - x^2/2 for small x
     // This is a simplified version; production would use more accurate trig
-    mul.f32 %cos_val, %angle, %angle;
-    neg.f32 %cos_val, %cos_val;
-    mul.f32 %cos_val, %cos_val, 0.5;
-    add.f32 %cos_val, %cos_val, 1.0;
+    mul.f32 f_cos, f_angle, f_angle;
+    neg.f32 f_cos, f_cos;
+    mul.f32 f_cos, f_cos, 0.5;
+    add.f32 f_cos, f_cos, 1.0;
 
     // sin(x) ~ x for small angles (simplified)
-    mov.f32 %sin_val, %angle;
+    mov.f32 f_sin, f_angle;
 
     // Compute memory address for this pair
-    mad.lo.u32 %head_offset, %head_offset, %head_dim, 0;
-    mad.lo.u32 %elem_addr_u, %pos, %num_heads, %head_offset;
-    mul.u32 %elem_addr_u, %elem_addr_u, %head_dim;
-    add.u32 %elem_addr_u, %elem_addr_u, %dim_pair;
-    shl.u64 %elem_addr, %elem_addr_u, 2;  // * 4 for f32 size
+    mad.lo.u32 u_head_off, u_head_off, head_dim, 0;
+    mad.lo.u32 u_elem_addr_u, u_pos, num_heads, u_head_off;
+    mul.u32 u_elem_addr_u, u_elem_addr_u, head_dim;
+    add.u32 u_elem_addr_u, u_elem_addr_u, u_dim_pair;
+    shl.u64 u_elem_addr, u_elem_addr_u, 2;  // * 4 for f32 size
 
     // Load x and y values (pair)
-    ld.global.f32 %x, [%data_addr + %elem_addr];
-    add.u64 %y_addr, %elem_addr, 8;  // Next pair element is 4 bytes away (f32)
-    ld.global.f32 %y, [%data_addr + %y_addr];
+    ld.global.f32 f_x, [u_data_addr + u_elem_addr];
+    add.u64 u_y_addr, u_elem_addr, 8;  // Next pair element is 4 bytes away (f32)
+    ld.global.f32 f_y, [u_data_addr + u_y_addr];
 
     // Apply rotation: x' = x*cos - y*sin, y' = x*sin + y*cos
-    mul.f32 %tmp, %x, %cos_val;
-    mul.f32 %tmp2, %y, %sin_val;
-    sub.f32 %x_new, %tmp, %tmp2;
+    mul.f32 tmp_f, f_x, f_cos;
+    mul.f32 tmp_f2, f_y, f_sin;
+    sub.f32 f_x_new, tmp_f, tmp_f2;
 
-    mul.f32 %tmp, %x, %sin_val;
-    mul.f32 %tmp2, %y, %cos_val;
-    add.f32 %y_new, %tmp, %tmp2;
+    mul.f32 tmp_f, f_x, f_sin;
+    mul.f32 tmp_f2, f_y, f_cos;
+    add.f32 f_y_new, tmp_f, tmp_f2;
 
     // Store back
-    st.global.f32 [%data_addr + %elem_addr], %x_new;
-    st.global.f32 [%data_addr + %y_addr], %y_new;
+    st.global.f32 [u_data_addr + u_elem_addr], f_x_new;
+    st.global.f32 [u_data_addr + u_y_addr], f_y_new;
 
     // Check if we're done
-    setp.lt.u32 %done, %i, 0;
-    @%done bra end_loop;
+    setp.lt.u32 p_done, u_i, 0;
+    @p_done bra end_loop;
 
     // Load next iteration index
-    sub.u32 %i, %i, 1;
+    sub.u32 u_i, u_i, 1;
     bra loop;
 
 end_loop:

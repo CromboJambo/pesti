@@ -1,6 +1,6 @@
 //! Long-sequence benchmark to measure where batched/chunked generation provides value.
 
-use pesti_runner::{LlamaModel, load_gguf_weights};
+use pesti_runner::{load_gguf_weights, LlamaModel};
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
@@ -25,18 +25,12 @@ fn benchmark_long_seq() {
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
     // Load tokenizer from GGUF metadata (required for proper tokenization)
-    let tokenizer_config = pesti_runner::transformer::GgufTokenizerConfig {
-        vocab_size: 152064,
-        pad_token_id: Some(151663),
-        bos_token_id: Some(151663),
-        eos_token_id: Some(151663),
-    };
-    let tokenizer = pesti_runner::transformer::load_tokenizer_from_gguf(
+    let (_tokenizer_config, tokenizer) = pesti_runner::transformer::load_tokenizer_from_gguf(
         Path::new(model_path),
-        tokenizer_config,
+        pesti_runner::transformer::TokenizerBackend::MistralRs,
     )
     .expect("Failed to load tokenizer from GGUF");
-    model.tokenizer = Some(Box::new(tokenizer));
+    model.tokenizer = Some(tokenizer);
 
     // Test at different context lengths
     let seq_lengths = [128, 256, 512, 1024, 2048];

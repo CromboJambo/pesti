@@ -32,6 +32,7 @@
 
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
+use crate::kernel::linear::{new_linear_layer, LinearLayer};
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
@@ -56,6 +57,8 @@ use crate::kernel::kvcache_stub::Kvcache;
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
+use std::sync::Arc;
+
 use candle_core::{DType, Device, Tensor};
 use half::f16;
 use tracing::{debug, warn};
@@ -104,7 +107,7 @@ impl From<RunnerError> for DispatchError {
             } => DispatchError::GpuKernel(format!(
                 "Attention(heads={num_heads}, dim={head_dim}, seq={seq}): {detail}"
             )),
-            RunnerError::Tensor(msg) => DispatchError::Kernel(msg),
+            RunnerError::Kernel(msg) => DispatchError::Kernel(msg),
             other => DispatchError::Kernel(other.to_string()),
         }
     }
@@ -819,116 +822,52 @@ impl Default for DispatchContext {
 /// A linear layer that can dispatch to GPU or CPU.
 ///
 /// Wraps weight matrix + bias and provides `forward()` that automatically
-/// picks the best backend.
-#[derive(Clone)]
+/// picks the best backend. Uses the trait-based LinearLayer API internally.
 pub struct LinearDispatch {
-    /// Weight matrix (stored as f16 for GPU compatibility).
-    weights_f16: Vec<f16>,
-    /// Weight matrix (stored as f32 for CPU path).
-    weights_f32: Vec<f32>,
-    /// Optional bias.
-    bias: Option<Vec<f32>>,
-    in_features: usize,
-    out_features: usize,
-    /// Cached GPU tensor of the TRANSPOSED weight matrix [in, out].
-    ///
-    /// Built once at construction when the candle bridge is CUDA-backed.
-    /// `dispatch_linear` used to transpose on the host AND re-upload the
-    /// full weight matrix to the device on every call — with 168 GEMM calls
-    /// per decode step that dominated step time. Caching the transposed
-    /// tensor on the device makes decode steps kernel-only.
-    ///
-    /// When the bridge is CPU-only this is `None` and the native CPU path
-    /// (which transposes per call, as before) is used.
-    #[cfg(feature = "cuda")]
-    weight_t_gpu: Option<Tensor>,
+    inner: Box<dyn crate::kernel::linear::LinearLayer>,
+}
+
+impl Clone for LinearDispatch {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone_layer(),
+        }
+    }
 }
 
 impl LinearDispatch {
     pub fn new(
         weights_f16: Vec<f16>,
-        weights_f32: Vec<f32>,
+        _weights_f32: Vec<f32>,
         bias: Option<Vec<f32>>,
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        #[allow(unused_variables)]
-        let k = in_features;
-        #[allow(unused_variables)]
-        let n = out_features;
-        Self {
-            #[cfg(feature = "cuda")]
-            weight_t_gpu: Self::build_weight_t_gpu(&weights_f16, k, n),
-            weights_f16,
-            weights_f32,
-            bias,
-            in_features,
-            out_features,
-        }
+        use crate::kernel::linear::{new_linear_layer, LinearLayer};
+        // Convert f16 weights to f32 for the linear layer
+        let weight_f32: Vec<f32> = weights_f16.iter().map(|w| (*w).into()).collect();
+        let inner = new_linear_layer(weight_f32, bias, in_features, out_features);
+        Self { inner }
     }
 
-    /// Build the transposed weight tensor [k, n] on the bridge GPU device,
-    /// once. Returns `None` when the bridge is not CUDA-backed (CPU path).
-    #[cfg(feature = "cuda")]
-    fn build_weight_t_gpu(weights_f16: &[f16], k: usize, n: usize) -> Option<Tensor> {
-        if !crate::kernel::candle_bridge::bridge_is_cuda() {
-            return None;
-        }
-        // Transpose [k, n] and keep as F16 for half the memory footprint
-        let w_t: Vec<f16> = (0..k)
-            .flat_map(|i| (0..n).map(move |j| weights_f16[j * k + i]))
-            .collect();
-        // Use true F16 tensor for half the memory footprint
-        match Tensor::from_vec(w_t, (k, n), crate::kernel::candle_bridge::bridge_device()) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!(error = %e, "LinearDispatch: failed to cache GPU weight tensor, using per-call transpose");
-                None
-            }
-        }
-    }
-
-    /// Forward pass with dispatch context.
+    /// Forward pass — delegates to the underlying LinearLayer trait object.
     pub fn forward(
         &self,
-        ctx: &DispatchContext,
+        _ctx: &DispatchContext,
         x: &[f32],
         batch_size: usize,
     ) -> Result<Vec<f32>, DispatchError> {
-        if !ctx.prefer_gpu() || !ctx.gpu_available() {
-            return self.forward_cpu(x, batch_size);
-        }
-
-        ctx.dispatch_linear(
-            x,
-            &self.weights_f16,
-            self.bias.as_deref(),
-            self.in_features,
-            self.out_features,
-            batch_size,
-            #[cfg(feature = "cuda")]
-            self.weight_t_gpu.as_ref(),
-        )
-    }
-
-    /// CPU-only forward pass.
-    pub fn forward_cpu(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>, DispatchError> {
-        ctx_dispatch_linear_cpu(
-            x,
-            &self.weights_f32,
-            self.bias.as_deref(),
-            self.in_features,
-            self.out_features,
-            batch_size,
-        )
+        self.inner
+            .forward(x, batch_size)
+            .map_err(|e| DispatchError::Kernel(e.to_string()))
     }
 
     pub fn in_features(&self) -> usize {
-        self.in_features
+        self.inner.in_features()
     }
 
     pub fn out_features(&self) -> usize {
-        self.out_features
+        self.inner.out_features()
     }
 }
 
@@ -963,13 +902,9 @@ fn ctx_dispatch_linear_cpu(
 /// An attention layer that can dispatch to GPU or CPU.
 #[derive(Clone)]
 pub struct AttentionDispatch {
-    /// Q projection weights.
     pub wq: LinearDispatch,
-    /// K projection weights.
     pub wk: LinearDispatch,
-    /// V projection weights.
     pub wv: LinearDispatch,
-    /// O projection weights.
     pub wo: LinearDispatch,
     pub num_heads: usize,
     pub num_kv_heads: usize,

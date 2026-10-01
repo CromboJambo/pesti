@@ -27,7 +27,7 @@ impl BenchmarkConfig {
 
 fn run_benchmark(
     config: &BenchmarkConfig,
-    _pool: &MemoryPool,
+    pool: &MemoryPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rope_base = 10_000.0;
     let scale = 1.0 / (config.head_dim as f32).sqrt();

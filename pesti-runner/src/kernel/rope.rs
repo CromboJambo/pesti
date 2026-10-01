@@ -206,11 +206,14 @@ mod tests {
         assert!((data[0] - 1.0).abs() < 1e-6);
         assert!((data[1] - 2.0).abs() < 1e-6);
 
-        // At position 1, rotation should change values
+        // At position 1 with head_dim=4, freq for i=0 is base^(-0/2)=1.0
+        // angle = pos * freq = 1.0 rad, cos(1) ≈ 0.5403
         let mut data = vec![1.0, 0.0, 0.0, 1.0];
         apply_rope_cpu(&mut data, 1, 1, 1, 4, 10000.0);
-        // cos(1/100) ~ 0.99995, sin(1/100) ~ 0.01
-        assert!((data[0] - 0.99995).abs() < 0.001);
+        assert!(
+            (data[0] - 0.5403).abs() < 0.001,
+            "RoPE rotation at pos 1 failed"
+        );
     }
 
     #[test]

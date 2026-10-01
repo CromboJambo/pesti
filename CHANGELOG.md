@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VRAM profiling
 - llama.cpp baseline comparison on identical hardware/model/prompt
 
+### EDR-012: Trait-Based Linear Layer Integration 🆕
+**Date**: 2026-10-01
+**Status**: ✅ Complete
+
+**Decision**: Replace all `LinearDispatch::new()` call sites with the `new_linear_layer()` factory function from the trait-based linear layer module. Weight uploads now happen internally at construction time via `build_layer_dispatch()`, eliminating redundant explicit upload calls throughout the model loading pipeline.
+
+**Rationale**: The trait-based approach (`LinearLayer` trait with CPU/GPU implementations) provides cleaner separation of concerns and enables future optimizations without changing call sites. Internal weight uploads at construction time reduce boilerplate and prevent forgetting uploads at new call sites.
+
+**Verification requirement (met)**: Build succeeds, 70/71 tests pass (one pre-existing rope test failure unrelated to this change). All LinearDispatch call sites in model.rs, runtime.rs, and test examples replaced.
+
 ### EDR-011: Slow-Friend Substrate — Bounded Memory, Scoped MoE, Drift-Gated Compaction 🆕
 **Date**: 2026-09-02
 **Status**: 🔬 G1 PASS, G2 in progress — implementation at `pesti-runner/src/kernel/slow_friend/`
