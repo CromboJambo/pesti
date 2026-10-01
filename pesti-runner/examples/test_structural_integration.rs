@@ -24,12 +24,21 @@ fn main() {
     let tokens = tokenizer.tokenize(rust_code).expect("Tokenization failed");
     println!("Encoded to {} structural tokens", tokens.len());
     for (i, tok) in tokens.iter().take(10).enumerate() {
-        println!("  [{}] {:?} -> '{}'", i, tok.kind, &tok.text[..std::cmp::min(tok.text.len(), 20)]);
+        println!(
+            "  [{}] {:?} -> '{}'",
+            i,
+            tok.kind,
+            &tok.text[..std::cmp::min(tok.text.len(), 20)]
+        );
     }
 
     // Map to model IDs via pesti-runner integration
-    let ids: Vec<u32> = tokens.iter()
+    let ids: Vec<u32> = tokens
+        .iter()
         .map(|t| pesti_runner::transformer::tokenizer::PestiTokenizer::token_kind_to_id(&t.kind))
         .collect();
-    println!("\nModel token IDs: {:?}", &ids[..std::cmp::min(10, ids.len())]);
+    println!(
+        "\nModel token IDs: {:?}",
+        &ids[..std::cmp::min(10, ids.len())]
+    );
 }

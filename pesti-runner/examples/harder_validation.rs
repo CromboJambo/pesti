@@ -6,7 +6,7 @@ use std::time::Instant;
 
 fn main() {
     let model_path = "/home/crombo/llama-models/Qwen3.8-9B-Q4_K_M.gguf";
-    
+
     // Program with control flow and relationships
     let source = r#"fn max(a: i32, b: i32) -> i32 {
     if a > b { return a; }
@@ -60,7 +60,10 @@ FUNCTION_DECL: fn main() -> ()
     let questions = vec![
         ("function_count", "How many functions are defined?"),
         ("control_flow", "Does this program use loops? What kind?"),
-        ("branching", "How many distinct code paths exist in find_max?"),
+        (
+            "branching",
+            "How many distinct code paths exist in find_max?",
+        ),
         ("return_types", "What does find_max return and why?"),
         ("data_flow", "How does data flow from main to the output?"),
     ];
@@ -86,9 +89,15 @@ FUNCTION_DECL: fn main() -> ()
         // Condition A: BPE
         let prompt_a = format!("Analyze this Rust program:\n\n{}\n\n{}", source, question);
         let t0 = Instant::now();
-        let result_a = runner.generate(&prompt_a, &config).expect("generation failed");
+        let result_a = runner
+            .generate(&prompt_a, &config)
+            .expect("generation failed");
         let elapsed_a = t0.elapsed();
-        println!("[BPE] ({}ms) {}", elapsed_a.as_millis(), truncate(&result_a.text, 120));
+        println!(
+            "[BPE] ({}ms) {}",
+            elapsed_a.as_millis(),
+            truncate(&result_a.text, 120)
+        );
 
         drop(runner);
 
@@ -99,19 +108,30 @@ FUNCTION_DECL: fn main() -> ()
             .expect("Failed to build runner");
 
         // Condition B: Structural
-        let prompt_b = format!("Analyze this structural representation:\n\n{}\n\n{}", structural, question);
+        let prompt_b = format!(
+            "Analyze this structural representation:\n\n{}\n\n{}",
+            structural, question
+        );
         let t1 = Instant::now();
-        let result_b = runner2.generate(&prompt_b, &config).expect("generation failed");
+        let result_b = runner2
+            .generate(&prompt_b, &config)
+            .expect("generation failed");
         let elapsed_b = t1.elapsed();
-        println!("[STR] ({}ms) {}", elapsed_b.as_millis(), truncate(&result_b.text, 120));
-        
+        println!(
+            "[STR] ({}ms) {}",
+            elapsed_b.as_millis(),
+            truncate(&result_b.text, 120)
+        );
+
         drop(runner2);
         println!();
     }
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { return s.to_string(); }
+    if s.len() <= max {
+        return s.to_string();
+    }
     let chars: Vec<char> = s.chars().take(max).collect();
     format!("{}...", chars.into_iter().collect::<String>())
 }

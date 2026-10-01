@@ -76,12 +76,7 @@ fn main() {
     benchmark_structural_condition(model_path, structural, "STR", &config);
 }
 
-fn benchmark_condition(
-    model_path: &str,
-    source: &str,
-    label: &str,
-    config: &SamplingConfig,
-) {
+fn benchmark_condition(model_path: &str, source: &str, label: &str, config: &SamplingConfig) {
     let runner = LlamaRunner::builder(model_path)
         .n_ctx(2048)
         .build()
@@ -98,12 +93,12 @@ fn benchmark_condition(
     let result = runner.generate(&prompt, config).expect("generation failed");
     let elapsed = start.elapsed();
 
+    println!("[{}] Generation time: {}ms", label, elapsed.as_millis());
     println!(
-        "[{}] Generation time: {}ms",
+        "[{}] Output preview: {}",
         label,
-        elapsed.as_millis()
+        truncate(&result.text, 100)
     );
-    println!("[{}] Output preview: {}", label, truncate(&result.text, 100));
 }
 
 fn benchmark_structural_condition(
@@ -128,12 +123,12 @@ fn benchmark_structural_condition(
     let result = runner.generate(&prompt, config).expect("generation failed");
     let elapsed = start.elapsed();
 
+    println!("[{}] Generation time: {}ms", label, elapsed.as_millis());
     println!(
-        "[{}] Generation time: {}ms",
+        "[{}] Output preview: {}",
         label,
-        elapsed.as_millis()
+        truncate(&result.text, 100)
     );
-    println!("[{}] Output preview: {}", label, truncate(&result.text, 100));
 }
 
 fn truncate(s: &str, max: usize) -> String {

@@ -1,16 +1,16 @@
 //! Model Validation Experiment
-//! 
+//!
 //! Tests whether an actual LLM can answer code structure questions better from
 //! structural tokens than from raw BPE tokens. Uses pesti-runner with a real GGUF model.
 //!
 //! Design: Give same question, two different representations, compare answers.
 
-use std::time::Instant;
 use pesti_runner::llama::{LlamaRunner, SamplingConfig};
+use std::time::Instant;
 
 fn main() {
     let model_path = "/home/crombo/projects/pesti/test_models/tinyllama-q8.gguf";
-    
+
     // Small Rust program with clear structure
     let source = r#"fn factorial(n: u64) -> u64 {
     if n <= 1 { return 1; }
@@ -56,7 +56,9 @@ FUNCTION_DECL: fn main()
         question, source
     );
     let t0 = Instant::now();
-    let result_a = runner.generate(&prompt_a, &config).expect("generation failed");
+    let result_a = runner
+        .generate(&prompt_a, &config)
+        .expect("generation failed");
     let elapsed_a = t0.elapsed();
     println!("Answer ({}ms):\n{}\n", elapsed_a.as_millis(), result_a.text);
 
@@ -70,7 +72,9 @@ FUNCTION_DECL: fn main()
         question, structural
     );
     let t1 = Instant::now();
-    let result_b = runner.generate(&prompt_b, &config).expect("generation failed");
+    let result_b = runner
+        .generate(&prompt_b, &config)
+        .expect("generation failed");
     let elapsed_b = t1.elapsed();
     println!("Answer ({}ms):\n{}\n", elapsed_b.as_millis(), result_b.text);
 
@@ -78,10 +82,16 @@ FUNCTION_DECL: fn main()
     println!("=== EVALUATION ===");
     println!("Expected: 2 functions - factorial(u64)->u64, main()->()");
     println!();
-    
+
     let a_correct = result_a.text.contains("factorial") && result_a.text.contains("main");
     let b_correct = result_b.text.contains("factorial") && result_b.text.contains("main");
-    
-    println!("BPE answer correct: {}", if a_correct { "YES" } else { "NO" });
-    println!("Structural answer correct: {}", if b_correct { "YES" } else { "NO" });
+
+    println!(
+        "BPE answer correct: {}",
+        if a_correct { "YES" } else { "NO" }
+    );
+    println!(
+        "Structural answer correct: {}",
+        if b_correct { "YES" } else { "NO" }
+    );
 }
