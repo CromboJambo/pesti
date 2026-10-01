@@ -218,7 +218,7 @@ mod tests {
         let kernel = CpuRopeKernel::new(10000.0);
         let mut q = vec![1.0, 2.0, 3.0, 4.0];
         let mut k = vec![5.0, 6.0, 7.0, 8.0];
-        
+
         // Should not panic
         kernel.apply(&mut q, &mut k, 1, 1, 0).unwrap();
     }

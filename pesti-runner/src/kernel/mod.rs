@@ -87,9 +87,9 @@ pub mod device_buf;
 pub mod device_tensor;
 pub mod dispatch;
 #[cfg(feature = "cuda")]
-pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
-#[cfg(feature = "cuda")]
 pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
+#[cfg(feature = "cuda")]
+pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
 pub mod fused_linear_attention; // QKV + attention + output fusion (Phase 2)
 #[cfg(feature = "cuda")]
@@ -114,8 +114,8 @@ pub mod one_stage_attention; // New: One-stage full fusion kernel integration
 pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
 #[cfg(feature = "cuda")]
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
-pub mod rope;
 pub mod rmsnorm;
+pub mod rope;
 pub mod slow_friend;
 pub mod softmax;
 pub mod swiglu;
@@ -174,11 +174,11 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 #[cfg(feature = "cuda")]
 pub use q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
-pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
-#[cfg(feature = "cuda")]
 pub use rope::{CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel, rope_cpu};
 #[cfg(not(feature = "cuda"))]
-pub use rope::{apply_rope_cpu, RopeKernel};
+pub use rope::{RopeKernel, apply_rope_cpu};
+#[cfg(feature = "cuda")]
+pub use softmax::{CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder};
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]

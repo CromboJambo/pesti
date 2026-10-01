@@ -983,7 +983,8 @@ pub struct AttentionDispatch {
     pub fused_kernel: Option<crate::kernel::fused_attention_conformant::FusedAttentionKernel>,
     /// Phase 1 fused decode attention kernel (single-query softmax + weighted sum).
     #[cfg(feature = "cuda")]
-    pub fused_decode_kernel: Option<crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel>,
+    pub fused_decode_kernel:
+        Option<crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel>,
 }
 
 impl AttentionDispatch {
@@ -1730,57 +1731,70 @@ impl AttentionDispatch {
             let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
             let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
 
-            let q_handle = ctx.memory.alloc(q_bytes)
+            let q_handle = ctx
+                .memory
+                .alloc(q_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
-            let k_handle = ctx.memory.alloc(k_bytes)
+            let k_handle = ctx
+                .memory
+                .alloc(k_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc k: {e}")))?;
-            let v_handle = ctx.memory.alloc(v_bytes)
+            let v_handle = ctx
+                .memory
+                .alloc(v_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
-            let out_handle = ctx.memory.alloc(out_bytes)
+            let out_handle = ctx
+                .memory
+                .alloc(out_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
 
             // Transfer Q (f32 -> f16 on device), K, V to device
             let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
-            let q_bytes_raw: &[u8] = unsafe {
-                std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes)
-            };
-            ctx.memory.h2d(q_bytes_raw, q_handle)
+            let q_bytes_raw: &[u8] =
+                unsafe { std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes) };
+            ctx.memory
+                .h2d(q_bytes_raw, q_handle)
                 .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
 
-            let k_bytes_raw: &[u8] = unsafe {
-                std::slice::from_raw_parts(k_expanded.as_ptr() as *const u8, k_bytes)
-            };
-            ctx.memory.h2d(k_bytes_raw, k_handle)
+            let k_bytes_raw: &[u8] =
+                unsafe { std::slice::from_raw_parts(k_expanded.as_ptr() as *const u8, k_bytes) };
+            ctx.memory
+                .h2d(k_bytes_raw, k_handle)
                 .map_err(|e| DispatchError::Transfer(format!("H2D k: {e}")))?;
 
-            let v_bytes_raw: &[u8] = unsafe {
-                std::slice::from_raw_parts(v_expanded.as_ptr() as *const u8, v_bytes)
-            };
-            ctx.memory.h2d(v_bytes_raw, v_handle)
+            let v_bytes_raw: &[u8] =
+                unsafe { std::slice::from_raw_parts(v_expanded.as_ptr() as *const u8, v_bytes) };
+            ctx.memory
+                .h2d(v_bytes_raw, v_handle)
                 .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
 
             // Launch fused decode attention kernel for this head
             if let Some(ref kernel) = self.fused_decode_kernel {
-                kernel.launch(
-                    q_handle.as_ptr() as u64,
-                    k_handle.as_ptr() as u64,
-                    v_handle.as_ptr() as u64,
-                    scale,
-                    cache_len,
-                    self.head_dim,
-                    out_handle.as_ptr() as u64,
-                ).map_err(|e| DispatchError::Kernel(format!("fused decode kernel: {e}")))?;
+                kernel
+                    .launch(
+                        q_handle.as_ptr() as u64,
+                        k_handle.as_ptr() as u64,
+                        v_handle.as_ptr() as u64,
+                        scale,
+                        cache_len,
+                        self.head_dim,
+                        out_handle.as_ptr() as u64,
+                    )
+                    .map_err(|e| DispatchError::Kernel(format!("fused decode kernel: {e}")))?;
             }
 
             // Synchronize and read back result for this head
-            ctx.memory.sync()
+            ctx.memory
+                .sync()
                 .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
 
             let mut out_f32 = vec![0.0f32; self.head_dim];
             let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
-            ctx.memory.d2h(out_handle, unsafe {
-                std::slice::from_raw_parts_mut(out_ptr, out_bytes)
-            }).map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
+            ctx.memory
+                .d2h(out_handle, unsafe {
+                    std::slice::from_raw_parts_mut(out_ptr, out_bytes)
+                })
+                .map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
 
             // Free device buffers for this head
             let _ = ctx.memory.free(q_handle);

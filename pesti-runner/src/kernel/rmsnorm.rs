@@ -102,19 +102,19 @@ impl CudaRmsnormKernel {
 /// CPU reference implementation for conformance testing.
 pub fn rmsnorm_cpu(x: &[f32], weight: &[f32], hidden_dim: usize, eps: f32) -> Vec<f32> {
     let mut out = vec![0.0; hidden_dim];
-    
+
     // Compute RMS
     let mut sum_sq = 0.0;
     for i in 0..hidden_dim {
         sum_sq += x[i] * x[i];
     }
     let rms = (sum_sq / hidden_dim as f32).sqrt();
-    
+
     // Normalize and scale
     for i in 0..hidden_dim {
         out[i] = weight[i] * x[i] / (rms + eps);
     }
-    
+
     out
 }
 
@@ -128,7 +128,7 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0];
         let weight = vec![1.0, 1.0, 1.0];
         let out = rmsnorm_cpu(&x, &weight, 3, 1e-6);
-        
+
         // RMS of [1,2,3] = sqrt(14/3) ≈ 2.160
         // Output should be x / rms
         assert!((out[0] - 0.463).abs() < 0.01);
