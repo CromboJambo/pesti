@@ -17,7 +17,7 @@
 
 **Portable Execution Substrate for Transformer Inference**
 *A learning-first Rust substrate for GGUF inference: parse, dequantize, and run
-transformer forward passes from scratch (**with a numpy conformance oracle to prove it**)
+transformer forward passes from scratch (**with a numpy conformance oracle to prove it**)*
 
 ---
 
@@ -36,6 +36,7 @@ burn rather than just call them:
   the crate compiles and the parser/dequant layer runs without a GPU.
 - **A self-contained GGUF-embedded tokenizer** — no external `tokenizer.json`
   downloads; a Qwen2 GGUF carries its complete tokenizer.
+- **pesti-structural-tokenizer** — AST-based Rust code tokenizer for LLM code understanding, published to crates.io (v0.1.2).
 
 The headline capability is **conformance**: every forward-pass fix is verified
 against `conformance-corpus/ref_forward.py` (an independent numpy oracle), not
@@ -90,16 +91,18 @@ cargo run -p pesti-runner --release --features cuda \
 | Self-contained GGUF tokenizer | Fox-sentence encodes to `[785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]`, matches HF reference |
 | Library test suite | **62/62** lib unit tests pass (`--features cuda --lib`) |
 | llama.cpp FFI runner | ~218 tok/s on TinyLlama-1.1B, consistent across Q3_K_M–Q8_0 (see `pesti-runner/README.md`) |
+| pesti-structural-tokenizer | Published to crates.io (v0.1.2); syn-based AST parsing; folded-map span folding; budget-aware collapsing |
 
-### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md`)
-- **GPU decode tok/s is real but slow**: 0.52-0.60 tok/s on RTX 3070 Ti with
-  fused attention kernel. Far from llama.cpp's ~218 tok/s baseline, but this is
-  the first *measured* GPU decode throughput — no more synthetic projections.
-- **GPU end-to-end correctness** (Week 17, ongoing) — failed GPU matmuls fall
-  back to CPU GEMM with a `gpu_fallback_count()` counter (no more silent
-  zeroed buffers). Remaining: per-layer oracle diff against numpy reference,
-  divergence fixes, zero-fallback assertion.
-- **KV-cache updates during autoregressive generation** (paged attention).
+### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md` and `docs/REFACTOR_SPEC.md`)
+- **GPU end-to-end inference stack** (Weeks 23-31, ongoing) — 5-phase refactor:
+  - Phase 1 ✅ Fused attention kernel (passes numerical conformance vs llama.cpp)
+  - Phase 2a ✅ GPU GEMM integration into inference path
+  - Phase 2b 🚧 Device-resident tensors (F16 on device, minimize host round-trips)
+  - Phase 3 🚧 Non-matmul GPU kernels: SwiGLU, RMSNorm, RoPE, Softmax
+  - Phase 4 🚧 Q4_K KV cache with on-the-fly dequantization
+  - Phase 5 ⏳ Execution graph & kernel fusion
+- **GPU decode tok/s is real but slow**: 0.52-0.60 tok/s on RTX 3070 Ti with fused attention kernel. Far from llama.cpp's ~218 tok/s baseline, but this is the first *measured* GPU decode throughput — no more synthetic projections.
+- **Long-sequence prefill bottleneck identified** (Week 23): O(n²) attention kernel scaling limits long-context workloads.
 - FP8 quantization, multi-GPU scaling.
 
 ---
@@ -158,6 +161,8 @@ python3 conformance-corpus/compare_full_vectors.py \
 
 ## Architecture
 
+### pesti-runner (Inference Engine)
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     pesti-runner                             │
@@ -175,6 +180,16 @@ python3 conformance-corpus/compare_full_vectors.py \
 │  CUDA dispatch path (feature-gated, --features cuda)        │
 │    cudarc kernels: GEMM, attention, softmax                 │
 └─────────────────────────────────────────────────────────────┘
+```
+
+### pesti-structural-tokenizer (Code Understanding)
+
+```
+Rust source → syn::parse_file() → AST walk → structural tokens
+                                                    ↓
+                                            Folded spans (hierarchical)
+                                                    ↓
+                                    Budget-aware collapsing (optional)
 ```
 
 **Feature flags** (`pesti-runner/Cargo.toml`):
@@ -196,20 +211,15 @@ python3 conformance-corpus/compare_full_vectors.py \
 |--------|-------|--------|
 | CPU forward-pass correctness | max per-layer Δ 7.6e-5 vs numpy | `compare_full_vectors.py` |
 | llama.cpp FFI runner (TinyLlama-1.1B, CPU) | ~218 tok/s, <3% variance across Q3_K_M–Q8_0 | `pesti-runner/README.md` |
+| GPU decode (Qwen2.5-0.5B-Instruct, RTX 3070 Ti) | 0.52 tok/s (fused attention kernel) | Week 17 measurement |
 
-### Projected (synthetic micro-benchmarks — **not** real decode)
-The Week 12/13 numbers below come from isolated kernel micro-benchmarks and
-`backend.sync()` proxy timing. They do **not** represent end-to-end
-transformer decode throughput. Week 14 replaces these with real measurement.
+### Structural Tokenizer Benchmarks
+Validated across diverse Rust codebases:
+- pesti workspace (450 files): **19.2x** compression vs BPE
+- ~/projects/ (5,282 files, 12 projects): **24.0x** compression vs BPE
+- ripgrep (110 files): ~23x compression vs BPE
 
-| Phase | Optimization | Projected |
-|-------|--------------|-----------|
-| Baseline | CPU-only inference | ~35 tok/s |
-| Phase 1 | FP16 KV cache + paged allocation | ~42 tok/s |
-| Phase 2 | Fused QKV+attention+output kernel | ~52-60 tok/s |
-| Phase 3 | Batched parallelism + warp-level GEMM | ~88 tok/s |
-| Phase 4.1 | Flash attention (shared-memory tiling) | ~105 tok/s |
-| Phase 4.3 | WGMMA tensor-core GEMM | ~315 tok/s |
+Benchmark infrastructure: `crates/pesti-structural-tokenizer/examples/benchmark.rs`
 
 ---
 
@@ -256,7 +266,9 @@ pesti/
 ├── pesti-safetensors/     # Safetensors crate (workspace member)
 ├── llm-plug-in/           # llama.cpp FFI runner (workspace member)
 ├── pesti-gguf-cli/        # GGUF CLI (workspace member)
-├── crates/qwen2-bpe/      # Optional pure-Rust Qwen2 BPE tokenizer
+├── crates/
+│   ├── qwen2-bpe/         # Optional pure-Rust Qwen2 BPE tokenizer
+│   └── pesti-structural-tokenizer/  # AST-based Rust code tokenizer (published to crates.io)
 ├── conformance-corpus/    # numpy oracle + diff tools + canonical Q4_K_M model
 │   ├── ref_forward.py     #   24-layer numpy reference
 │   ├── probe_all_layers.py
@@ -265,6 +277,7 @@ pesti/
 │   └── CONFORMANCE.md
 ├── docs/                  # Design docs, benchmarks, roadmap
 │   ├── ROADMAP.md         #   Upcoming work, known issues, failure modes
+│   ├── REFACTOR_SPEC.md   #   5-phase GPU inference stack refactor plan
 │   ├── benchmarks/        #   Weekly benchmark reports
 │   └── history/           #   Archived week results
 ├── scripts/               # Benchmark and setup scripts
@@ -295,7 +308,7 @@ pesti/
 ## Roadmap
 
 For the full milestone-by-milestone plan (including engineering lessons and
-known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md). For the current 5-phase GPU inference stack refactor, see [`docs/REFACTOR_SPEC.md`](docs/REFACTOR_SPEC.md).
 
 ### Completed
 - [x] GGUF v3 parsing + byte-exact K-family dequantization
@@ -303,9 +316,10 @@ known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - [x] Self-contained GGUF-embedded tokenizer
 - [x] CUDA dispatch path (feature-gated)
 - [x] Conformance tooling (numpy oracle + full-vector diffs)
+- [x] pesti-structural-tokenizer v0.1.2 published to crates.io
 
 ### Next (frontier)
-- [ ] GPU end-to-end correctness + decode tok/s
+- [ ] GPU end-to-end correctness + decode tok/s (Phase 2b/3 of refactor spec)
 - [ ] Measured llama.cpp baseline on same model/prompt/hardware
 - [ ] KV-cache updates during autoregressive generation (paged attention)
 - [ ] FP8 quantization, multi-GPU scaling
@@ -320,5 +334,5 @@ known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
-*Last updated: September 11, 2026 (Week 21 — cleanup complete, roadmap restructured)*
+*Last updated: September 24, 2026 (Week 24 — structural tokenizer v0.1.2 published; GPU inference stack refactor in progress)*
 *This README will change as I learn more. If it looks perfect, it's lying.*
