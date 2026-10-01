@@ -1,0 +1,85 @@
+// Process Discovery & Attachment Protocol - Demo/Test
+// Demonstrates the middleware layer for agent process management
+
+import { exec, sleep } from "@stdlib/process";
+import { now } from "@stdlib/time";
+
+print("=== Process Discovery & Attachment Protocol Demo ===");
+print("");
+
+// Step 1: Generate command for user to run
+print("Step 1: Generating command...");
+let cmd = "sleep 30 && echo done";
+print("Command: " + cmd);
+print("Run this in your terminal and give me the PID.");
+print("");
+
+// Simulate user providing a PID (in real use, this would be input)
+// For demo purposes, we'll start our own process to attach to
+print("(Demo: starting test process ourselves...)");
+let start = now();
+
+// Start a background process using shell exec
+let spawn_result = exec("bash -c '" + cmd + "' & echo $!");
+let pid_str = spawn_result.output.trim();
+let target_pid = i32(pid_str);
+
+print("Started test process with PID: " + pid_str);
+print("");
+
+// Step 2: Discover the process
+print("Step 2: Discovering process by PID...");
+fn discover_by_pid(pid: i32) {
+    let result = exec("ps -p " + pid + " -o pid,stat,etime,cmd --no-headers");
+    if (result.exit_code == 0) {
+        print("Found process:");
+        print(result.output);
+        return true;
+    } else {
+        print("Process not found or exited");
+        return false;
+    }
+}
+
+let found = discover_by_pid(target_pid);
+
+if (found) {
+    // Step 3: Monitor the process
+    print("");
+    print("Step 3: Monitoring process...");
+    
+    let iterations = 0;
+    while (iterations < 5) {
+        sleep(2.0);
+        iterations++;
+        
+        let status = exec("ps -p " + pid_str + " -o stat --no-headers");
+        if (status.exit_code != 0) {
+            print("Process exited after " + (iterations * 2) + " seconds");
+            break;
+        }
+        
+        // Check elapsed time
+        let elapsed = now() - start;
+        print("[" + iterations + "] Process still running (" + 
+              f"{elapsed:.0f}s elapsed)...");
+    }
+    
+    // Step 4: Get final status
+    print("");
+    print("Step 4: Final status check...");
+    let final_check = exec("ps -p " + pid_str + " -o pid,stat,etime,cmd --no-headers");
+    if (final_check.exit_code == 0) {
+        print("Process still running:");
+        print(final_check.output);
+        
+        // Clean up
+        print("Cleaning up...");
+        exec("kill " + pid_str + " 2>/dev/null");
+    } else {
+        print("Process completed naturally");
+    }
+}
+
+print("");
+print("=== Demo Complete ===");
