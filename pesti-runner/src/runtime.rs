@@ -221,35 +221,39 @@ impl Runtime {
             );
 
             // Extract config from safetensors metadata
-            let metadata = crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
-                .map_err(|e| {
-                    crate::error::RunnerError::ModelLoad(format!(
-                        "Failed to extract safetensors config: {e}"
-                    ))
-                })?;
+            let metadata =
+                crate::safetensors_weight_loader::extract_safetensors_config(&spec.base_path)
+                    .map_err(|e| {
+                        crate::error::RunnerError::ModelLoad(format!(
+                            "Failed to extract safetensors config: {e}"
+                        ))
+                    })?;
 
             // Convert metadata to LlamaConfig
-            let llama_config = crate::transformer::model::LlamaConfig::from_safetensors_metadata(&metadata)
-                .map_err(|e| {
-                    crate::error::RunnerError::ModelLoad(format!(
-                        "Failed to build config from safetensors metadata: {e}"
-                    ))
-                })?;
+            let llama_config =
+                crate::transformer::model::LlamaConfig::from_safetensors_metadata(&metadata)
+                    .map_err(|e| {
+                        crate::error::RunnerError::ModelLoad(format!(
+                            "Failed to build config from safetensors metadata: {e}"
+                        ))
+                    })?;
 
             // Load model from safetensors using our Rust transformer implementation
-            let weights = crate::safetensors_weight_loader::load_safetensors_weights(&spec.base_path)
-                .map_err(|e| {
-                    crate::error::RunnerError::ModelLoad(format!(
-                        "Failed to load safetensors weights: {e}"
-                    ))
-                })?;
+            let weights =
+                crate::safetensors_weight_loader::load_safetensors_weights(&spec.base_path)
+                    .map_err(|e| {
+                        crate::error::RunnerError::ModelLoad(format!(
+                            "Failed to load safetensors weights: {e}"
+                        ))
+                    })?;
 
-            let mut llama_model = crate::transformer::LlamaModel::from_safetensors_weights(weights, llama_config)
-                .map_err(|e| {
-                    crate::error::RunnerError::ModelLoad(format!(
-                        "Failed to load model from safetensors: {e}"
-                    ))
-                })?;
+            let mut llama_model =
+                crate::transformer::LlamaModel::from_safetensors_weights(weights, llama_config)
+                    .map_err(|e| {
+                        crate::error::RunnerError::ModelLoad(format!(
+                            "Failed to load model from safetensors: {e}"
+                        ))
+                    })?;
 
             // Phase 2a: Wire up GEMM kernel if CUDA is available
             #[cfg(feature = "cuda")]
@@ -268,11 +272,14 @@ impl Runtime {
                                     context.clone(),
                                     stream.clone(),
                                     device_info,
-                                ).build() {
+                                )
+                                .build()
+                                {
                                     Ok(gemm_kernel) => {
                                         info!("Attaching CUDA GEMM kernel to all linear layers");
-                                        llama_model.set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
-                                        
+                                        llama_model
+                                            .set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
+
                                         // Phase 2b: Upload weights to GPU once at load time
                                         info!("Uploading model weights to GPU device memory");
                                         let upload_start = std::time::Instant::now();
@@ -283,7 +290,10 @@ impl Runtime {
                                         );
                                     }
                                     Err(e) => {
-                                        warn!("Failed to create CUDA GEMM kernel, falling back to CPU: {}", e);
+                                        warn!(
+                                            "Failed to create CUDA GEMM kernel, falling back to CPU: {}",
+                                            e
+                                        );
                                     }
                                 }
 

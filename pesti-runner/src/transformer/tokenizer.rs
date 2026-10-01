@@ -339,9 +339,7 @@ impl PestiTokenizer {
 
             // Structural tokenizer doesn't decode back to source text.
             // Return placeholder text indicating structural tokens.
-            Self::StructuralRust(_) => {
-                Ok(format!("[structural: {} token(s)]", tokens.len()))
-            }
+            Self::StructuralRust(_) => Ok(format!("[structural: {} token(s)]", tokens.len())),
         }
     }
 

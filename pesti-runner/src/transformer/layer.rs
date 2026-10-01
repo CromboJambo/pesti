@@ -18,8 +18,18 @@ use std::sync::Arc;
 
 /// SwiGLU activation: silu(x) * y (CPU reference)
 fn swiglu_cpu(gate: &[f32], up: &[f32], size: usize) -> Vec<f32> {
-    assert!(size <= gate.len(), "swiglu: size={} but gate.len()={}", size, gate.len());
-    assert!(size <= up.len(), "swiglu: size={} but up.len()={}", size, up.len());
+    assert!(
+        size <= gate.len(),
+        "swiglu: size={} but gate.len()={}",
+        size,
+        gate.len()
+    );
+    assert!(
+        size <= up.len(),
+        "swiglu: size={} but up.len()={}",
+        size,
+        up.len()
+    );
     let mut output = vec![0.0f32; size];
     for i in 0..size {
         // sigmoid(x), numerically stable:
