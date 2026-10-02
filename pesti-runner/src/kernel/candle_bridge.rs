@@ -179,11 +179,12 @@ pub fn apply_rope(
     Tensor::cat(&[part0, part1], dims.len() - 1)
 }
 
-/// Compute RoPE embeddings (cos/sin) for a given sequence length.
+/// Compute RoPE embeddings (cos/sin) for a given sequence length, directly in f16.
 ///
 /// Uses the standard RoPE formula, computed in pure Rust on CPU to avoid
 /// candle-core's internal CUDA kernel compilation which targets incompatible
-/// PTX versions on some drivers. Values are then transferred to GPU as data.
+/// PTX versions on some drivers. Values are computed in f32 then cast to f16
+/// on CPU before transfer, avoiding GPU dtype conversion kernels entirely.
 ///
 /// ```text
 /// cos = cos(pos / 10000^(2j/d))
@@ -210,7 +211,7 @@ pub fn rope_embeddings(
         .map(|i| base.powf(-(i as f32 * 2.0) / head_dim as f32))
         .collect();
 
-    // Compute all cos/sin values on CPU in pure Rust
+    // Compute all cos/sin values on CPU in pure Rust, directly as f16
     let mut cos_data = Vec::with_capacity(seq_len * dim);
     let mut sin_data = Vec::with_capacity(seq_len * dim);
 
@@ -218,12 +219,12 @@ pub fn rope_embeddings(
         let pos_f = pos as f32;
         for &freq in &inv_freq {
             let angle = pos_f * freq;
-            cos_data.push(angle.cos());
-            sin_data.push(angle.sin());
+            cos_data.push(half::f16::from_f32(angle.cos()));
+            sin_data.push(half::f16::from_f32(angle.sin()));
         }
     }
 
-    // Transfer pre-computed data to GPU as tensors (no kernel compilation)
+    // Transfer pre-computed f16 data to GPU as tensors (no kernel compilation)
     let device = bridge_device();
     let cos = Tensor::from_vec(cos_data, (seq_len, dim), device)?;
     let sin = Tensor::from_vec(sin_data, (seq_len, dim), device)?;
