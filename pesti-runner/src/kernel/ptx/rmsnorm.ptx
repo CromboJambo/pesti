@@ -2,7 +2,7 @@
 // Row-wise normalization. Each block handles one row with warp-level reduction.
 
 .version 8.0
-.target sm_89
+.target sm_86
 .address_size 64
 
 .shared float s_sums[32];
