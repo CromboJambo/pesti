@@ -765,6 +765,7 @@ impl LlamaRunner {
         // 0.1.154 takes 4 args, 0.1.156+ takes 5 with n_vocab prepended).
         if config.repetition_penalty != 1.0 {
             samplers.push(LlamaSampler::penalties(
+                self.model.n_vocab(),
                 config.repeat_last_n,
                 config.repetition_penalty as f32,
                 0.0, // frequency penalty (unused)
