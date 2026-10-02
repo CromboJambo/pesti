@@ -181,7 +181,10 @@ pub fn apply_rope(
 
 /// Compute RoPE embeddings (cos/sin) for a given sequence length.
 ///
-/// Uses the standard RoPE formula:
+/// Uses the standard RoPE formula, computed in pure Rust on CPU to avoid
+/// candle-core's internal CUDA kernel compilation which targets incompatible
+/// PTX versions on some drivers. Values are then transferred to GPU as data.
+///
 /// ```text
 /// cos = cos(pos / 10000^(2j/d))
 /// sin = sin(pos / 10000^(2j/d))
@@ -201,22 +204,29 @@ pub fn rope_embeddings(
     start_pos: usize,
 ) -> Result<(Tensor, Tensor), candle_core::Error> {
     let dim = head_dim / 2;
+
+    // Compute inverse frequencies in pure Rust (no tensor ops)
     let inv_freq: Vec<f32> = (0..dim)
         .map(|i| base.powf(-(i as f32 * 2.0) / head_dim as f32))
         .collect();
 
-    let positions: Vec<f32> = (start_pos..start_pos + seq_len).map(|p| p as f32).collect();
+    // Compute all cos/sin values on CPU in pure Rust
+    let mut cos_data = Vec::with_capacity(seq_len * dim);
+    let mut sin_data = Vec::with_capacity(seq_len * dim);
 
-    // Compute positions * inv_freq
-    let _shape = (seq_len, dim);
-    let positions_t = Tensor::from_vec(positions, (seq_len, 1), bridge_device())?;
-    let inv_freq_t = Tensor::from_vec(inv_freq, (1, dim), bridge_device())?;
+    for pos in start_pos..start_pos + seq_len {
+        let pos_f = pos as f32;
+        for &freq in &inv_freq {
+            let angle = pos_f * freq;
+            cos_data.push(angle.cos());
+            sin_data.push(angle.sin());
+        }
+    }
 
-    // angles = positions * inv_freq: [seq_len, dim]
-    let angles = positions_t.matmul(&inv_freq_t)?;
-
-    let cos = angles.cos()?;
-    let sin = angles.sin()?;
+    // Transfer pre-computed data to GPU as tensors (no kernel compilation)
+    let device = bridge_device();
+    let cos = Tensor::from_vec(cos_data, (seq_len, dim), device)?;
+    let sin = Tensor::from_vec(sin_data, (seq_len, dim), device)?;
 
     Ok((cos, sin))
 }
