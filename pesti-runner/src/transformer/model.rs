@@ -15,9 +15,9 @@ use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
-use crate::kernel::{GemmKernel, Kvcache};
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
+use crate::kernel::{GemmKernel, Kvcache};
 use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
 use crate::transformer::layer::{Attention, FeedForward, TransformerLayer};
@@ -425,23 +425,28 @@ impl LlamaModel {
         let vocab_size = header.vocab_size();
         let rope_config = RopeConfig::new(config.head_dim, config.rope_base, config.max_seq_len);
 
-        // Load token embeddings — architecture-dependent name
+        // Load token embeddings — architecture-dependent name with fallbacks.
+        // Llama uses "tok_embeddings.weight", but some files use "token_embd.weight".
         let embedding_name = config.embedding_name();
-        let token_embeddings = weights.tensors.get(embedding_name).map(|tensor_data| {
-            // For Qwen2, the embedding tensor shape is [embed_dim, vocab_size]
-            // We need to set in_features = embed_dim for correct row lookup
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                let embed_dim = config.embed_dim;
-                Linear::from_f32_weight_with_shape(
-                    tensor_data,
-                    None,
-                    embed_dim,
-                    vocab_size as usize * embed_dim,
-                )
-            } else {
-                Linear::from_f32_weight(tensor_data, None)
-            }
-        });
+        let token_embeddings = weights
+            .tensors
+            .get(embedding_name)
+            .or_else(|| weights.tensors.get("token_embd.weight"))
+            .map(|tensor_data| {
+                // For Qwen2, the embedding tensor shape is [embed_dim, vocab_size]
+                // We need to set in_features = embed_dim for correct row lookup
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    let embed_dim = config.embed_dim;
+                    Linear::from_f32_weight_with_shape(
+                        tensor_data,
+                        None,
+                        embed_dim,
+                        vocab_size as usize,  // Fixed: just vocab_size, not vocab_size * embed_dim
+                    )
+                } else {
+                    Linear::from_f32_weight(tensor_data, None)
+                }
+            });
 
         // Load output (LM head) — architecture-dependent name.
         // Tied-embedding models (e.g. Qwen2.5-0.5B) have no separate output
