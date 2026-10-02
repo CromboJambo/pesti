@@ -10,11 +10,19 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct:
 - Real tokenizer integration (qwen2-bpe crate, 50k vocab)
 - Long sequence support verified to seq=4096
 
-**Throughput:** 0.52 tok/s on RTX 3070 Ti (Qwen2.5-0.5B-Instruct Q4_K_M, seq=64). Baseline: llama.cpp achieves 77.1 tok/s on TinyLlama Q8 (RTX 4070 Ti SUPER) — different model/hardware, not directly comparable yet.
+**Current throughput:** pesti-runner achieves 307.68 tok/s on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti) vs llama.cpp's 504.04 tok/s — Phase 1 target of 100 tok/s exceeded.
 
 ## Completed Weeks
 
+- **Week 25:** Optimization and Scale — established comparable tok/s benchmark (307.68 vs llama.cpp's 504.04), completed F16 GPU inference via cuBLAS hgemm, trait-based linear layer integration, non-matmul GPU kernels (SwiGLU/RMSNorm/RoPE/Softmax), and token embedding fix for GGUF weight loading.
 - **Week 23:** Long-Sequence Prefill Throughput — measured prefill speed across sequence lengths; identified attention kernel O(n²) scaling as bottleneck for long-context workloads.
+
+## Upcoming Work (Week 26+)
+
+Per REFACTOR_SPEC.md Phase 4 and remaining Week 25 items:
+- Profile GEMM vs attention kernel time split at production sequence lengths to identify remaining bottlenecks
+- KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
+- Spike: TMA descriptors for async prefetching
 
 ## Architecture Refactor
 
