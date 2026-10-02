@@ -143,3 +143,11 @@ pub fn is_enabled() -> bool {
         None => false,
     }
 }
+
+/// Reset all accumulated timing data. Call between benchmark runs.
+pub fn reset() {
+    if let Some(p) = PROFILER.get() {
+        let mut state = p.lock().unwrap();
+        state.categories.clear();
+    }
+}

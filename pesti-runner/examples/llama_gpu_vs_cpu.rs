@@ -1,4 +1,5 @@
 //! Real GPU vs CPU inference benchmark via the llama.cpp FFI backend.
+//! Includes kernel timing profiler for GEMM/attention breakdown.
 //!
 //! Loads the same Qwen2.5-0.5B Q4_K_M model twice:
 //!   - n_gpu_layers=0  → pure CPU inference
@@ -12,11 +13,11 @@
 
 use pesti_runner::LlamaRunner;
 use pesti_runner::llama::SamplingConfig;
+use pesti_runner::profiler;
 use std::path::Path;
 use std::time::Instant;
 
-const MODEL: &str =
-    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL: &str = "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf";
 const PROMPT: &str = "The quick brown fox jumps over the lazy dog. Summarize:";
 
 fn bench(label: &str, n_gpu_layers: i32) -> Result<(), Box<dyn std::error::Error>> {
@@ -42,6 +43,9 @@ fn bench(label: &str, n_gpu_layers: i32) -> Result<(), Box<dyn std::error::Error
     config.top_k = 40;
     config.max_tokens = 64;
 
+    // Reset profiler before generation
+    profiler::reset();
+
     let gen_start = Instant::now();
     let result = runner.generate(PROMPT, &config)?;
     let gen_time = gen_start.elapsed();
@@ -57,13 +61,20 @@ fn bench(label: &str, n_gpu_layers: i32) -> Result<(), Box<dyn std::error::Error
         "Output: \"{}...\"",
         &result.text[..result.text.len().min(80)]
     );
+
+    // Print kernel timing breakdown
+    profiler::print_report();
+
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== PESTI llama.cpp GPU vs CPU Benchmark ===\n");
+    println!("=== PESTI llama.cpp GPU vs CPU Benchmark (Week 26 Profiling) ===\n");
     println!("Model: {MODEL}");
     println!("Prompt: \"{PROMPT}\"");
+
+    // Initialize profiler
+    let _profiler = profiler::init();
 
     bench("CPU", 0)?;
     bench("GPU (full offload)", -1)?;

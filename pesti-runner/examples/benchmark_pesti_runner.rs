@@ -4,6 +4,7 @@
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use pesti_runner::profiler;
+use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
@@ -19,6 +20,12 @@ fn main() {
     let t_load = Instant::now();
     let weights = load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
+
+    // Load tokenizer separately (GGUF models don't auto-attach)
+    let (_tokenizer_config, tokenizer) = load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)
+        .expect("Failed to load tokenizer from GGUF");
+    model.tokenizer = Some(tokenizer);
+
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
     // Tokenize prompt using the tokenizer directly
