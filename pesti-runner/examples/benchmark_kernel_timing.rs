@@ -1,0 +1,66 @@
+//! Kernel timing benchmark: GEMM vs attention time split.
+//! Uses pesti-runner's own GGUF loader and transformer implementation.
+
+use pesti_runner::transformer::{LlamaModel, SamplingConfig};
+use rand::SeedableRng;
+use std::path::Path;
+use std::time::Instant;
+
+const MODEL_PATH: &str = "/home/crombo/projects/active/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const PROMPT: &str = "Write a short story about a robot learning to cook.";
+const NUM_TOKENS: usize = 32;
+
+fn main() {
+    println!("=== pesti-runner Kernel Timing Benchmark ===");
+    println!(
+        "Model: TinyLlama Q4_K_M ({} bytes)",
+        std::fs::metadata(MODEL_PATH).unwrap().len()
+    );
+    println!("Tokens to generate: {}", NUM_TOKENS);
+
+    // Initialize kernel profiler
+    pesti_runner::profiler::init();
+
+    let start = Instant::now();
+
+    // Load model using pesti's own GGUF loader + transformer implementation
+    let mut model = LlamaModel::load_gguf(Path::new(MODEL_PATH)).expect("Failed to load model");
+
+    // Reduce max_seq_len to fit in GPU memory
+    model.config.max_seq_len = 256;
+
+    // Tokenize using pesti's tokenizer (loaded from GGUF)
+    let input_ids = {
+        let tokenizer = model.tokenizer.as_ref().expect("Tokenizer not loaded");
+        tokenizer.encode(PROMPT).unwrap()
+    };
+    println!("Prompt tokens: {}", input_ids.len());
+
+    // Generate tokens (pure Rust forward pass + pesti CUDA kernels)
+    let sampling = SamplingConfig {
+        temperature: 0.7,
+        top_p: 0.95,
+        top_k: 50,
+        seed: Some(42),
+    };
+
+    println!("Profiler enabled: {}", pesti_runner::profiler::is_enabled());
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let generated = model
+        .generate(&input_ids, NUM_TOKENS, &sampling, &mut rng, &[])
+        .unwrap();
+    let elapsed = start.elapsed().as_secs_f64();
+
+    println!("Generated {} tokens in {:.3}s", generated.len(), elapsed);
+    let tok_per_sec = generated.len() as f64 / elapsed;
+    println!("Throughput: {:.2} tok/s (pure Rust)", tok_per_sec);
+
+    // Print kernel timing report
+    pesti_runner::profiler::print_report();
+
+    // Decode and print output
+    let tokenizer = model.tokenizer.as_ref().expect("Tokenizer not loaded");
+    let decoded = tokenizer.decode(&generated).unwrap();
+    println!("Generated text:\n{}", decoded);
+}
