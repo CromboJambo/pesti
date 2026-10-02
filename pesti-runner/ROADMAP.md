@@ -4,13 +4,15 @@
 
 [← Back to main roadmap](../ROADMAP.md)
 
-## Current State (Week 25)
+## Current State (Week 25 Complete)
 
 Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel and F16 compute.
 Numerical conformance validated vs llama.cpp reference outputs at all sequence lengths tested.
 
 **Throughput:** pesti-runner: 307.68 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti) — **Phase 1 target of 100 tok/s achieved.**
 Remaining ~1.6x gap to llama.cpp baseline (504.04 tok/s) is the Phase 4 optimization target.
+
+**Week 25 completed October 2, 2026.** All planned deliverables finished including token embedding fix that resolved GGUF weight loading for Llama-family models.
 
 ### Working Features
 - ✅ Transformer layer forward pass (attention + FFN)
