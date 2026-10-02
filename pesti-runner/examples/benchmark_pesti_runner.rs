@@ -3,6 +3,7 @@
 
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
+use pesti_runner::profiler;
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
@@ -10,6 +11,9 @@ use std::time::Instant;
 fn main() {
     let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
     let prompt = "What is the capital of France?";
+
+    // Initialize profiler
+    let _profiler = profiler::init();
 
     println!("Loading model from {}", model_path);
     let t_load = Instant::now();
@@ -73,7 +77,9 @@ fn main() {
         // Check for EOS
         let piece = {
             let tokenizer = model.tokenizer.as_ref().expect("No tokenizer");
-            tokenizer.decode(&[next_token]).expect("Failed to decode token")
+            tokenizer
+                .decode(&[next_token])
+                .expect("Failed to decode token")
         };
         if piece == "< |endoftext|>" {
             println!("EOS reached at token {}", i + 1);
@@ -117,4 +123,7 @@ fn main() {
     println!("Generated {} tokens", generated.len());
     println!("Decode speed: {:.2} tok/s", decode_speed);
     println!("Total decode time: {:.2}s", total_decode);
+
+    // Print kernel timing breakdown
+    profiler::print_report();
 }
