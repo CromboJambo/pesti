@@ -169,6 +169,8 @@ impl LinearLayer for CpuLinearLayer {
 #[cfg(feature = "cuda")]
 pub struct GpuLinearLayer {
     weight_f16: Vec<half::f16>,
+    /// Persistent GPU buffer for weights (uploaded once, reused across forward passes).
+    weight_device: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::f16>>>,
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
@@ -184,8 +186,18 @@ impl GpuLinearLayer {
     ) -> Self {
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
 
+        // Upload weights to GPU once at layer construction (persistent cache)
+        let weight_device = match crate::kernel::cuda_bridge::upload_weights_to_gpu(&weight_f16) {
+            Ok(buf) => Some(std::sync::Arc::new(buf)),
+            Err(e) => {
+                tracing::warn!("Failed to upload weights to GPU, will transfer per-call: {}", e);
+                None
+            }
+        };
+
         Self {
             weight_f16,
+            weight_device,
             bias,
             in_features,
             out_features,
@@ -198,13 +210,25 @@ impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        crate::kernel::cuda_bridge::gemm_f16(
-            &x_f16,
-            &self.weight_f16,
-            batch_size,
-            self.out_features,
-            self.in_features,
-        )
+        // Use persistent GPU weight buffer if available (eliminates per-call H2D transfer)
+        if let Some(ref w_dev) = self.weight_device {
+            crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
+                &x_f16,
+                w_dev,
+                batch_size,
+                self.out_features,
+                self.in_features,
+            )
+        } else {
+            // Fallback: transfer weights per call (shouldn't happen if upload succeeded)
+            crate::kernel::cuda_bridge::gemm_f16(
+                &x_f16,
+                &self.weight_f16,
+                batch_size,
+                self.out_features,
+                self.in_features,
+            )
+        }
     }
 
     fn in_features(&self) -> usize {
@@ -216,7 +240,7 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
-        // Lazy caching via global WEIGHT_CACHE - no-op here
+        // Weights uploaded at construction time
         Ok(())
     }
 

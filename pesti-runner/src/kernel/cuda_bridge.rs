@@ -226,6 +226,46 @@ pub fn gemm_f16(
     result
 }
 
+/// Free function wrapper for GEMM with persistent GPU weight buffer.
+/// Weights are uploaded once and reused across forward passes (eliminates per-call H2D transfer).
+pub fn gemm_f16_with_persistent_weights(
+    x: &[half::f16],
+    w_dev: &cudarc::driver::CudaSlice<half::f16>,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> crate::error::Result<Vec<f32>> {
+    static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
+
+    let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
+        Ok(b) => b,
+        Err(e) => panic!("CUDA bridge init failed for persistent weights: {}", e),
+    });
+
+    bridge.gemm_f16_with_device_weights(x, w_dev, m, n, k)
+}
+
+/// Upload weights to GPU once for persistent caching. Returns the device buffer handle.
+pub fn upload_weights_to_gpu(
+    weights: &[half::f16],
+) -> crate::error::Result<cudarc::driver::CudaSlice<half::f16>> {
+    static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
+
+    let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
+        Ok(b) => b,
+        Err(e) => panic!("CUDA bridge init failed for upload: {}", e),
+    });
+
+    let stream = &bridge.stream;
+    let mut w_dev = unsafe { stream.alloc(weights.len()) }
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc W failed: {:?}", e)))?;
+    stream
+        .memcpy_htod(weights, &mut w_dev)
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D W failed: {:?}", e)))?;
+
+    Ok(w_dev)
+}
+
 /// Get a reference to the shared CUDA stream for weight uploads.
 #[cfg(feature = "cuda")]
 pub fn get_stream() -> std::sync::Arc<CudaStream> {
