@@ -225,7 +225,8 @@ impl LinearLayer for GpuLinearLayer {
         {
             let guard = self.weight_device.lock().unwrap();
             if let Some(ref w_dev) = *guard {
-                crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
+                // Week 28: cuBLASLt shape-optimized GEMM for LLM decode patterns
+                crate::kernel::cuda_bridge::gemm_f16_cublaslt(
                     &x_f16,
                     w_dev,
                     batch_size,

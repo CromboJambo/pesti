@@ -305,10 +305,10 @@ impl GemmKernel for KernelFromPtx {
         }
 
         // If GPU is available, launch the kernel
-        if self.gpu_available
-            && let (Some(ctx), Some(_module), Some(func), Some(stream)) =
+        if self.gpu_available {
+            if let (Some(ctx), Some(_module), Some(func), Some(stream)) =
                 (&self.ctx, &self.module, &self.function, &self.stream)
-        {
+            {
             // Bind context to thread
             ctx.bind_to_thread()
                 .map_err(|e| GemmError::LaunchFailed(e.to_string()))?;
@@ -356,6 +356,7 @@ impl GemmKernel for KernelFromPtx {
                 .map_err(|e| GemmError::LaunchFailed(format!("Synchronize failed: {e:?}")))?;
 
             return Ok(());
+        }
         }
 
         // GPU unavailable — fall back to CPU

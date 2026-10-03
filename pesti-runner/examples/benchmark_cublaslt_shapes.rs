@@ -33,7 +33,7 @@ fn main() {
         // Allocate device memory
         let mut a_dev = unsafe { stream.alloc(a_host.len()) }.expect("alloc A failed");
         let mut b_dev = unsafe { stream.alloc(b_host.len()) }.expect("alloc B failed");
-        let mut c_dev = unsafe { stream.alloc(m*n) }.expect("alloc C failed");
+        let mut c_dev: cudarc::driver::CudaSlice<f16> = unsafe { stream.alloc(m*n) }.expect("alloc C failed");
         
         // Copy to device
         stream.memcpy_htod(&a_host, &mut a_dev).expect("H2D A failed");
