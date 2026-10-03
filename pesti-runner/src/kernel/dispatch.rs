@@ -32,7 +32,6 @@
 
 use crate::error::RunnerError;
 use crate::inference_engine::InferenceEngine;
-use crate::kernel::linear::{new_linear_layer, LinearLayer};
 #[cfg(feature = "cuda")]
 use crate::kernel::attention::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
@@ -53,6 +52,7 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
+use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
@@ -373,6 +373,8 @@ impl DispatchContext {
         alpha: f32,
         beta: f32,
     ) -> Result<Vec<f32>, DispatchError> {
+        use crate::profiler;
+
         let c_len = m * n;
 
         // If GPU not preferred or unavailable, use CPU directly
@@ -386,6 +388,7 @@ impl DispatchContext {
         let b_bytes = std::mem::size_of_val(b_host);
         let c_bytes = c_len * std::mem::size_of::<f32>();
 
+        let _alloc_timer = profiler::time(profiler::KernelCategory::Alloc);
         let a_handle = self
             .memory
             .alloc(a_bytes)
@@ -398,6 +401,7 @@ impl DispatchContext {
             .memory
             .alloc(c_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc C: {e}")))?;
+        drop(_alloc_timer);
 
         let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
         let b_buf = DeviceBuffer::<f16>::from_backend(b_handle, b_host.len());
@@ -406,6 +410,7 @@ impl DispatchContext {
         // Transfer inputs to device
         let a_bytes_raw: &[u8] =
             unsafe { std::slice::from_raw_parts(a_host.as_ptr() as *const u8, a_bytes) };
+        let _h2d_timer = profiler::time(profiler::KernelCategory::H2DTransfer);
         self.memory
             .h2d(a_bytes_raw, a_handle)
             .map_err(|e| DispatchError::Transfer(format!("H2D A: {e}")))?;
@@ -415,6 +420,7 @@ impl DispatchContext {
         self.memory
             .h2d(b_bytes_raw, b_handle)
             .map_err(|e| DispatchError::Transfer(format!("H2D B: {e}")))?;
+        drop(_h2d_timer);
 
         // Initialize C if provided
         if let Some(c_init_data) = c_init {
@@ -435,10 +441,12 @@ impl DispatchContext {
         // zeroed output would corrupt the logits with no indication that the
         // GPU path failed. (Previously this was `let _result = matmul(...)`,
         // which swallowed the error and returned zeros.)
+        let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
         let matmul_ok = self
             .engine
             .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
             .is_ok();
+        drop(_gemm_timer);
 
         // Transfer result back to host (only meaningful if the matmul ran).
         let mut c_host = vec![0.0f32; c_len];
@@ -446,9 +454,16 @@ impl DispatchContext {
         if matmul_ok {
             let c_bytes_out: &mut [u8] =
                 unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
+            let _d2h_timer = profiler::time(profiler::KernelCategory::D2HTransfer);
             d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
-            if d2h_ok && self.memory.sync().is_err() {
-                d2h_ok = false;
+            drop(_d2h_timer);
+
+            if d2h_ok {
+                let _sync_timer = profiler::time(profiler::KernelCategory::Sync);
+                if self.memory.sync().is_err() {
+                    d2h_ok = false;
+                }
+                drop(_sync_timer);
             }
         }
 
@@ -843,7 +858,7 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        use crate::kernel::linear::{new_linear_layer, LinearLayer};
+        use crate::kernel::linear::{LinearLayer, new_linear_layer};
         // Convert f16 weights to f32 for the linear layer
         let weight_f32: Vec<f32> = weights_f16.iter().map(|w| (*w).into()).collect();
         let inner = new_linear_layer(weight_f32, bias, in_features, out_features);
@@ -1868,33 +1883,43 @@ impl LayerDispatch {
         key_cache: &mut Kvcache,
         value_cache: &mut Kvcache,
     ) -> Result<Vec<f32>, DispatchError> {
+        use crate::profiler;
+
         let embed_dim = x.len() / batch_size;
 
         // Attention sub-layer: x + attn(RMSNorm(x))
         let normed = self.attention_norm.forward(x, batch_size)?;
-        let attn_out = self.attention.forward(
-            ctx,
-            &normed,
-            batch_size,
-            seq_len,
-            start_pos,
-            key_cache,
-            value_cache,
-        )?;
-
-        // Residual: x + attn_out
+        
         let mut h = vec![0.0f32; batch_size * embed_dim];
-        for i in 0..h.len() {
-            h[i] = x[i] + attn_out[i];
+        {
+            let _timer = profiler::time(profiler::KernelCategory::Attention);
+            let attn_out = self.attention.forward(
+                ctx,
+                &normed,
+                batch_size,
+                seq_len,
+                start_pos,
+                key_cache,
+                value_cache,
+            )?;
+
+            // Residual: x + attn_out
+            for i in 0..h.len() {
+                h[i] = x[i] + attn_out[i];
+            }
         }
 
         // FFN sub-layer: h + ffn(RMSNorm(h))
         let normed_ffn = self.ffn_norm.forward(&h, batch_size)?;
-        let ffn_out = self.feed_forward.forward(ctx, &normed_ffn, batch_size)?;
-
-        // Residual: h + ffn_out
-        for i in 0..h.len() {
-            h[i] += ffn_out[i];
+        
+        {
+            let _timer = profiler::time(profiler::KernelCategory::Gemm);
+            let ffn_out = self.feed_forward.forward(ctx, &normed_ffn, batch_size)?;
+            
+            // Residual: h + ffn_out
+            for i in 0..h.len() {
+                h[i] += ffn_out[i];
+            }
         }
 
         Ok(h)

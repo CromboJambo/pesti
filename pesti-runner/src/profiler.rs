@@ -19,6 +19,10 @@ pub enum KernelCategory {
     Attention,
     Rope,
     LayerNorm,
+    H2DTransfer,
+    D2HTransfer,
+    Sync,
+    Alloc,
     Other,
 }
 
@@ -29,6 +33,10 @@ impl std::fmt::Display for KernelCategory {
             KernelCategory::Attention => write!(f, "attention"),
             KernelCategory::Rope => write!(f, "rope"),
             KernelCategory::LayerNorm => write!(f, "layernorm"),
+            KernelCategory::H2DTransfer => write!(f, "h2d_transfer"),
+            KernelCategory::D2HTransfer => write!(f, "d2h_transfer"),
+            KernelCategory::Sync => write!(f, "sync"),
+            KernelCategory::Alloc => write!(f, "alloc"),
             KernelCategory::Other => write!(f, "other"),
         }
     }
