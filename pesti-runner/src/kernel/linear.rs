@@ -11,13 +11,6 @@ use std::sync::Arc;
 /// Linear layer trait — the unified interface for all linear operations.
 pub trait LinearLayer: Send + Sync {
     /// Forward pass: y = x @ W^T + bias
-    ///
-    /// # Arguments
-    /// * `x` - Input tensor, shape [batch_size * in_features]
-    /// * `batch_size` - Number of samples in the batch
-    ///
-    /// # Returns
-    /// Output tensor, shape [batch_size * out_features]
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>>;
 
     /// Input dimensionality
@@ -30,7 +23,6 @@ pub trait LinearLayer: Send + Sync {
     fn clone_layer(&self) -> Box<dyn LinearLayer>;
 
     /// Upload weights to GPU (no-op for CPU-only layers).
-    /// Called once after construction, before the first forward pass.
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
         Ok(())
     }
@@ -113,7 +105,6 @@ impl LinearLayer for CpuLinearLayer {
         let k = self.in_features;
         let n = self.out_features;
 
-        // Validate input size
         if x.len() < m * k {
             return Err(RunnerError::Kernel(format!(
                 "linear layer input too small: expected {} values, got {}",
@@ -124,7 +115,6 @@ impl LinearLayer for CpuLinearLayer {
 
         let mut output = vec![0.0f32; m * n];
 
-        // Rayon-parallel matmul: C[b,o] = sum_i(x[b,i] * W[o,i]) + bias[o]
         use rayon::prelude::*;
 
         output
@@ -142,7 +132,6 @@ impl LinearLayer for CpuLinearLayer {
                 }
             });
 
-        // Apply bias if present
         if let Some(ref bias) = self.bias {
             for b in 0..m {
                 for o in 0..n {
@@ -193,7 +182,6 @@ impl GpuLinearLayer {
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        // Convert f32 weights to f16 for GPU (matches existing Linear pattern)
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
 
         Self {
@@ -208,10 +196,8 @@ impl GpuLinearLayer {
 #[cfg(feature = "cuda")]
 impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
-        // Convert input to f16 for GPU computation
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        // Use cuda_bridge's gemm_f16 (f16 in/out, returns f32)
         crate::kernel::cuda_bridge::gemm_f16(
             &x_f16,
             &self.weight_f16,
@@ -230,12 +216,12 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
-        // Weights are already uploaded at construction time via GpuWeightBuffer::upload()
+        // Lazy caching via global WEIGHT_CACHE - no-op here
         Ok(())
     }
 
     fn weights_on_gpu(&self) -> bool {
-        true  // Always on GPU after construction
+        true
     }
 
     fn layer_name(&self) -> &str {
@@ -258,18 +244,14 @@ mod tests {
 
     #[test]
     fn test_cpu_linear_forward() {
-        // Simple 2x3 weight matrix
         let weight = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let bias = Some(vec![0.1, 0.2]);
 
         let layer = CpuLinearLayer::from_f32(weight, bias, 3, 2);
 
-        // Input: [1, 2, 3]
         let x = vec![1.0, 2.0, 3.0];
         let output = layer.forward(&x, 1).unwrap();
 
-        // Expected: C[0,0] = 1*1 + 2*2 + 3*3 + 0.1 = 14.1
-        //           C[0,1] = 1*4 + 2*5 + 3*6 + 0.2 = 32.2
         assert!((output[0] - 14.1).abs() < 1e-5);
         assert!((output[1] - 32.2).abs() < 1e-5);
     }
@@ -282,9 +264,6 @@ mod tests {
         let x = vec![1.0, 2.0];
         let output = layer.forward(&x, 1).unwrap();
 
-        // Expected: C[0,0] = 1*1 + 2*2 = 5
-        //           C[0,1] = 1*3 + 2*4 = 11
-        //           C[0,2] = 1*5 + 2*6 = 17
         assert!((output[0] - 5.0).abs() < 1e-5);
         assert!((output[1] - 11.0).abs() < 1e-5);
         assert!((output[2] - 17.0).abs() < 1e-5);
@@ -295,15 +274,12 @@ mod tests {
         let weight = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let layer = CpuLinearLayer::from_f32(weight, None, 3, 2);
 
-        // Two samples: [1,2,3] and [4,5,6]
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let output = layer.forward(&x, 2).unwrap();
 
-        // Sample 0: C[0,0]=14, C[0,1]=32
         assert!((output[0] - 14.0).abs() < 1e-5);
         assert!((output[1] - 32.0).abs() < 1e-5);
 
-        // Sample 1: C[1,0]=32, C[1,1]=77
         assert!((output[2] - 32.0).abs() < 1e-5);
         assert!((output[3] - 77.0).abs() < 1e-5);
     }
@@ -314,7 +290,6 @@ mod tests {
         assert_eq!(layer.in_features(), 1);
         assert_eq!(layer.out_features(), 2);
 
-        // Should work regardless of CUDA availability
         let output = layer.forward(&[3.0], 1).unwrap();
         assert_eq!(output.len(), 2);
     }
