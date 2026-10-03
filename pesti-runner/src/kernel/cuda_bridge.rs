@@ -195,16 +195,6 @@ impl CudaBridge {
     }
 }
 
-/// Global weight cache: maps host pointer address -> device buffer.
-/// Weights are uploaded on first GEMM call and cached for reuse across forward passes.
-static WEIGHT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<f16>>>> = std::sync::OnceLock::new();
-
-fn get_weight_cache() -> &'static std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<f16>>> {
-    WEIGHT_CACHE.get_or_init(|| {
-        std::sync::Mutex::new(std::collections::HashMap::new())
-    })
-}
-
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
 pub fn gemm_f16(
     x: &[half::f16],
@@ -220,8 +210,8 @@ pub fn gemm_f16(
         Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
-    // Allocate device memory for weights every time (no caching - simple approach first)
-    // Weights are small enough that H2D transfer overhead is acceptable initially.
+    // Simple per-call approach: allocate, transfer, compute, free.
+    // Focus optimization on GEMM compute itself (58.8% of time).
     let mut w_dev = unsafe { bridge.stream.alloc(weights.len()) }
         .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc W failed: {:?}", e)))?;
     bridge.stream
@@ -229,10 +219,7 @@ pub fn gemm_f16(
         .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D W failed: {:?}", e)))?;
 
     let result = bridge.gemm_f16_with_device_weights(x, &w_dev, m, n, k);
-
-    // Free device memory
     drop(w_dev);
-
     result
 }
 
