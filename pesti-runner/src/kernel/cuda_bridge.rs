@@ -195,8 +195,18 @@ impl CudaBridge {
     }
 }
 
+/// Global weight cache: maps host pointer address -> device buffer.
+/// Weights are uploaded on first GEMM call and cached for reuse across forward passes.
+static WEIGHT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<f16>>>> = std::sync::OnceLock::new();
+
+fn get_weight_cache() -> &'static std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<f16>>> {
+    WEIGHT_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
+}
+
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
-/// Uses persistent device weight buffers to avoid repeated H2D transfers.
+/// Uses persistent device weight buffers cached by host pointer address.
 pub fn gemm_f16(
     x: &[half::f16],
     weights: &[half::f16],
@@ -211,34 +221,33 @@ pub fn gemm_f16(
         Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
-    // Upload weights to GPU once and cache them for reuse across forward passes.
-    // This eliminates the repeated H2D transfers that were causing ~5s of overhead.
+    // Lazy weight caching: upload on first use, reuse across forward passes.
+    // Key by pointer address (weights are static after model load).
     let weight_key = weights.as_ptr() as usize;
-    static WEIGHT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<half::f16>>>> = std::sync::OnceLock::new();
-    let cache = WEIGHT_CACHE.get_or_init(|| {
-        std::sync::Mutex::new(std::collections::HashMap::new())
-    });
-
-    let mut cache_guard = cache.lock().unwrap();
-    let dev_weights = if let Some(buf) = cache_guard.get(&weight_key) {
-        buf.clone()
-    } else {
-        drop(cache_guard);
-        // Upload to GPU (outside lock to avoid holding during CUDA call)
-        let mut buf = unsafe { bridge.stream.alloc(weights.len()) }
-            .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc weight failed: {:?}", e)))?;
-        bridge.stream
-            .memcpy_htod(weights, &mut buf)
-            .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D weight failed: {:?}", e)))?;
-        
-        // Re-acquire lock and insert
-        let mut cache_guard = cache.lock().unwrap();
-        cache_guard.insert(weight_key, buf.clone());
-        buf
+    
+    // Check if already uploaded
+    let dev_weights = {
+        let cache = get_weight_cache();
+        let mut guard = cache.lock().unwrap();
+        if let Some(buf) = guard.get(&weight_key) {
+            buf.clone()
+        } else {
+            drop(guard);
+            // Upload to GPU
+            let stream = &bridge.stream;
+            let mut buf = unsafe { stream.alloc(weights.len()) }
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc weight failed: {:?}", e)))?;
+            stream.memcpy_htod(weights, &mut buf)
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D weight failed: {:?}", e)))?;
+            
+            // Insert into cache
+            let mut guard = get_weight_cache().lock().unwrap();
+            guard.insert(weight_key, buf.clone());
+            buf
+        }
     };
 
-    bridge
-        .gemm_f16_with_device_weights(x, &dev_weights, m, n, k)
+    bridge.gemm_f16_with_device_weights(x, &dev_weights, m, n, k)
 }
 
 /// Get a reference to the shared CUDA stream for weight uploads.
