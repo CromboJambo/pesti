@@ -126,6 +126,8 @@ pub mod tma_bridge;
 pub mod tma_descriptor;
 #[cfg(feature = "cuda")]
 pub mod wgmma_gemm; // WGMMA tensor core GEMM integration (Phase 4.3)
+#[cfg(feature = "cuda")]
+pub mod weight_cache; // GPU weight cache - upload once, reuse across calls
 
 #[cfg(feature = "cuda")]
 pub use attention::{

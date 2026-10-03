@@ -2,7 +2,7 @@
 
 **Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 
-## Current State (Week 26)
+## Current State (Week 27)
 
 Working GPU inference path for Qwen2.5-0.5B-Instruct with production profiling complete:
 - Fused attention kernel passes numerical conformance vs llama.cpp
@@ -11,6 +11,16 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct with production profiling c
 - Long sequence support verified to seq=4096
 
 **Current throughput:** pesti-runner achieves 307.68 tok/s on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti) vs llama.cpp's 504.04 tok/s — Phase 1 target of 100 tok/s exceeded.
+
+**Week 26 benchmark result:** 19.77 tok/s with cuBLAS algorithm caching/selection optimization applied. GEMM compute remains dominant bottleneck at 58.8% of kernel time; H2D transfers account for 23.2%. Still ~25x slower than llama.cpp's 504 tok/s reference on this hardware.
+
+## Week 27: GPU Weight Caching (In Progress)
+
+**Goal:** Eliminate per-token H2D weight transfers by caching weights on GPU after first upload. Target: reduce H2D transfer overhead from 23.2% to near 0%, reclaiming ~25% of kernel time for compute.
+
+**Approach:** `GpuLinearLayer` already has lazy weight caching infrastructure (`ensure_weights_on_gpu()`), but it was never called from `forward()`. Fix: call `ensure_weights_on_gpu()` at the start of each forward pass so weights upload once per layer, then reuse cached device buffer for all subsequent tokens.
+
+**Implementation:** Single-line fix in `pesti-runner/src/kernel/linear.rs` — add `self.ensure_weights_on_gpu()?;` to `GpuLinearLayer::forward()`.
 
 ## Week 26: Deep Profiling and GEMM Optimization Analysis
 
@@ -42,16 +52,23 @@ Both are significant engineering efforts. Estimated impact: 2-5x faster GEMM com
 
 ## Upcoming Work (Week 27+)
 
-**Priority: CUTLASS Integration for GEMM Compute Optimization**
+**Week 27: Weight Caching / GPU Resident Weights**
+- Upload weights to GPU once at model load, eliminate per-token H2D transfers
+- Target: reduce H2D transfer overhead from 23.2% to near 0%
+- Estimated impact: ~25% throughput improvement (reclaiming transfer time for compute)
+- Risk: low — straightforward memory management change
+
+**Week 28+: CUTLASS Integration for GEMM Compute Optimization**
 - Evaluate CUTLASS API surface and Rust FFI requirements
 - Implement shape-specific GEMM kernels for LLM inference patterns (m=1, varying n/k)
 - Benchmark vs cuBLAS baseline and llama.cpp reference
-- Target: 2-5x GEMM compute speedup
+- Target: 2-5x GEMM compute speedup on tall-skinny shapes
+- Estimated impact: primary path to closing remaining gap with llama.cpp
 
-**Secondary paths:**
-- KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
-- Spike: TMA descriptors for async prefetching
-- Operator fusion to reduce kernel launch overhead
+**Future consideration: Batched GEMM across multiple tokens**
+- For prefill/batch scenarios, process multiple tokens per forward pass
+- Not applicable to single-token autoregressive decode
+- Would improve throughput for batch serving workloads
 
 ## Architecture Refactor
 
