@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 fn main() {
-    let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path = "/data/models/qwen2.5-0.5b-instruct-q4_k_m.gguf";
     if !Path::new(model_path).exists() {
         eprintln!("Model not found: {}", model_path);
         std::process::exit(1);
