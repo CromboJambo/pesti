@@ -206,7 +206,6 @@ fn get_weight_cache() -> &'static std::sync::Mutex<std::collections::HashMap<usi
 }
 
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
-/// Uses persistent device weight buffers cached by host pointer address.
 pub fn gemm_f16(
     x: &[half::f16],
     weights: &[half::f16],
@@ -221,33 +220,20 @@ pub fn gemm_f16(
         Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
-    // Lazy weight caching: upload on first use, reuse across forward passes.
-    // Key by pointer address (weights are static after model load).
-    let weight_key = weights.as_ptr() as usize;
-    
-    // Check if already uploaded
-    let dev_weights = {
-        let cache = get_weight_cache();
-        let mut guard = cache.lock().unwrap();
-        if let Some(buf) = guard.get(&weight_key) {
-            buf.clone()
-        } else {
-            drop(guard);
-            // Upload to GPU
-            let stream = &bridge.stream;
-            let mut buf = unsafe { stream.alloc(weights.len()) }
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc weight failed: {:?}", e)))?;
-            stream.memcpy_htod(weights, &mut buf)
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D weight failed: {:?}", e)))?;
-            
-            // Insert into cache
-            let mut guard = get_weight_cache().lock().unwrap();
-            guard.insert(weight_key, buf.clone());
-            buf
-        }
-    };
+    // Allocate device memory for weights every time (no caching - simple approach first)
+    // Weights are small enough that H2D transfer overhead is acceptable initially.
+    let mut w_dev = unsafe { bridge.stream.alloc(weights.len()) }
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc W failed: {:?}", e)))?;
+    bridge.stream
+        .memcpy_htod(weights, &mut w_dev)
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D W failed: {:?}", e)))?;
 
-    bridge.gemm_f16_with_device_weights(x, &dev_weights, m, n, k)
+    let result = bridge.gemm_f16_with_device_weights(x, &w_dev, m, n, k);
+
+    // Free device memory
+    drop(w_dev);
+
+    result
 }
 
 /// Get a reference to the shared CUDA stream for weight uploads.
