@@ -2,9 +2,9 @@
 
 **Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 
-## Current State (Week 21)
+## Current State (Week 26)
 
-Working GPU inference path for Qwen2.5-0.5B-Instruct:
+Working GPU inference path for Qwen2.5-0.5B-Instruct with production profiling complete:
 - Fused attention kernel passes numerical conformance vs llama.cpp
 - KV cache autoregressive validation suite
 - Real tokenizer integration (qwen2-bpe crate, 50k vocab)
@@ -12,17 +12,46 @@ Working GPU inference path for Qwen2.5-0.5B-Instruct:
 
 **Current throughput:** pesti-runner achieves 307.68 tok/s on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti) vs llama.cpp's 504.04 tok/s — Phase 1 target of 100 tok/s exceeded.
 
+## Week 26: Deep Profiling and GEMM Optimization Analysis
+
+**Completed:**
+- Full CUDA kernel profiling with cudaShim instrumentation (H2D/D2H transfers, sync, compute)
+- Production sequence length benchmarking (seq=256 decode steps) on jambo (RTX 3070 Ti)
+- Root cause analysis of GEMM compute bottleneck
+
+**Key Findings:**
+- GEMM compute: 58.8% of kernel time (primary bottleneck)
+- H2D transfers: 23.2% (secondary, but per-call approach confirmed working after OOM issues resolved)
+- D2H transfers: 12.4%
+- Stream sync: 5.6%
+
+**GEMM Optimization Analysis:**
+For LLM inference shapes (m=1, n=1500-6000, k=1500-4000), cuBLAS isn't optimal regardless of algorithm selection. These are tall-skinny GEMMs that cuBLAS's heuristics aren't designed for. `CUBLAS_GEMM_DEFAULT` already picks a reasonable kernel; trying ALGO0-9 won't give meaningful wins because the shape itself is the bottleneck, not the algorithm choice.
+
+**Path forward for GEMM compute optimization:**
+1. **Custom CUDA kernels** (like llama.cpp uses) — tuned specifically for m=1 LLM shapes with shared memory tiling and warp-level operations
+2. **CUTLASS library integration** — NVIDIA's template-based GEMM library that can be instantiated for specific shapes
+
+Both are significant engineering efforts. Estimated impact: 2-5x faster GEMM compute for these shapes, potentially reaching 80-150% of llama.cpp throughput.
+
 ## Completed Weeks
 
-- **Week 25:** Optimization and Scale — established comparable tok/s benchmark (307.68 vs llama.cpp's 504.04), completed F16 GPU inference via cuBLAS hgemm, trait-based linear layer integration, non-matmul GPU kernels (SwiGLU/RMSNorm/RoPE/Softmax), and token embedding fix for GGUF weight loading.
-- **Week 23:** Long-Sequence Prefill Throughput — measured prefill speed across sequence lengths; identified attention kernel O(n²) scaling as bottleneck for long-context workloads.
+- **Week 26:** Deep profiling and GEMM optimization analysis — identified cuBLAS limitations for tall-skinny LLM shapes; documented CUTLASS as next optimization path
+- **Week 25:** Optimization and Scale — established comparable tok/s benchmark (307.68 vs llama.cpp's 504.04), completed F16 GPU inference via cuBLAS hgemm, trait-based linear layer integration, non-matmul GPU kernels (SwiGLU/RMSNorm/RoPE/Softmax), and token embedding fix for GGUF weight loading
+- **Week 23:** Long-Sequence Prefill Throughput — measured prefill speed across sequence lengths; identified attention kernel O(n²) scaling as bottleneck for long-context workloads
 
-## Upcoming Work (Week 26+)
+## Upcoming Work (Week 27+)
 
-Per REFACTOR_SPEC.md Phase 4 and remaining Week 25 items:
-- Profile GEMM vs attention kernel time split at production sequence lengths to identify remaining bottlenecks
+**Priority: CUTLASS Integration for GEMM Compute Optimization**
+- Evaluate CUTLASS API surface and Rust FFI requirements
+- Implement shape-specific GEMM kernels for LLM inference patterns (m=1, varying n/k)
+- Benchmark vs cuBLAS baseline and llama.cpp reference
+- Target: 2-5x GEMM compute speedup
+
+**Secondary paths:**
 - KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - Spike: TMA descriptors for async prefetching
+- Operator fusion to reduce kernel launch overhead
 
 ## Architecture Refactor
 
@@ -57,4 +86,4 @@ When heading toward these patterns, expect trouble:
 **GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
 
 ---
-*Updated: September 17, 2026 — roadmap consolidated into REFACTOR_SPEC.md based on codebase analysis*
+*Updated: October 3, 2026 — Week 26 profiling results and GEMM optimization analysis documented*
