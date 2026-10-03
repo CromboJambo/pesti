@@ -183,8 +183,6 @@ pub struct GpuLinearLayer {
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
-    /// Persistent GPU weight buffer (uploaded once at construction).
-    gpu_weights: std::sync::Arc<crate::kernel::cuda_bridge::GpuWeightBuffer>,
 }
 
 #[cfg(feature = "cuda")]
@@ -198,19 +196,11 @@ impl GpuLinearLayer {
         // Convert f32 weights to f16 for GPU (matches existing Linear pattern)
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        // Upload weights to GPU ONCE at construction time - eliminates per-forward H2D transfers
-        let gpu_weights = crate::kernel::cuda_bridge::GpuWeightBuffer::upload(
-            &weight_f16,
-            &crate::kernel::cuda_bridge::get_stream(),
-        )
-        .expect("Failed to upload weights to GPU");
-
         Self {
             weight_f16,
             bias,
             in_features,
             out_features,
-            gpu_weights: std::sync::Arc::new(gpu_weights),
         }
     }
 }

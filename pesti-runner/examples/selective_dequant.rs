@@ -31,9 +31,18 @@ fn main() -> anyhow::Result<()> {
         ("fibonacci", "fn fib(n: u32) -> u32 {\n"),
         ("string_reverse", "fn reverse(s: &str) -> String {\n"),
         ("vector_sort", "fn sort(v: &mut Vec<i32>) {\n"),
-        ("linked_list_push", "impl LinkedList {\n    fn push(&mut self, val: i32) {\n"),
-        ("hashmap_insert", "fn insert(map: &mut HashMap<String, i32>, k: String, v: i32) {\n"),
-        ("error_handling", "fn read_file(path: &str) -> Result<String, io::Error> {\n"),
+        (
+            "linked_list_push",
+            "impl LinkedList {\n    fn push(&mut self, val: i32) {\n",
+        ),
+        (
+            "hashmap_insert",
+            "fn insert(map: &mut HashMap<String, i32>, k: String, v: i32) {\n",
+        ),
+        (
+            "error_handling",
+            "fn read_file(path: &str) -> Result<String, io::Error> {\n",
+        ),
         ("async_task", "async fn process(data: Vec<u8>) -> usize {\n"),
     ];
 
@@ -84,10 +93,16 @@ fn evaluate_tasks(
                 if tokens.iter().any(|t| matches!(t.kind, TokenKind::FnDecl)) {
                     s += 0.25;
                 }
-                if tokens.iter().any(|t| matches!(t.kind, TokenKind::ReturnExpr)) {
+                if tokens
+                    .iter()
+                    .any(|t| matches!(t.kind, TokenKind::ReturnExpr))
+                {
                     s += 0.25;
                 }
-                if tokens.iter().any(|t| matches!(t.kind, TokenKind::BlockStart)) {
+                if tokens
+                    .iter()
+                    .any(|t| matches!(t.kind, TokenKind::BlockStart))
+                {
                     s += 0.25;
                 }
                 if tokens.iter().any(|t| matches!(t.kind, TokenKind::IfElse)) {
@@ -129,7 +144,11 @@ fn analyze_sensitivity(
 
         println!(
             "{}\t{:.0}%\t{:.0}%\t{:.0}%\t{:+.0}%",
-            task_name, s4 * 100.0, s5 * 100.0, s8 * 100.0, delta * 100.0
+            task_name,
+            s4 * 100.0,
+            s5 * 100.0,
+            s8 * 100.0,
+            delta * 100.0
         );
 
         // Identify high-sensitivity tasks that benefit from dequantization

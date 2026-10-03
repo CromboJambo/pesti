@@ -907,10 +907,10 @@ impl LlamaModel {
                 }),
         }?;
 
-        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // Use explicit dimensions from config for Qwen2/Qwen3/Llama to avoid
         // shape-metadata inconsistencies in GGUF K-family quantizations.
         let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
                 let hidden = config.embed_dim;
                 let kv = config.num_kv_heads * config.head_dim;
                 (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
@@ -1187,10 +1187,10 @@ impl LlamaModel {
                 }),
         }?;
 
-        // Use explicit Qwen2/Qwen3 dimensions from config to avoid
+        // Use explicit dimensions from config for Qwen2/Qwen3/Llama to avoid
         // shape-metadata inconsistencies in GGUF K-family quantizations.
         let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
                 let hidden = config.embed_dim;
                 let kv = config.num_kv_heads * config.head_dim;
                 (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)

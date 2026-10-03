@@ -12,14 +12,24 @@ use pesti_runner::llama::{LlamaRunner, SamplingConfig};
 use pesti_structural_tokenizer::{StructuralTokenizer, TokenKind};
 
 fn main() -> anyhow::Result<()> {
-    let output_dir = std::env::args().nth(2)
+    let output_dir = std::env::args()
+        .nth(2)
         .unwrap_or_else(|| "compression_results".to_string());
 
     // Run benchmark across multiple quantization levels
     let models = vec![
-        ("Q4_K_M", "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf"),
-        ("Q5_K_M", "/home/crombo/projects/active/pesti/test_models/tinyllama-q5.gguf"),
-        ("Q8_0",   "/home/crombo/projects/active/pesti/test_models/tinyllama-q8.gguf"),
+        (
+            "Q4_K_M",
+            "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf",
+        ),
+        (
+            "Q5_K_M",
+            "/home/crombo/projects/active/pesti/test_models/tinyllama-q5.gguf",
+        ),
+        (
+            "Q8_0",
+            "/home/crombo/projects/active/pesti/test_models/tinyllama-q8.gguf",
+        ),
     ];
 
     let output_dir = PathBuf::from(output_dir);
@@ -50,7 +60,10 @@ fn main() -> anyhow::Result<()> {
 
     // Print summary table
     println!("\n=== Summary: Quantization vs. Performance ===");
-    println!("{:<8} {:>10} {:>12} {:>12}", "Quant", "tok/s", "structural%", "tokens");
+    println!(
+        "{:<8} {:>10} {:>12} {:>12}",
+        "Quant", "tok/s", "structural%", "tokens"
+    );
     println!("{}", "-".repeat(48));
     for (quant, r) in &results {
         let best = results.iter().find(|(_, x)| x.throughput == r.throughput);
@@ -75,18 +88,13 @@ struct CycleResult {
     tokens_generated: usize,
 }
 
-fn run_cycle(
-    model_path: PathBuf,
-    output_dir: PathBuf,
-) -> anyhow::Result<Vec<CycleResult>> {
+fn run_cycle(model_path: PathBuf, output_dir: PathBuf) -> anyhow::Result<Vec<CycleResult>> {
     let mut results = Vec::new();
 
     println!("Loading model...");
     let load_start = Instant::now();
 
-    let runner = LlamaRunner::builder(&model_path)
-        .n_ctx(2048)
-        .build()?;
+    let runner = LlamaRunner::builder(&model_path).n_ctx(2048).build()?;
 
     println!("Loaded in {:.1}s", load_start.elapsed().as_secs_f64());
 
@@ -105,7 +113,10 @@ fn run_cycle(
         "Generated {} tokens in {:.3}s ({:.2} tok/s)",
         result.generated_tokens, elapsed, throughput
     );
-    println!("Output: {}", &result.text[..std::cmp::min(200, result.text.len())]);
+    println!(
+        "Output: {}",
+        &result.text[..std::cmp::min(200, result.text.len())]
+    );
 
     // Evaluate structural quality using pesti-structural-tokenizer
     let tokenizer = StructuralTokenizer::new();
@@ -124,8 +135,12 @@ fn run_cycle(
             println!("Tokenized into {} tokens", tokens.len());
             // Score based on presence of expected Rust structures
             let has_fn = tokens.iter().any(|t| matches!(t.kind, TokenKind::FnDecl));
-            let has_return = tokens.iter().any(|t| matches!(t.kind, TokenKind::ReturnExpr));
-            let has_block = tokens.iter().any(|t| matches!(t.kind, TokenKind::BlockStart));
+            let has_return = tokens
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::ReturnExpr));
+            let has_block = tokens
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::BlockStart));
             let has_if = tokens.iter().any(|t| matches!(t.kind, TokenKind::IfElse));
 
             if has_fn {
@@ -173,7 +188,7 @@ fn extract_first_item(text: &str) -> String {
 
     for (i, ch) in text.chars().enumerate() {
         if in_block_comment {
-            if ch == '*' && i + 1 < text.len() && &text[i+1..i+2] == "/" {
+            if ch == '*' && i + 1 < text.len() && &text[i + 1..i + 2] == "/" {
                 in_block_comment = false;
             }
             continue;
@@ -198,7 +213,7 @@ fn extract_first_item(text: &str) -> String {
         }
 
         if ch == '/' && i + 1 < text.len() {
-            let next = &text[i+1..i+2];
+            let next = &text[i + 1..i + 2];
             if next == "/" {
                 in_comment = true;
                 continue;

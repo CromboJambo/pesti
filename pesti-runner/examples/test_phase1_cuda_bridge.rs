@@ -2,7 +2,7 @@
 
 use half::f16;
 use pesti_runner::kernel::dispatch::DispatchContext;
-use pesti_runner::kernel::linear::{new_linear_layer, LinearLayer};
+use pesti_runner::kernel::linear::{LinearLayer, new_linear_layer};
 use std::time::Instant;
 
 fn main() {

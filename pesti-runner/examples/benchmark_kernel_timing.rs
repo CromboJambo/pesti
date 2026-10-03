@@ -6,7 +6,7 @@ use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
 
-const MODEL_PATH: &str = "/home/crombo/projects/active/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str = "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 32;
 

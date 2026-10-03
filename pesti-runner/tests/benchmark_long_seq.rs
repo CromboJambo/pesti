@@ -1,6 +1,6 @@
 //! Long-sequence benchmark to measure where batched/chunked generation provides value.
 
-use pesti_runner::{load_gguf_weights, LlamaModel};
+use pesti_runner::{LlamaModel, load_gguf_weights};
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;

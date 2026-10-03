@@ -50,7 +50,10 @@ fn test_rope_conformance() {
     let mut data = vec![1.0f32, 0.0f32, 0.0f32, 1.0f32];
     apply_rope_cpu(&mut data, 1, 1, 1, 4, 10000.0);
     // Just verify values changed (not identity)
-    assert!((data[0] - 1.0).abs() > 1e-6 || (data[1]).abs() > 1e-6, "RoPE at pos 1 failed");
+    assert!(
+        (data[0] - 1.0).abs() > 1e-6 || (data[1]).abs() > 1e-6,
+        "RoPE at pos 1 failed"
+    );
 
     println!("✓ RoPE conformance: PASSED");
 }

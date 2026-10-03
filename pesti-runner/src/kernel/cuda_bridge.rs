@@ -20,26 +20,6 @@ pub struct CudaBridge {
     stream: Arc<CudaStream>,
 }
 
-/// Persistent GPU weight buffer that uploads once and reuses across forward passes.
-#[cfg(feature = "cuda")]
-pub struct GpuWeightBuffer {
-    pub ptr: cudarc::driver::CudaSlice<f16>,
-    len: usize,
-}
-
-#[cfg(feature = "cuda")]
-impl GpuWeightBuffer {
-    /// Upload weights to GPU once. Returns buffer that can be reused.
-    pub fn upload(weights: &[f16], stream: &Arc<CudaStream>) -> Result<Self, String> {
-        let mut ptr = unsafe { stream.alloc(weights.len()) }
-            .map_err(|e| format!("cudaMalloc weight failed: {:?}", e))?;
-        stream
-            .memcpy_htod(weights, &mut ptr)
-            .map_err(|e| format!("cudaMemcpy H2D weight failed: {:?}", e))?;
-        Ok(Self { ptr, len: weights.len() })
-    }
-}
-
 impl CudaBridge {
     /// Create a new CUDA bridge with cuBLAS handle.
     pub fn new() -> Result<Self, String> {
@@ -138,10 +118,85 @@ impl CudaBridge {
             Err("CUDA feature not enabled".to_string())
         }
     }
+
+    /// Execute GEMM with pre-uploaded device weights (persistent buffer).
+    pub fn gemm_f16_with_device_weights(
+        &self,
+        x: &[f16],
+        w_dev: &cudarc::driver::CudaSlice<f16>,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> crate::error::Result<Vec<f32>> {
+        #[cfg(feature = "cuda")]
+        {
+            use cudarc::cublas::sys;
+
+            let stream = &self.stream;
+
+            // Allocate device memory for input and output only (weights already on GPU)
+            let mut x_dev = unsafe { stream.alloc(x.len()) }
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc X failed: {:?}", e)))?;
+            let mut y_dev = unsafe { stream.alloc(m * n) }
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc Y failed: {:?}", e)))?;
+
+            // Copy input to device
+            stream
+                .memcpy_htod(x, &mut x_dev)
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D X failed: {:?}", e)))?;
+
+            // Compute C = X @ W^T where X is [m,k], W is [n,k] -> C is [m,n]
+            let alpha = f16::from_f32(1.0);
+            let beta = f16::from_f32(0.0);
+
+            unsafe {
+                self.blas.gemm(
+                    GemmConfig {
+                        transa: sys::cublasOperation_t::CUBLAS_OP_N,
+                        transb: sys::cublasOperation_t::CUBLAS_OP_T,
+                        m: n as i32,
+                        n: m as i32,
+                        k: k as i32,
+                        alpha,
+                        lda: n as i32,
+                        ldb: m as i32,
+                        beta,
+                        ldc: n as i32,
+                    },
+                    w_dev,
+                    &x_dev,
+                    &mut y_dev,
+                );
+            }
+
+            // Synchronize
+            stream
+                .synchronize()
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("streamSync failed: {:?}", e)))?;
+
+            // Copy result back to host
+            let mut y_host = vec![f16::from_f32(0.0); m * n];
+            stream
+                .memcpy_dtoh(&y_dev, &mut y_host)
+                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy D2H Y failed: {:?}", e)))?;
+
+            // Free device memory
+            drop(x_dev);
+            drop(y_dev);
+
+            // Convert F16 results to F32
+            Ok(y_host.iter().map(|v| v.to_f32()).collect())
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err(crate::error::RunnerError::Kernel("CUDA feature not enabled".to_string()))
+        }
+    }
 }
 
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
-/// Creates/uses a shared CUDA bridge instance internally.
+/// Uses persistent device weight buffers to avoid repeated H2D transfers.
 pub fn gemm_f16(
     x: &[half::f16],
     weights: &[half::f16],
@@ -156,9 +211,34 @@ pub fn gemm_f16(
         Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
+    // Upload weights to GPU once and cache them for reuse across forward passes.
+    // This eliminates the repeated H2D transfers that were causing ~5s of overhead.
+    let weight_key = weights.as_ptr() as usize;
+    static WEIGHT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, cudarc::driver::CudaSlice<half::f16>>>> = std::sync::OnceLock::new();
+    let cache = WEIGHT_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    });
+
+    let mut cache_guard = cache.lock().unwrap();
+    let dev_weights = if let Some(buf) = cache_guard.get(&weight_key) {
+        buf.clone()
+    } else {
+        drop(cache_guard);
+        // Upload to GPU (outside lock to avoid holding during CUDA call)
+        let mut buf = unsafe { bridge.stream.alloc(weights.len()) }
+            .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc weight failed: {:?}", e)))?;
+        bridge.stream
+            .memcpy_htod(weights, &mut buf)
+            .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D weight failed: {:?}", e)))?;
+        
+        // Re-acquire lock and insert
+        let mut cache_guard = cache.lock().unwrap();
+        cache_guard.insert(weight_key, buf.clone());
+        buf
+    };
+
     bridge
-        .gemm_f16(x, weights, m, n, k)
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cuBLAS GEMM failed: {}", e)))
+        .gemm_f16_with_device_weights(x, &dev_weights, m, n, k)
 }
 
 /// Get a reference to the shared CUDA stream for weight uploads.

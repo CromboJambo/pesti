@@ -13,7 +13,10 @@ use pesti_runner::llama::{LlamaRunner, SamplingConfig};
 
 // Same prompts as original benchmark — just the function signature to complete
 const TASKS: &[(&str, &str)] = &[
-    ("linked_list_push", "impl LinkedList {\n    fn push(&mut self, val: i32) {\n"),
+    (
+        "linked_list_push",
+        "impl LinkedList {\n    fn push(&mut self, val: i32) {\n",
+    ),
     ("async_task", "async fn process(data: Vec<u8>) -> usize {\n"),
 ];
 
@@ -35,8 +38,15 @@ fn test_code(code: &str, out_dir: &PathBuf, name: &str, seed: i32) -> (&'static 
 
     // Compile
     let compile = std::process::Command::new("rustc")
-        .args(["-o", "/tmp/test_prog", code_path.to_str().unwrap(), "--edition", "2021"])
-        .output().unwrap();
+        .args([
+            "-o",
+            "/tmp/test_prog",
+            code_path.to_str().unwrap(),
+            "--edition",
+            "2021",
+        ])
+        .output()
+        .unwrap();
 
     if !compile.status.success() {
         let err = String::from_utf8_lossy(&compile.stderr).to_string();
@@ -44,7 +54,9 @@ fn test_code(code: &str, out_dir: &PathBuf, name: &str, seed: i32) -> (&'static 
     }
 
     // Run
-    let test = std::process::Command::new("/tmp/test_prog").output().unwrap();
+    let test = std::process::Command::new("/tmp/test_prog")
+        .output()
+        .unwrap();
     let result = String::from_utf8_lossy(&test.stdout).to_string();
     if result.contains("PASSED") {
         return ("ok", result);
@@ -54,7 +66,9 @@ fn test_code(code: &str, out_dir: &PathBuf, name: &str, seed: i32) -> (&'static 
 }
 
 fn main() -> anyhow::Result<()> {
-    let model_path = std::env::args().nth(1).unwrap_or_else(|| "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf".to_string());
+    let model_path = std::env::args().nth(1).unwrap_or_else(|| {
+        "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf".to_string()
+    });
     println!("Model: {}", model_path);
 
     let start = Instant::now();
@@ -69,9 +83,7 @@ fn main() -> anyhow::Result<()> {
         let mut passes = 0;
         for seed in 0..8 {
             // Fresh runner per seed to avoid KV cache issues
-            let runner = LlamaRunner::builder(&model_path)
-                .n_ctx(2048)
-                .build()?;
+            let runner = LlamaRunner::builder(&model_path).n_ctx(2048).build()?;
 
             let code = generate_code(&runner, prompt, seed as i32);
             drop(runner);
@@ -80,10 +92,19 @@ fn main() -> anyhow::Result<()> {
             if status == "ok" {
                 passes += 1;
             }
-            println!("  seed {:03}: {} ({})", seed, status, output.chars().take(40).collect::<String>());
+            println!(
+                "  seed {:03}: {} ({})",
+                seed,
+                status,
+                output.chars().take(40).collect::<String>()
+            );
         }
 
-        println!("Pass rate: {}/8 ({:.0}%)", passes, passes as f64 / 8.0 * 100.0);
+        println!(
+            "Pass rate: {}/8 ({:.0}%)",
+            passes,
+            passes as f64 / 8.0 * 100.0
+        );
         println!("Code saved to: {}", out_dir.display());
     }
 

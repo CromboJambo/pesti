@@ -6,8 +6,7 @@ use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
 
-const MODEL_PATH: &str =
-    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+const MODEL_PATH: &str = "/home/crombo/projects/active/pesti/test_models/tinyllama-q4.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 32;
 
@@ -16,6 +15,9 @@ fn main() {
     println!("Model: Qwen2.5-0.5B-Instruct-Q4_K_M");
     println!("Hardware: RTX 4070 Ti SUPER (CUDA)");
     println!("Tokens to generate: {}", NUM_TOKENS);
+
+    // Initialize kernel profiler
+    pesti_runner::profiler::init();
 
     let start = Instant::now();
 
@@ -50,13 +52,11 @@ fn main() {
     let tok_per_sec = generated.len() as f64 / elapsed;
     println!("Throughput: {:.2} tok/s (pure Rust)", tok_per_sec);
 
+    // Print kernel timing report
+    pesti_runner::profiler::print_report();
+
     // Decode and print output
     let tokenizer = model.tokenizer.as_ref().expect("Tokenizer not loaded");
     let decoded = tokenizer.decode(&generated).unwrap();
-    println!(
-        "
-Generated text:
-{}",
-        decoded
-    );
+    println!("Generated text:\n{}", decoded);
 }

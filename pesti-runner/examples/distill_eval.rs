@@ -13,16 +13,19 @@ use pesti_structural_tokenizer::{StructuralTokenizer, TokenKind};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() < 3 {
-        eprintln!("Usage: {} <teacher_model> <student_model> [corpus_file]", args[0]);
+        eprintln!(
+            "Usage: {} <teacher_model> <student_model> [corpus_file]",
+            args[0]
+        );
         eprintln!("If no corpus file, uses built-in test prompts.");
         std::process::exit(1);
     }
 
     let teacher_path = PathBuf::from(&args[1]);
     let student_path = PathBuf::from(&args[2]);
-    
+
     if !teacher_path.exists() {
         eprintln!("Teacher model not found: {}", teacher_path.display());
         std::process::exit(1);
@@ -35,7 +38,11 @@ fn main() -> anyhow::Result<()> {
     // Load corpus or use default prompts
     let prompts: Vec<String> = if args.len() >= 4 && PathBuf::from(&args[3]).exists() {
         let content = std::fs::read_to_string(&args[3])?;
-        content.lines().filter(|l| !l.is_empty()).map(String::from).collect::<Vec<_>>()
+        content
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect::<Vec<_>>()
     } else {
         default_prompts()
     };
@@ -77,7 +84,7 @@ fn evaluate_model(
     prompts: &[String],
 ) -> anyhow::Result<ModelResult> {
     println!("Evaluating {}...", name);
-    
+
     let tokenizer = StructuralTokenizer::new();
     let mut outputs = Vec::new();
     let mut throughputs = Vec::new();
@@ -85,50 +92,64 @@ fn evaluate_model(
 
     for (i, prompt) in prompts.iter().enumerate() {
         print!("  [{}] ", i + 1);
-        
+
         // Fresh runner per prompt to reset KV cache
         let runner = LlamaRunner::builder(model_path).n_ctx(2048).build()?;
-        
+
         let start = Instant::now();
         let result = runner.generate(prompt, &SamplingConfig::precise())?;
         let elapsed = start.elapsed().as_secs_f64();
-        
+
         let throughput = result.generated_tokens as f64 / elapsed;
         throughputs.push(throughput);
 
         // Evaluate structural quality
         let code_to_eval = extract_first_item(&result.text);
         let wrapped_code = format!("fn main() {{\n{}\n}}", code_to_eval);
-        
+
         let score = match tokenizer.tokenize(&wrapped_code) {
             Ok(tokens) => {
                 let has_fn = tokens.iter().any(|t| matches!(t.kind, TokenKind::FnDecl));
-                let has_return = tokens.iter().any(|t| matches!(t.kind, TokenKind::ReturnExpr));
-                let has_block = tokens.iter().any(|t| matches!(t.kind, TokenKind::BlockStart));
+                let has_return = tokens
+                    .iter()
+                    .any(|t| matches!(t.kind, TokenKind::ReturnExpr));
+                let has_block = tokens
+                    .iter()
+                    .any(|t| matches!(t.kind, TokenKind::BlockStart));
                 let has_if = tokens.iter().any(|t| matches!(t.kind, TokenKind::IfElse));
-                
+
                 let mut score = 0.0;
-                if has_fn { score += 0.25; }
-                if has_return { score += 0.25; }
-                if has_block { score += 0.25; }
-                if has_if { score += 0.25; }
+                if has_fn {
+                    score += 0.25;
+                }
+                if has_return {
+                    score += 0.25;
+                }
+                if has_block {
+                    score += 0.25;
+                }
+                if has_if {
+                    score += 0.25;
+                }
                 score
             }
             Err(_) => 0.0,
         };
-        
+
         structural_scores.push(score);
         outputs.push(result.text.clone());
-        
+
         println!("{} tok/s (struct: {:.0}%)", throughput, score * 100.0);
     }
 
     let avg_throughput = throughputs.iter().sum::<f64>() / throughputs.len() as f64;
     let avg_structural = structural_scores.iter().sum::<f64>() / structural_scores.len() as f64;
-    
+
     println!(
-        "{}: avg {:.2} tok/s, avg structural {:.0}%", 
-        name, avg_throughput, avg_structural * 100.0
+        "{}: avg {:.2} tok/s, avg structural {:.0}%",
+        name,
+        avg_throughput,
+        avg_structural * 100.0
     );
 
     Ok(ModelResult {
@@ -142,23 +163,26 @@ fn evaluate_model(
 fn compute_reconstruction_gap(teacher: &ModelResult, student: &ModelResult) {
     println!("Prompt\tTeacher Struct\tStudent Struct\tGap");
     println!("{}", "-".repeat(60));
-    
+
     let mut total_gap = 0.0;
-    
+
     for (i, ts) in teacher.structural_scores.iter().enumerate() {
         let ss = student.structural_scores[i];
         let gap = ts - ss;
         total_gap += gap.abs();
-        
+
         println!(
-            " {}\t{:.0}%\t\t{:.0}%\t\t{:+.0}%", 
-            i + 1, ts * 100.0, ss * 100.0, gap * 100.0
+            " {}\t{:.0}%\t\t{:.0}%\t\t{:+.0}%",
+            i + 1,
+            ts * 100.0,
+            ss * 100.0,
+            gap * 100.0
         );
     }
-    
+
     let avg_gap = total_gap / teacher.structural_scores.len() as f64;
     println!("\nAverage reconstruction gap: {:.0}%", avg_gap * 100.0);
-    
+
     if avg_gap < 0.1 {
         println!("Student matches teacher quality.");
     } else if avg_gap < 0.25 {
@@ -178,7 +202,7 @@ fn extract_first_item(text: &str) -> String {
 
     for (i, ch) in text.chars().enumerate() {
         if in_block_comment {
-            if ch == '*' && i + 1 < text.len() && &text[i+1..i+2] == "/" {
+            if ch == '*' && i + 1 < text.len() && &text[i + 1..i + 2] == "/" {
                 in_block_comment = false;
             }
             continue;
@@ -203,7 +227,7 @@ fn extract_first_item(text: &str) -> String {
         }
 
         if ch == '/' && i + 1 < text.len() {
-            let next = &text[i+1..i+2];
+            let next = &text[i + 1..i + 2];
             if next == "/" {
                 in_comment = true;
                 continue;

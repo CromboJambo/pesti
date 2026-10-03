@@ -3,7 +3,7 @@
 //! Validates that the rotary embeddings implementation correctly applies
 //! position-dependent rotations to query and key vectors.
 
-use pesti_runner::kernel::rope::{apply_rope_cpu, CpuRopeKernel, RopeKernel};
+use pesti_runner::kernel::rope::{CpuRopeKernel, RopeKernel, apply_rope_cpu};
 
 #[test]
 fn test_rope_identity_at_zero() {

@@ -277,7 +277,8 @@ impl Runtime {
                                 {
                                     Ok(gemm_kernel) => {
                                         info!("Attaching CUDA GEMM kernel to all linear layers");
-                                        llama_model.set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
+                                        llama_model
+                                            .set_gemm_kernel(std::sync::Arc::new(gemm_kernel));
 
                                         // Weight uploads happen internally by each LinearLayer
                                         // at construction time in build_layer_dispatch(). No separate
