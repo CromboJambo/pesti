@@ -57,7 +57,12 @@ pub fn new_linear_layer(
     {
         if crate::cuda_runtime::is_available() {
             tracing::debug!("Creating GPU linear layer ({in_features} -> {out_features})");
-            return Box::new(GpuLinearLayer::from_f32(weight, bias, in_features, out_features));
+            return Box::new(GpuLinearLayer::from_f32(
+                weight,
+                bias,
+                in_features,
+                out_features,
+            ));
         }
     }
 
@@ -70,7 +75,12 @@ pub fn new_linear_layer(
     }
 
     tracing::debug!("Creating CPU linear layer ({in_features} -> {out_features})");
-    Box::new(CpuLinearLayer::from_f32(weight, bias, in_features, out_features))
+    Box::new(CpuLinearLayer::from_f32(
+        weight,
+        bias,
+        in_features,
+        out_features,
+    ))
 }
 
 /// CPU implementation using rayon-parallel matmul.
@@ -117,17 +127,20 @@ impl LinearLayer for CpuLinearLayer {
         // Rayon-parallel matmul: C[b,o] = sum_i(x[b,i] * W[o,i]) + bias[o]
         use rayon::prelude::*;
 
-        output.par_chunks_mut(n).enumerate().for_each(|(b, out_row)| {
-            let x_start = b * k;
-            for o in 0..n {
-                let w_row = &self.weight[o * k..(o + 1) * k];
-                let mut acc = 0.0f32;
-                for i in 0..k {
-                    acc += x[x_start + i] * w_row[i];
+        output
+            .par_chunks_mut(n)
+            .enumerate()
+            .for_each(|(b, out_row)| {
+                let x_start = b * k;
+                for o in 0..n {
+                    let w_row = &self.weight[o * k..(o + 1) * k];
+                    let mut acc = 0.0f32;
+                    for i in 0..k {
+                        acc += x[x_start + i] * w_row[i];
+                    }
+                    out_row[o] = acc;
                 }
-                out_row[o] = acc;
-            }
-        });
+            });
 
         // Apply bias if present
         if let Some(ref bias) = self.bias {
@@ -163,14 +176,15 @@ impl LinearLayer for CpuLinearLayer {
     }
 }
 
-/// GPU implementation using cudarc's cublasLt API.
+/// GPU implementation using cudarc's cublasLt API with persistent device weights.
 #[cfg(feature = "cuda")]
 pub struct GpuLinearLayer {
     weight_f16: Vec<half::f16>,
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
-    weights_on_gpu: bool,
+    /// Persistent GPU weight buffer (uploaded once at construction).
+    gpu_weights: std::sync::Arc<crate::kernel::cuda_bridge::GpuWeightBuffer>,
 }
 
 #[cfg(feature = "cuda")]
@@ -184,12 +198,19 @@ impl GpuLinearLayer {
         // Convert f32 weights to f16 for GPU (matches existing Linear pattern)
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
 
+        // Upload weights to GPU ONCE at construction time - eliminates per-forward H2D transfers
+        let gpu_weights = crate::kernel::cuda_bridge::GpuWeightBuffer::upload(
+            &weight_f16,
+            &crate::kernel::cuda_bridge::get_stream(),
+        )
+        .expect("Failed to upload weights to GPU");
+
         Self {
             weight_f16,
             bias,
             in_features,
             out_features,
-            weights_on_gpu: false,
+            gpu_weights: std::sync::Arc::new(gpu_weights),
         }
     }
 }
@@ -219,14 +240,12 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
-        // For now, weights are uploaded on each forward pass (matches existing).
-        // Future optimization: persist GPU buffer across calls.
-        self.weights_on_gpu = true;
+        // Weights are already uploaded at construction time via GpuWeightBuffer::upload()
         Ok(())
     }
 
     fn weights_on_gpu(&self) -> bool {
-        self.weights_on_gpu
+        true  // Always on GPU after construction
     }
 
     fn layer_name(&self) -> &str {

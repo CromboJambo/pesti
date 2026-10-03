@@ -20,6 +20,26 @@ pub struct CudaBridge {
     stream: Arc<CudaStream>,
 }
 
+/// Persistent GPU weight buffer that uploads once and reuses across forward passes.
+#[cfg(feature = "cuda")]
+pub struct GpuWeightBuffer {
+    pub ptr: cudarc::driver::CudaSlice<f16>,
+    len: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl GpuWeightBuffer {
+    /// Upload weights to GPU once. Returns buffer that can be reused.
+    pub fn upload(weights: &[f16], stream: &Arc<CudaStream>) -> Result<Self, String> {
+        let mut ptr = unsafe { stream.alloc(weights.len()) }
+            .map_err(|e| format!("cudaMalloc weight failed: {:?}", e))?;
+        stream
+            .memcpy_htod(weights, &mut ptr)
+            .map_err(|e| format!("cudaMemcpy H2D weight failed: {:?}", e))?;
+        Ok(Self { ptr, len: weights.len() })
+    }
+}
+
 impl CudaBridge {
     /// Create a new CUDA bridge with cuBLAS handle.
     pub fn new() -> Result<Self, String> {
@@ -131,16 +151,25 @@ pub fn gemm_f16(
 ) -> crate::error::Result<Vec<f32>> {
     static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
 
-    let bridge = BRIDGE.get_or_init(|| {
-        match CudaBridge::new() {
-            Ok(b) => b,
-            Err(e) => panic!("CUDA bridge init failed: {}", e),
-        }
+    let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
+        Ok(b) => b,
+        Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
-    bridge.gemm_f16(x, weights, m, n, k).map_err(|e| {
-        crate::error::RunnerError::Kernel(format!("cuBLAS GEMM failed: {}", e))
-    })
+    bridge
+        .gemm_f16(x, weights, m, n, k)
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cuBLAS GEMM failed: {}", e)))
+}
+
+/// Get a reference to the shared CUDA stream for weight uploads.
+#[cfg(feature = "cuda")]
+pub fn get_stream() -> std::sync::Arc<CudaStream> {
+    static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
+    let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
+        Ok(b) => b,
+        Err(e) => panic!("CUDA bridge init failed for stream: {}", e),
+    });
+    bridge.stream.clone()
 }
 
 /// Check if CUDA bridge is available.
