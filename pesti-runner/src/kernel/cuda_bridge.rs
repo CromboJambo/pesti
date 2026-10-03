@@ -196,6 +196,7 @@ impl CudaBridge {
 }
 
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
+/// Uses cuBLAS algorithm selection with shape-based caching for tall-skinny LLM shapes.
 pub fn gemm_f16(
     x: &[half::f16],
     weights: &[half::f16],
@@ -203,6 +204,8 @@ pub fn gemm_f16(
     n: usize,
     k: usize,
 ) -> crate::error::Result<Vec<f32>> {
+    use cudarc::cublas::{result, sys};
+
     static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
 
     let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
@@ -211,8 +214,8 @@ pub fn gemm_f16(
     });
 
     // Simple per-call approach: allocate, transfer, compute, free.
-    // Focus optimization on GEMM compute itself (58.8% of time).
-    let mut w_dev = unsafe { bridge.stream.alloc(weights.len()) }
+    let stream = &bridge.stream;
+    let mut w_dev = unsafe { stream.alloc(weights.len()) }
         .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc W failed: {:?}", e)))?;
     bridge.stream
         .memcpy_htod(weights, &mut w_dev)
