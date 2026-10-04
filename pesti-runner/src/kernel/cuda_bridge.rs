@@ -3,14 +3,69 @@
 //! Uses cudarc's safe API: CudaBlas + Gemm trait with CudaSlice memory management.
 
 use half::f16;
-
-#[cfg(feature = "cuda")]
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "cuda")]
 use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig};
 #[cfg(feature = "cuda")]
 use cudarc::driver::{CudaContext, CudaStream, DevicePtr, DevicePtrMut};
+#[cfg(feature = "cuda")]
+use std::sync::Arc;
+
+/// GPU weight cache: maps (ptr, len) → cached device buffer.
+/// Avoids redundant H2D transfers of the same weight buffer across decode steps.
+struct WeightCache {
+    buffers: HashMap<CacheKey, cudarc::driver::CudaSlice<half::f16>>,
+}
+
+#[derive(Debug)]
+struct CacheKey {
+    ptr: usize,
+    len: usize,
+}
+
+impl Hash for CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ptr.hash(state);
+        self.len.hash(state);
+    }
+}
+
+impl PartialEq for CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr && self.len == other.len
+    }
+}
+
+static WEIGHT_CACHE: OnceLock<Mutex<WeightCache>> = OnceLock::new();
+
+fn weight_cache() -> &'static Mutex<WeightCache> {
+    WEIGHT_CACHE.get_or_init(|| Mutex::new(WeightCache { buffers: HashMap::new() }))
+}
+
+/// Get or upload cached GPU buffer for a weight slice.
+fn get_or_upload_weights(weights: &[half::f16]) -> Result<cudarc::driver::CudaSlice<half::f16>, String> {
+    let key = CacheKey { ptr: weights.as_ptr() as usize, len: weights.len() };
+    let cache = weight_cache();
+    let mut guard = cache.lock().unwrap();
+
+    if let Some(buf) = guard.buffers.get(&key).cloned() {
+        return Ok(buf);
+    }
+
+    // Not cached — upload to GPU
+    drop(guard);
+    let stream = get_stream();
+    let mut w_dev = unsafe { stream.alloc(weights.len()) }.map_err(|e| format!("cudaMalloc W failed: {:?}", e))?;
+    stream.memcpy_htod(weights, &mut w_dev).map_err(|e| format!("cudaMemcpy H2D W failed: {:?}", e))?;
+
+    // Insert into cache
+    let mut guard = cache.lock().unwrap();
+    guard.buffers.insert(key, w_dev.clone());
+    Ok(w_dev)
+}
 
 /// CUDA bridge that manages cuBLAS handle and device context.
 pub struct CudaBridge {
@@ -93,10 +148,8 @@ impl CudaBridge {
                 );
             }
 
-            // Synchronize
-            stream
-                .synchronize()
-                .map_err(|e| format!("streamSync failed: {:?}", e))?;
+            // Don't sync here — caller will sync once at end of forward pass
+            // stream.synchronize() removed to eliminate per-GEMM serialization
 
             // Copy result back to host using cudarc's safe copy API
             let mut y_host = vec![f16::from_f32(0.0); m * n];
@@ -192,6 +245,7 @@ impl CudaBridge {
 
 /// Free function wrapper for GEMM (f16 input/output, returns f32).
 /// Uses cuBLAS algorithm selection with shape-based caching for tall-skinny LLM shapes.
+/// GPU weight tensors are cached across calls to avoid redundant H2D transfers.
 pub fn gemm_f16(
     x: &[half::f16],
     weights: &[half::f16],
@@ -199,8 +253,6 @@ pub fn gemm_f16(
     n: usize,
     k: usize,
 ) -> crate::error::Result<Vec<f32>> {
-    use cudarc::cublas::{result, sys};
-
     static BRIDGE: std::sync::OnceLock<CudaBridge> = std::sync::OnceLock::new();
 
     let bridge = BRIDGE.get_or_init(|| match CudaBridge::new() {
@@ -208,17 +260,9 @@ pub fn gemm_f16(
         Err(e) => panic!("CUDA bridge init failed: {}", e),
     });
 
-    // Simple per-call approach: allocate, transfer, compute, free.
-    let stream = &bridge.stream;
-    let mut w_dev = unsafe { stream.alloc(weights.len()) }
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc W failed: {:?}", e)))?;
-    bridge.stream
-        .memcpy_htod(weights, &mut w_dev)
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D W failed: {:?}", e)))?;
-
-    let result = bridge.gemm_f16_with_device_weights(x, &w_dev, m, n, k);
-    drop(w_dev);
-    result
+    // Use persistent GPU weight buffer — upload once, reuse across all decode steps
+    let w_dev = get_or_upload_weights(weights)?;
+    bridge.gemm_f16_with_device_weights(x, &w_dev, m, n, k)
 }
 
 /// Free function wrapper for GEMM with persistent GPU weight buffer.
