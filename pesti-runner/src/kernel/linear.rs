@@ -214,36 +214,20 @@ impl GpuLinearLayer {
 #[cfg(feature = "cuda")]
 impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
-        // Week 27 optimization: ensure weights are on GPU before each forward pass.
-        // Lazy upload - only uploads once per layer, then reuses cached device buffer.
-        // This eliminates the 23.2% H2D transfer overhead identified in Week 26 profiling.
-        self.ensure_weights_on_gpu()?;
-
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        // Use persistent GPU weight buffer if available (eliminates per-call H2D transfer)
-        {
-            let guard = self.weight_device.lock().unwrap();
-            if let Some(ref w_dev) = *guard {
-                // Week 28: cuBLASLt shape-optimized GEMM for LLM decode patterns
-                crate::kernel::cuda_bridge::gemm_f16_cublaslt(
-                    &x_f16,
-                    w_dev,
-                    batch_size,
-                    self.out_features,
-                    self.in_features,
-                )
-            } else {
-                // Fallback: transfer weights per call (shouldn't happen if upload succeeded)
-                crate::kernel::cuda_bridge::gemm_f16(
-                    &x_f16,
-                    &self.weight_f16,
-                    batch_size,
-                    self.out_features,
-                    self.in_features,
-                )
-            }
-        }
+        // Ensure weights are cached on GPU (lazy upload, once per layer)
+        self.ensure_weights_on_gpu()?;
+
+        // Use persistent GPU weight buffer for GEMM
+        let w_dev = self.weight_device.lock().unwrap().as_ref().expect("weights not uploaded");
+        crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
+            &x_f16,
+            w_dev,
+            batch_size,
+            self.out_features,
+            self.in_features,
+        )
     }
 
     fn in_features(&self) -> usize {

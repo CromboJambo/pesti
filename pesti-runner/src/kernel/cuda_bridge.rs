@@ -169,12 +169,7 @@ impl CudaBridge {
                 );
             }
 
-            // Synchronize
-            stream
-                .synchronize()
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("streamSync failed: {:?}", e)))?;
-
-            // Copy result back to host
+            // Copy result back to host (no sync — caller will sync once at end of forward pass)
             let mut y_host = vec![f16::from_f32(0.0); m * n];
             stream
                 .memcpy_dtoh(&y_dev, &mut y_host)

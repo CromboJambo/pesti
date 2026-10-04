@@ -130,3 +130,5 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 [profile.profiling]
 inherits = "release"
 debug = 2
+
+

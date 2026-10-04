@@ -27,7 +27,68 @@ use candle_core::Device;
 use candle_core::Tensor;
 use candle_nn::ops::{sigmoid, softmax};
 use half::f16;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
+
+/// GPU weight cache: maps (pointer, length) → cached tensor on GPU.
+/// Avoids redundant H2D transfers of the same weight buffer across decode steps.
+struct WeightCache {
+    tensors: HashMap<CacheKey, Tensor>,
+}
+
+#[derive(Debug)]
+struct CacheKey {
+    ptr: usize,
+    len: usize,
+}
+
+impl Hash for CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ptr.hash(state);
+        self.len.hash(state);
+    }
+}
+
+impl PartialEq for CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr && self.len == other.len
+    }
+}
+
+impl Eq for CacheKey {}
+
+static WEIGHT_CACHE: OnceLock<Mutex<WeightCache>> = OnceLock::new();
+
+fn weight_cache() -> &'static Mutex<WeightCache> {
+    WEIGHT_CACHE.get_or_init(|| Mutex::new(WeightCache { tensors: HashMap::new() }))
+}
+
+/// Get or create cached GPU tensor for a weight buffer.
+fn get_or_cache_weight(
+    data: &[f16],
+    shape_rows: usize,
+    shape_cols: usize,
+) -> Result<Tensor, candle_core::Error> {
+    let key = CacheKey {
+        ptr: data.as_ptr() as usize,
+        len: data.len(),
+    };
+
+    let cache = weight_cache();
+    let mut guard = cache.lock().unwrap();
+
+    if let Some(tensor) = guard.tensors.get(&key).cloned() {
+        return Ok(tensor);
+    }
+
+    // Not cached — upload to GPU
+    let tensor = Tensor::from_vec(data.to_vec(), (shape_rows, shape_cols), bridge_device())?;
+    guard.tensors.insert(key, tensor.clone());
+    drop(guard);
+
+    Ok(tensor)
+}
 
 /// GPU device singleton for the bridge.
 ///
@@ -294,13 +355,30 @@ pub fn gemm(
     alpha: f32,
     beta: f32,
 ) -> Result<Vec<f32>, candle_core::Error> {
+    // Cache the weight matrix (b) on GPU — it's reused across decode steps.
+    // The activation tensor (a) changes every step so upload it fresh.
+    let b_t = get_or_cache_weight(b, k, n)?;
+
+    gemm_with_tensor_a_and_cached_b(a, m, k, &b_t, c, n, alpha, beta)
+}
+
+/// GEMM with fresh activation upload and cached weight tensor.
+fn gemm_with_tensor_a_and_cached_b(
+    a: &[f16],
+    m: usize,
+    k: usize,
+    b_t: &Tensor,
+    c: Option<&[f32]>,
+    n: usize,
+    alpha: f32,
+    beta: f32,
+) -> Result<Vec<f32>, candle_core::Error> {
     let device = bridge_device();
 
-    // Convert to F16 tensors for half the memory footprint
+    // Upload fresh activation tensor (changes every step)
     let a_t = Tensor::from_vec(a.to_vec(), (m, k), device)?;
-    let b_t = Tensor::from_vec(b.to_vec(), (k, n), device)?;
 
-    gemm_with_tensors(&a_t, &b_t, c, m, k, n, alpha, beta)
+    gemm_with_tensors(&a_t, b_t, c, m, k, n, alpha, beta)
 }
 
 /// GEMM from pre-built GPU tensors: `C = alpha * (A @ B) + beta * C`.
