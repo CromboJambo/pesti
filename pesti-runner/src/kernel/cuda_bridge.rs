@@ -263,7 +263,9 @@ pub fn gemm_f16(
     });
 
     // Use persistent GPU weight buffer — upload once, reuse across all decode steps
-    let w_dev = get_or_upload_weights(weights)?;
+    let w_dev = get_or_upload_weights(weights).map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("weight cache error: {}", e))
+    })?;
     bridge.gemm_f16_with_device_weights(x, &w_dev, m, n, k)
 }
 
