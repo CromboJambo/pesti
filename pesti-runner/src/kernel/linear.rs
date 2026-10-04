@@ -220,7 +220,8 @@ impl LinearLayer for GpuLinearLayer {
         self.ensure_weights_on_gpu()?;
 
         // Use persistent GPU weight buffer for GEMM
-        let w_dev = self.weight_device.lock().unwrap().as_ref().expect("weights not uploaded");
+        let weight_guard = self.weight_device.lock().unwrap();
+        let w_dev = weight_guard.as_ref().expect("weights not uploaded");
         crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
             &x_f16,
             w_dev,
