@@ -39,6 +39,8 @@ impl PartialEq for CacheKey {
     }
 }
 
+impl Eq for CacheKey {}
+
 static WEIGHT_CACHE: OnceLock<Mutex<WeightCache>> = OnceLock::new();
 
 fn weight_cache() -> &'static Mutex<WeightCache> {
