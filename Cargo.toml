@@ -6,6 +6,7 @@ members = [
     "pesti-gguf-cli",
     "crates/qwen2-bpe",
     "crates/pesti-structural-tokenizer",
+    "pesti-mcp-server",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"
