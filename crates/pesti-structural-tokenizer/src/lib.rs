@@ -8,6 +8,9 @@ use syn::{Item, parse_file};
 mod folder;
 pub use folder::{Span, SpanItem, SpanKind, fold};
 
+pub mod semantic;
+pub use semantic::*;
+
 /// Structural token with position information
 #[derive(Debug, Clone)]
 pub struct StructuralToken {
@@ -259,6 +262,14 @@ pub enum Emission {
     Elided(ElidedSpan),
 }
 
+/// Tokenization output with semantic annotations.
+#[derive(Debug, Clone)]
+pub struct SemanticEmission {
+    pub emission: Emission,
+    /// Semantic tag at this position (if any). None for elision markers.
+    pub tag: Option<SemanticTag>,
+}
+
 impl std::fmt::Display for Emission {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -325,6 +336,52 @@ impl StructuralTokenizer {
 
         self.walk_items_budgeted(&ast.items, &mut emissions, &mut budget_state);
         Ok(emissions)
+    }
+
+    /// Tokenize with budget and project semantic annotations onto each token position.
+    pub fn tokenize_with_semantics(
+        &self,
+        src: &str,
+        budget: Budget,
+    ) -> Result<Vec<SemanticEmission>, TokenizeError> {
+        // Structural pass first
+        let emissions = self.tokenize_with_budget(src, budget)?;
+
+        // Semantic analysis (lightweight string scanning)
+        let ownership = analyze_ownership(src);
+        let errors = analyze_errors(src);
+        let mutability = analyze_mutability(src);
+
+        // Project onto token positions
+        let semantic_emissions: Vec<SemanticEmission> = emissions
+            .into_iter()
+            .enumerate()
+            .map(|(i, emission)| {
+                let own_ann = ownership.get(&i).cloned();
+                let err_ann = errors.get(&i).cloned();
+                let mut_ann = mutability.get(&i).cloned();
+
+                let tag = if own_ann.is_some() || err_ann.is_some() || mut_ann.is_some() {
+                    Some(SemanticTag::encode(
+                        own_ann.as_ref().map(|a| a.mode),
+                        err_ann.as_ref().map(|a| a.handling),
+                        mut_ann.as_ref().map_or(false, |a| a.mutable),
+                        own_ann
+                            .as_ref()
+                            .map(|a| a.confidence)
+                            .or_else(|| err_ann.as_ref().map(|a| a.confidence))
+                            .or_else(|| mut_ann.as_ref().map(|a| a.confidence))
+                            .unwrap_or(0),
+                    ))
+                } else {
+                    None
+                };
+
+                SemanticEmission { emission, tag }
+            })
+            .collect();
+
+        Ok(semantic_emissions)
     }
 
     fn walk_items(&self, items: &[Item], tokens: &mut Vec<StructuralToken>) {
