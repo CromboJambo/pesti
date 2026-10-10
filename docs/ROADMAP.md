@@ -133,8 +133,14 @@ Separate from the GPU substrate work above, this track delivers a drop-in replac
 - Hardware-aware config generation based on VRAM vs model size heuristics
 - Tested on ftw3 (RTX 3070 Ti, 8GB VRAM) and jambo (RTX 4070 Ti SUPER, 16GB VRAM)
 
-**Phase 4: Enhanced Server Mode (In Progress)**
-- Model hot-swapping API endpoint
-- Connection pooling for concurrent requests
-- OpenAI-compatible streaming responses (/v1/chat/completions)
-- Integration with pesti-server crate for production deployment
+**Phase 4 Complete (October 10, 2026):** Enhanced Server Mode
+- pesti-server v2 with model hot-swapping (`/v1/models/load`, `/v1/models/unload`)
+- Connection pooling for concurrent requests (configurable via `PESTI_POOL_SIZE`)
+- SSE streaming for chat completions (`stream: true`)
+- OpenAI-compatible API surface at `/v1/chat/completions` and `/v1/models`
+
+**Llama.cpp replacement track complete.** pesti now provides:
+- Drop-in CLI replacement (`pesti` binary with llama.cpp-compatible args)
+- Hardware-aware model management (`pesti-studio detect/run/models/download/search/benchmark`)
+- Auto-tuning engine that benchmarks configurations and recommends optimal settings
+- Production server with hot-swapping, pooling, and streaming
