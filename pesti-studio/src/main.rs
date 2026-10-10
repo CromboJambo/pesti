@@ -7,6 +7,8 @@ use clap::{Parser, Subcommand};
 use pesti_runner::llama::{LlamaRunner, ModelInfo};
 use std::time::Instant;
 
+mod benchmark;
+
 #[derive(Parser)]
 #[command(
     name = "pesti-studio",
@@ -29,6 +31,17 @@ enum Commands {
     Download(DownloadArgs),
     /// Search for models on HuggingFace Hub
     Search(SearchArgs),
+    /// Benchmark inference performance across configurations
+    Benchmark(BenchmarkArgs),
+}
+
+#[derive(Parser)]
+struct BenchmarkArgs {
+    /// Model path to benchmark
+    model_path: String,
+    /// GPU layers to use (-1 = auto)
+    #[arg(long = "gpu-layers", default_value_t = -1)]
+    n_gpu_layers: i32,
 }
 
 #[derive(Parser)]
@@ -367,6 +380,16 @@ fn main() -> Result<()> {
                     println!("{}. {} ({} downloads)", i + 1, id, downloads);
                 }
             }
+        }
+
+        Commands::Benchmark(bench_args) => {
+            println!("PESTI Studio — Benchmarking");
+            println!("=================================");
+            println!("Model: {}", bench_args.model_path);
+            println!();
+
+            let results = benchmark::run_benchmarks(&bench_args.model_path, bench_args.n_gpu_layers)?;
+            benchmark::print_results(&results);
         }
     }
 
