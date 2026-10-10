@@ -25,6 +25,17 @@ enum Commands {
     Run(RunArgs),
     /// List available local models
     Models(ListModelsArgs),
+    /// Download a model from HuggingFace Hub
+    Download(DownloadArgs),
+}
+
+#[derive(Parser)]
+struct DownloadArgs {
+    /// HuggingFace repo ID (e.g., Qwen/Qwen2.5-0.5B-Instruct-GGUF)
+    repo_id: String,
+    /// Filename to download (default: auto-detect)
+    #[arg(long = "file")]
+    filename: Option<String>,
 }
 
 #[derive(Parser)]
@@ -172,14 +183,41 @@ fn recommend_config(hw: &HardwareInfo, model_size_gb: f64) -> InferenceConfig {
     config
 }
 
-fn estimate_gpu_layers(vram_gb: f64, model_size_gb: f64) -> i32 {
-    // Rough heuristic: each layer is ~model_size/total_layers
-    // Assume 32 layers for estimation
-    let available_for_model = vram_gb * 0.85;
-    if available_for_model >= model_size_gb {
-        return -1; // Fit entire model
+fn list_local_models() -> Vec<std::path::PathBuf> {
+    let mut models = Vec::new();
+    let search_dirs = [
+        "/home/crombo/.local/share/pesti/models",
+        "/home/crombo/projects/pesti/conformance-corpus",
+        "/models",
+    ];
+
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "gguf") {
+                    models.push(path);
+                }
+            }
+        }
     }
 
+    models
+}
+
+fn download_model(repo_id: &str, filename: Option<&str>) -> Result<std::path::PathBuf> {
+    println!("Downloading from HuggingFace Hub: {}", repo_id);
+
+    let path = pesti_runner::runtime::Runtime::download_from_hf(repo_id, filename.unwrap_or(""))?;
+    println!("Downloaded to: {}", path.display());
+    Ok(path)
+}
+
+fn estimate_gpu_layers(vram_gb: f64, model_size_gb: f64) -> i32 {
+    let available_for_model = vram_gb * 0.85;
+    if available_for_model >= model_size_gb {
+        return -1;
+    }
     let ratio = available_for_model / model_size_gb;
     (ratio * 32.0) as i32
 }
@@ -263,25 +301,25 @@ fn main() -> Result<()> {
             if list_args.remote {
                 println!("Remote model listing (HuggingFace Hub) coming soon...");
             } else {
-                println!("Local models:");
-                // Scan for .gguf files in common locations
-                let search_dirs = [
-                    "/home/crombo/.local/share/pesti/models",
-                    "/home/crombo/projects/pesti/conformance-corpus",
-                    "/models",
-                ];
-
-                for dir in &search_dirs {
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().map_or(false, |e| e == "gguf") {
-                                println!("  {}", path.display());
-                            }
-                        }
+                let models = list_local_models();
+                if models.is_empty() {
+                    println!("No local GGUF models found.");
+                    println!("Run: pesti-studio download <repo-id> --file <filename>");
+                } else {
+                    println!("Local models ({}):", models.len());
+                    for model in &models {
+                        println!("  {}", model.display());
                     }
                 }
             }
+        }
+
+        Commands::Download(download_args) => {
+            println!("PESTI Studio — Downloading Model");
+            println!("=================================");
+
+            let path = download_model(&download_args.repo_id, download_args.filename.as_deref())?;
+            println!("Model downloaded to: {}", path.display());
         }
     }
 
