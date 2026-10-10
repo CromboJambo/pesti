@@ -100,15 +100,15 @@ pub fn benchmark_variant(
 }
 
 /// Run all variants and return results sorted by tok/s (best first).
-pub fn run_benchmarks(
-    model_path: &str,
-    n_gpu_layers: i32,
-) -> anyhow::Result<Vec<BenchmarkResult>> {
+pub fn run_benchmarks(model_path: &str, n_gpu_layers: i32) -> anyhow::Result<Vec<BenchmarkResult>> {
     let variants = generate_variants(n_gpu_layers);
     let mut results = Vec::new();
 
     for variant in &variants {
-        println!("\nBenchmarking: {} (ctx={}, batch={})", variant.name, variant.n_ctx, variant.n_batch);
+        println!(
+            "\nBenchmarking: {} (ctx={}, batch={})",
+            variant.name, variant.n_ctx, variant.n_batch
+        );
         match benchmark_variant(model_path, variant) {
             Ok(result) => {
                 println!("  → {:.2} tok/s", result.tokens_per_second);
@@ -121,7 +121,11 @@ pub fn run_benchmarks(
     }
 
     // Sort by tokens per second (best first)
-    results.sort_by(|a, b| b.tokens_per_second.partial_cmp(&a.tokens_per_second).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.tokens_per_second
+            .partial_cmp(&a.tokens_per_second)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(results)
 }
@@ -131,7 +135,10 @@ pub fn print_results(results: &[BenchmarkResult]) {
     println!("\n{}", "=".repeat(80));
     println!("BENCHMARK RESULTS");
     println!("{}", "=".repeat(80));
-    println!("{:<16} {:>7} {:>7} {:>8} {:>8} {:>10}", "Config", "ctx", "batch", "gpu_l", "load_ms", "tok/s");
+    println!(
+        "{:<16} {:>7} {:>7} {:>8} {:>8} {:>10}",
+        "Config", "ctx", "batch", "gpu_l", "load_ms", "tok/s"
+    );
     println!("{}", "-".repeat(80));
 
     for (i, result) in results.iter().enumerate() {
@@ -150,6 +157,9 @@ pub fn print_results(results: &[BenchmarkResult]) {
 
     if let Some(best) = results.first() {
         println!("{}", "-".repeat(80));
-        println!("Recommended: {} (n_ctx={}, n_batch={})", best.config_name, best.n_ctx, best.n_batch);
+        println!(
+            "Recommended: {} (n_ctx={}, n_batch={})",
+            best.config_name, best.n_ctx, best.n_batch
+        );
     }
 }

@@ -264,6 +264,27 @@ fn estimate_gpu_layers(vram_gb: f64, model_size_gb: f64) -> i32 {
     (ratio * 32.0) as i32
 }
 
+fn estimate_model_size(model_path: &str) -> f64 {
+    // Rough heuristic based on model name patterns
+    if model_path.contains("0.5B") || model_path.contains("0.5b") {
+        return 1.0;
+    } else if model_path.contains("1.5B") || model_path.contains("1.5b") {
+        return 3.0;
+    } else if model_path.contains("3B") || model_path.contains("3b") {
+        return 6.0;
+    } else if model_path.contains("7B") || model_path.contains("7b") {
+        return 14.0;
+    } else if model_path.contains("13B") || model_path.contains("13b") {
+        return 28.0;
+    } else if model_path.contains("30B") || model_path.contains("30b") {
+        return 60.0;
+    } else if model_path.contains("70B") || model_path.contains("70b") {
+        return 140.0;
+    }
+    // Default assumption
+    14.0
+}
+
 #[derive(Debug)]
 struct InferenceConfig {
     n_gpu_layers: i32,
@@ -306,8 +327,8 @@ fn main() -> Result<()> {
 
             let hw = detect_hardware()?;
 
-            // Estimate model size (would be more sophisticated in real impl)
-            let model_size_gb = 1.0; // Placeholder
+            // Estimate model size from path (rough heuristic)
+            let model_size_gb = estimate_model_size(&run_args.model);
 
             let config = recommend_config(&hw, model_size_gb);
 
@@ -327,13 +348,49 @@ fn main() -> Result<()> {
             println!("  Threads: {}", config.n_threads);
             println!("  Quantization: {}", config.quantization);
 
+            // Get prompt (from args or stdin)
+            let prompt = if let Some(p) = run_args.prompt {
+                p
+            } else {
+                use std::io::Write;
+                print!("Prompt: ");
+                let mut out = std::io::stdout();
+                out.flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                input.trim().to_string()
+            };
+
+            println!("\n--- Generating ---");
+
             // Build runner with recommended config
             let builder = LlamaRunner::builder(&run_args.model)
                 .n_ctx(config.n_ctx as u32)
                 .n_threads(config.n_threads as i32)
                 .n_gpu_layers(config.n_gpu_layers);
 
-            // ... rest of inference logic
+            let runner = builder.build()?;
+
+            // Run inference with timing
+            let start = Instant::now();
+            let sampling = pesti_runner::llama::SamplingConfig {
+                temperature: 0.7,
+                top_k: 40,
+                top_p: 0.95,
+                max_tokens: run_args.n_predict as u32,
+                ..Default::default()
+            };
+            let result = runner.generate(&prompt, &sampling)?;
+
+            let elapsed = start.elapsed();
+            println!("{}", result.text);
+            println!("\n--- Done ---");
+            println!(
+                "Generated {} tokens in {:.2}s ({:.1} tok/s)",
+                result.generated_tokens,
+                elapsed.as_secs_f64(),
+                result.generated_tokens as f64 / elapsed.as_secs_f64()
+            );
         }
 
         Commands::Models(list_args) => {
@@ -388,7 +445,8 @@ fn main() -> Result<()> {
             println!("Model: {}", bench_args.model_path);
             println!();
 
-            let results = benchmark::run_benchmarks(&bench_args.model_path, bench_args.n_gpu_layers)?;
+            let results =
+                benchmark::run_benchmarks(&bench_args.model_path, bench_args.n_gpu_layers)?;
             benchmark::print_results(&results);
         }
     }
