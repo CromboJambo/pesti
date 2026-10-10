@@ -1,5 +1,6 @@
 //! Tok/s benchmark for pesti-runner using real model generation.
 
+use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
 use pesti_runner::{LlamaModel, load_gguf_weights};
 use rand::SeedableRng;
 use std::path::Path;
@@ -23,31 +24,20 @@ fn main() {
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
-    // Load tokenizer from GGUF metadata
-    let tokenizer_config = pesti_runner::transformer::GgufTokenizerConfig {
-        vocab_size: 152064,
-        pad_token_id: Some(151663),
-        bos_token_id: Some(151663),
-        eos_token_id: Some(151663),
-    };
-    let tokenizer = pesti_runner::transformer::load_tokenizer_from_gguf(
+    // Load tokenizer from GGUF file
+    let (_config, tokenizer) = load_tokenizer_from_gguf(
         Path::new(model_path),
-        tokenizer_config,
+        TokenizerBackend::MistralRs,
     )
-    .expect("Failed to load tokenizer from GGUF");
-    model.tokenizer = Some(Box::new(tokenizer));
+    .expect("Failed to load tokenizer");
 
     // Benchmark prompt
     let prompt = "Write a haiku about programming.";
-    let max_tokens = 32;
+    let max_tokens = 16;
 
     // Tokenize
     let t_encode = Instant::now();
-    let prompt_tokens = {
-        let tok = model.tokenizer.as_ref().expect("No tokenizer");
-        tok.encode(prompt).expect("Failed to encode")
-    };
-    println!("Prompt: \"{}\"", prompt);
+    let prompt_tokens = tokenizer.encode(prompt).expect("Failed to encode");
     println!(
         "Encoded {} tokens in {:.2}s",
         prompt_tokens.len(),
@@ -65,9 +55,7 @@ fn main() {
     // Warmup run (not measured)
     println!("Running warmup...");
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    model
-        .generate(&prompt_tokens, 8, &sampling, &mut rng, &[151663])
-        .expect("Warmup generation failed");
+    model.generate(&prompt_tokens, 8, &sampling, &mut rng, &[]).expect("Warmup generation failed");
 
     // Timed run
     println!("Running benchmark...");

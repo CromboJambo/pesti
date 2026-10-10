@@ -1,5 +1,6 @@
 //! Fused RoPE + Attention + Softmax + V-Multiplication kernel
 // Uses shared memory for exp_sum to avoid score buffer corruption
+// OPTIMIZED: Parallelized softmax computation across all threads in kernel 2
 
 #include <cuda_fp16.h>
 #include <math.h>
@@ -29,9 +30,8 @@ __global__ void fused_attention_kernel(
     float dot_product = 0.0f;
     
     // Half-swap RoPE rotation (matches llama.cpp / HuggingFace transformers)
-    // For each dimension d in first half, pair with (d + head_dim/2)
     for (int chunk = threadIdx.x; chunk < head_dim / 2; chunk += blockDim.x) {
-        int d = chunk;  // Iterate over first half dimensions (0..dim/2-1)
+        int d = chunk;
         
         int q_idx_first = q_pos * num_heads * head_dim + head * head_dim + d;
         int q_idx_second = q_pos * num_heads * head_dim + head * head_dim + (d + head_dim / 2);
@@ -51,7 +51,6 @@ __global__ void fused_attention_kernel(
         float cos_val_q = cosf(freq_q);
         float sin_val_q = sinf(freq_q);
         
-        // Half-swap rotation: [first, second] -> [first*cos - second*sin, first*sin + second*cos]
         float q_first_rope = q_first * cos_val_q - q_second * sin_val_q;
         float q_second_rope = q_first * sin_val_q + q_second * cos_val_q;
         
@@ -61,7 +60,6 @@ __global__ void fused_attention_kernel(
         float cos_val_k = cosf(freq_k);
         float sin_val_k = sinf(freq_k);
         
-        // Half-swap rotation for K
         float k_first_rope = k_first * cos_val_k - k_second * sin_val_k;
         float k_second_rope = k_first * sin_val_k + k_second * cos_val_k;
         
@@ -89,6 +87,7 @@ __global__ void fused_attention_kernel(
 }
 
 // Kernel 2: Apply softmax AND multiply by V to get final output
+// OPTIMIZED: All threads cooperate on each phase instead of tid==0 only
 __global__ void apply_softmax_and_output_kernel(
     float* __restrict__ s_ptr,      // IN/OUT: scores → output
     const half* __restrict__ v_ptr, // values: [seq_k, num_heads, head_dim]
@@ -105,52 +104,75 @@ __global__ void apply_softmax_and_output_kernel(
     
     if (q_pos >= seq_q || head >= num_heads) return;
     
-    // Pass 1: Find max and compute exp values for this (q_pos, head) pair
-    if (tid == 0) {
-        float max_val = -INFINITY;
-        for (int k = 0; k < seq_k; k++) {
-            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            if (s_ptr[idx] > max_val) {
-                max_val = s_ptr[idx];
-            }
+    int score_offset = q_pos * num_heads * seq_k + head * seq_k;
+    
+    // Pass 1: Parallel max-finding across all threads
+    float local_max = -INFINITY;
+    for (int k = tid; k < seq_k; k += blockDim.x) {
+        int idx = score_offset + k;
+        if (s_ptr[idx] > local_max) {
+            local_max = s_ptr[idx];
         }
-        
-        float exp_sum = 0.0f;
-        for (int k = 0; k < seq_k; k++) {
-            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            float val = s_ptr[idx];
-            float exp_val = (val == -INFINITY) ? 0.0f : expf(val - max_val);
-            s_ptr[idx] = exp_val;
-            exp_sum += exp_val;
-        }
-        
-        // Store exp_sum in shared memory instead of score buffer!
-        shared_exp_sum[0] = exp_sum;
     }
     
+    // Reduce max across threads using shared memory
+    __shared__ float thread_maxes[32];
+    thread_maxes[tid] = local_max;
+    __syncthreads();
+    
+    float global_max = -INFINITY;
+    for (int t = 0; t < blockDim.x; t++) {
+        if (thread_maxes[t] > global_max) {
+            global_max = thread_maxes[t];
+        }
+    }
+    
+    // Pass 2: Parallel exp computation with subtraction of max
+    float local_sum = 0.0f;
+    for (int k = tid; k < seq_k; k += blockDim.x) {
+        int idx = score_offset + k;
+        float val = s_ptr[idx];
+        float exp_val = (val == -INFINITY) ? 0.0f : expf(val - global_max);
+        s_ptr[idx] = exp_val;
+        local_sum += exp_val;
+    }
+    
+    // Reduce sum across threads using shared memory
+    __shared__ float thread_sums[32];
+    thread_sums[tid] = local_sum;
+    __syncthreads();
+    
+    float total_sum = 0.0f;
+    for (int t = 0; t < blockDim.x; t++) {
+        total_sum += thread_sums[t];
+    }
+    
+    // Store exp_sum in shared memory for normalization
+    if (tid == 0) {
+        shared_exp_sum[0] = total_sum;
+    }
     __syncthreads();
     
     float exp_sum = shared_exp_sum[0];
     
-    // Pass 2: Normalize softmax weights (all scores, no corruption!)
-    if (tid == 0 && exp_sum > 0) {
-        for (int k = 0; k < seq_k; k++) {
-            int idx = q_pos * num_heads * seq_k + head * seq_k + k;
+    // Pass 3: Parallel normalization of softmax weights
+    if (exp_sum > 0) {
+        for (int k = tid; k < seq_k; k += blockDim.x) {
+            int idx = score_offset + k;
             s_ptr[idx] /= exp_sum;
         }
     }
     
     __syncthreads();
     
-    // Pass 3: Compute weighted sum of V for each output dimension
-    int dim_idx = tid;
-    
-    while (dim_idx < head_dim) {
+    // Pass 4: Parallel weighted sum of V for each output dimension
+    // Each thread handles different head_dim positions (grid-stride loop)
+    for (int dim_idx = tid; dim_idx < head_dim; dim_idx += blockDim.x) {
         float output_val = 0.0f;
         
         for (int k = 0; k < seq_k; k++) {
-            int score_idx = q_pos * num_heads * seq_k + head * seq_k + k;
-            float softmax_val = s_ptr[score_idx];  // Read normalized weight
+            int score_idx = score_offset + k;
+            float softmax_val = s_ptr[score_idx];
             
             int v_idx = k * num_heads * head_dim + head * head_dim + dim_idx;
             float v0 = __half2float(v_ptr[v_idx]);
@@ -158,10 +180,8 @@ __global__ void apply_softmax_and_output_kernel(
         }
         
         // Write output to new layout [seq_q, num_heads, head_dim] at end of buffer
-        int score_buffer_size = seq_q * num_heads * seq_k;  // In elements (floats)
+        int score_buffer_size = seq_q * num_heads * seq_k;
         int out_idx = score_buffer_size + q_pos * num_heads * head_dim + head * head_dim + dim_idx;
         s_ptr[out_idx] = output_val;
-        
-        dim_idx += blockDim.x;
     }
 }

@@ -169,9 +169,6 @@ impl LinearLayer for CpuLinearLayer {
 #[cfg(feature = "cuda")]
 pub struct GpuLinearLayer {
     weight_f16: Vec<half::f16>,
-    /// Cached device buffer (uploaded lazily on first forward pass).
-    /// Uses Mutex for thread-safe interior mutability.
-    weight_device: std::sync::Mutex<Option<cudarc::driver::CudaSlice<half::f16>>>,
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
@@ -186,28 +183,12 @@ impl GpuLinearLayer {
         out_features: usize,
     ) -> Self {
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
-
-        // Don't upload to GPU at construction - do it lazily on first forward pass.
-        // This avoids OOM when loading large models with many layers.
         Self {
             weight_f16,
-            weight_device: std::sync::Mutex::new(None),
             bias,
             in_features,
             out_features,
         }
-    }
-
-    /// Upload weights to GPU (called on first forward pass).
-    fn ensure_weights_on_gpu(&self) -> Result<()> {
-        let mut guard = self.weight_device.lock().unwrap();
-        if guard.is_some() {
-            return Ok(());
-        }
-
-        let w_dev = crate::kernel::cuda_bridge::upload_weights_to_gpu(&self.weight_f16)?;
-        *guard = Some(w_dev);
-        Ok(())
     }
 }
 
@@ -216,15 +197,10 @@ impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        // Ensure weights are cached on GPU (lazy upload, once per layer)
-        self.ensure_weights_on_gpu()?;
-
-        // Use persistent GPU weight buffer for GEMM
-        let weight_guard = self.weight_device.lock().unwrap();
-        let w_dev = weight_guard.as_ref().expect("weights not uploaded");
-        crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
+        // Upload weights for this forward pass (no persistent caching to avoid OOM)
+        crate::kernel::cuda_bridge::gemm_f16(
             &x_f16,
-            w_dev,
+            &self.weight_f16,
             batch_size,
             self.out_features,
             self.in_features,
@@ -240,12 +216,12 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
-        // Weights uploaded at construction time
+        // Weights uploaded per forward pass, not cached persistently
         Ok(())
     }
 
     fn weights_on_gpu(&self) -> bool {
-        true
+        false
     }
 
     fn layer_name(&self) -> &str {

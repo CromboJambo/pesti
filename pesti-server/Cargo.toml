@@ -1,0 +1,21 @@
+[package]
+name = "pesti-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OpenAI-compatible HTTP server wrapper for pesti-runner inference"
+
+[dependencies]
+pesti-runner = { path = "../pesti-runner", features = ["cuda"] }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[features]
+cuda = ["pesti-runner/cuda"]

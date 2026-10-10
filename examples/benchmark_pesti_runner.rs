@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_path = Path::new("/home/crombo/projects/pesti/models/Qwen2-7B-Instruct-Q4_K_M.gguf");
+    let model_path = Path::new("/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     if !model_path.exists() {
         eprintln!("Model not found at {}", model_path.display());
         std::process::exit(1);
