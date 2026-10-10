@@ -16,6 +16,8 @@ tracing = { workspace = true }
 tracing-subscriber = "0.3"
 chrono = { workspace = true }
 uuid = { workspace = true }
+async-stream = "0.3"
+tokio-stream = "0.1"
 
 [features]
 cuda = ["pesti-runner/cuda"]
