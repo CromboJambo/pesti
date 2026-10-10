@@ -1,0 +1,21 @@
+[package]
+name = "pesti-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PESTI Studio — hardware-aware model management and auto-tuning CLI"
+
+[[bin]]
+name = "pesti-studio"
+path = "src/main.rs"
+
+[dependencies]
+pesti-runner = { path = "../pesti-runner" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = "0.35"
