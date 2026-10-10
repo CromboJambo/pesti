@@ -1,0 +1,19 @@
+[package]
+name = "pesti-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PESTI command-line interface — drop-in replacement for llama-cli"
+
+[[bin]]
+name = "pesti"
+path = "src/main.rs"
+
+[dependencies]
+pesti-runner = { path = "../pesti-runner" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
