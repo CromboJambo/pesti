@@ -27,6 +27,17 @@ enum Commands {
     Models(ListModelsArgs),
     /// Download a model from HuggingFace Hub
     Download(DownloadArgs),
+    /// Search for models on HuggingFace Hub
+    Search(SearchArgs),
+}
+
+#[derive(Parser)]
+struct SearchArgs {
+    /// Search query (e.g., "llama 7B instruct")
+    query: String,
+    /// Maximum results to show
+    #[arg(long = "limit", default_value = "10")]
+    limit: usize,
 }
 
 #[derive(Parser)]
@@ -213,6 +224,24 @@ fn download_model(repo_id: &str, filename: Option<&str>) -> Result<std::path::Pa
     Ok(path)
 }
 
+fn search_hf_models(query: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+    let url = format!(
+        "https://huggingface.co/api/models?search={}&sort=downloads&direction=-1&limit={}",
+        query.replace(' ', "+"),
+        limit
+    );
+
+    let client = reqwest::blocking::Client::new();
+    let response = client.get(&url).send()?;
+
+    if !response.status().is_success() {
+        return Err(anyhow!("HF API request failed: {}", response.status()));
+    }
+
+    let models: Vec<serde_json::Value> = response.json()?;
+    Ok(models)
+}
+
 fn estimate_gpu_layers(vram_gb: f64, model_size_gb: f64) -> i32 {
     let available_for_model = vram_gb * 0.85;
     if available_for_model >= model_size_gb {
@@ -320,6 +349,24 @@ fn main() -> Result<()> {
 
             let path = download_model(&download_args.repo_id, download_args.filename.as_deref())?;
             println!("Model downloaded to: {}", path.display());
+        }
+
+        Commands::Search(search_args) => {
+            println!("PESTI Studio — Searching HuggingFace Hub");
+            println!("==========================================");
+            println!("Query: {}", search_args.query);
+
+            let models = search_hf_models(&search_args.query, search_args.limit)?;
+
+            if models.is_empty() {
+                println!("No results found.");
+            } else {
+                for (i, model) in models.iter().enumerate() {
+                    let id = model["modelId"].as_str().unwrap_or("unknown");
+                    let downloads = model["downloads"].as_u64().unwrap_or(0);
+                    println!("{}. {} ({} downloads)", i + 1, id, downloads);
+                }
+            }
         }
     }
 
