@@ -133,7 +133,7 @@ Separate from the GPU substrate work above, this track delivers a drop-in replac
 - Hardware-aware config generation based on VRAM vs model size heuristics
 - Tested on ftw3 (RTX 3070 Ti, 8GB VRAM) and jambo (RTX 4070 Ti SUPER, 16GB VRAM)
 
-**Phase 4 (Next): Enhanced Server Mode**
+**Phase 4: Enhanced Server Mode (In Progress)**
 - Model hot-swapping API endpoint
 - Connection pooling for concurrent requests
 - OpenAI-compatible streaming responses (/v1/chat/completions)
