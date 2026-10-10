@@ -117,4 +117,24 @@ When heading toward these patterns, expect trouble:
 **GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
 
 ---
-*Updated: October 3, 2026 — Week 26 profiling results and GEMM optimization analysis documented*
+*Updated: October 10, 2026 — Week 29 planning and llama.cpp replacement Phase 3 complete*
+
+## Llama.cpp Replacement Track (Parallel)
+
+Separate from the GPU substrate work above, this track delivers a drop-in replacement for llama.cpp with Unsloth-style hardware-aware UX.
+
+**Completed:**
+- ✅ Phase 1: `pesti` CLI binary — llama.cpp-compatible argument parsing (-m/--model, -p/--prompt, -n, --temp, --top-k, --top-p, --repeat-penalty, --threads, --ctx-size, --gpu-layers)
+- ✅ Phase 2: `pesti-studio` model management — hardware detection (CPU/RAM/GPU), local model listing, HF Hub search and download via reqwest API integration
+
+**Phase 3 Complete (October 10, 2026):** Auto-Tuning Engine
+- Benchmarking infrastructure in `pesti-studio/src/benchmark.rs`
+- `pesti-studio benchmark <model>` command measures tok/s across n_ctx/n_batch/thread configurations
+- Hardware-aware config generation based on VRAM vs model size heuristics
+- Tested on ftw3 (RTX 3070 Ti, 8GB VRAM) and jambo (RTX 4070 Ti SUPER, 16GB VRAM)
+
+**Phase 4 (Next): Enhanced Server Mode**
+- Model hot-swapping API endpoint
+- Connection pooling for concurrent requests
+- OpenAI-compatible streaming responses (/v1/chat/completions)
+- Integration with pesti-server crate for production deployment
