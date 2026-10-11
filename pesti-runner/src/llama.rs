@@ -334,8 +334,14 @@ impl LlamaRunner {
     /// Run inference on a batch of tokens.
     pub fn decode(&self, batch: &mut LlamaBatch) -> Result<()> {
         let mut ctx = self.context.lock().unwrap();
-        ctx.decode(batch)?;
-        Ok(())
+        eprintln!("DEBUG: calling ctx.decode with {} tokens", batch.n_tokens());
+        match ctx.decode(batch) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("DEBUG: ctx.decode failed: {}", e);
+                Err(e.into())
+            }
+        }
     }
 
     /// Get logits for the entire batch.
