@@ -336,7 +336,10 @@ impl LlamaRunner {
         let mut ctx = self.context.lock().unwrap();
         eprintln!("DEBUG: calling ctx.decode with {} tokens", batch.n_tokens());
         match ctx.decode(batch) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                eprintln!("DEBUG: ctx.decode succeeded");
+                Ok(())
+            }
             Err(e) => {
                 eprintln!("DEBUG: ctx.decode failed: {}", e);
                 Err(e.into())
