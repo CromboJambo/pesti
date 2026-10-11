@@ -144,3 +144,25 @@ Separate from the GPU substrate work above, this track delivers a drop-in replac
 - Hardware-aware model management (`pesti-studio detect/run/models/download/search/benchmark`)
 - Auto-tuning engine that benchmarks configurations and recommends optimal settings
 - Production server with hot-swapping, pooling, and streaming
+
+## LLM Runner, Tuning & Safetensors Track (Planned)
+
+See [docs/SPEC_LLM_RUNNER_TRAINING.md](SPEC_LLM_RUNNER_TRAINING.md) for the complete spec covering:
+
+**Component 1: LLM Runner (Inference)** — Complete
+- pesti CLI binary with llama.cpp-compatible interface
+- pesti-server v2 with OpenAI-compatible API, hot-swapping, streaming
+- Performance: ~307 tok/s on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti)
+
+**Component 2: Model Tuning & Training** — Planned (Weeks 1-8)
+- QLoRA fine-tuning pipeline with hardware-aware configuration
+- Dataset loading, training loop, checkpointing, adapter saving
+- Target: within 2x of Unsloth Python implementation on same hardware
+
+**Component 3: Safetensors Weight Management** — In Progress
+- pesti-safetensors crate with loading/saving/inspection capabilities
+- VRAM estimation engine for inference vs training workloads
+- Support for all major quantization formats (Q4_K, Q5_K, Q6_K)
+
+---
+*Updated: October 10, 2026 — LLM Runner & Training spec added*

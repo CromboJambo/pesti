@@ -8,11 +8,13 @@
 
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
-use axum::response::{sse::Event, Sse};
+use axum::response::{IntoResponse, Sse};
+use axum::response::sse::Event;
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::Utc;
-use pesti_runner::llama::{LlamaRunner, SamplingConfig};
+use pesti_runner::llama::{LlamaChatMessage, LlamaRunner, SamplingConfig};
+use std::ffi::CString;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -148,12 +150,14 @@ impl AppState {
         model_path: &str,
     ) -> Result<(usize, String), (StatusCode, Json<serde_json::Value>)> {
         // Check if already loaded
-        let models = self.loaded_models.read().await;
-        if let Some(path) = models.get(model_id) {
-            drop(models);
-            return Ok((0, path.clone())); // Slot 0 for simplicity
+        let path = {
+            let models = self.loaded_models.read().await;
+            models.get(model_id).cloned()
+        };
+        
+        if let Some(path) = path {
+            return Ok((0, path)); // Slot 0 for simplicity
         }
-        drop(models);
 
         // Find an empty slot and load model
         for (i, slot) in self.slots.iter().enumerate() {
@@ -248,7 +252,7 @@ async fn load_model_handler(
         path,
         loaded_at: Utc::now().timestamp(),
         status: "loaded".to_string(),
-    })))
+    }))
 }
 
 async fn unload_model_handler(
@@ -271,25 +275,6 @@ async fn chat_completions(
     State(app): State<AppState>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
-    // Build prompt from messages
-    let mut prompt = String::new();
-    for msg in &req.messages {
-        match msg.role.as_str() {
-            "system" => {
-                prompt.push_str(&format!("[SYSTEM]\n{}\n\n", msg.content));
-            }
-            "user" => {
-                prompt.push_str(&format!("[USER]\n{}\n\n", msg.content));
-            }
-            "assistant" => {
-                prompt.push_str(&format!("[ASSISTANT]\n{}\n\n", msg.content));
-            }
-            other => {
-                prompt.push_str(&format!("[{}]\n{}\n\n", other, msg.content));
-            }
-        }
-    }
-
     let model_id = req.model.clone();
     let temperature = req.temperature;
     let top_p = req.top_p;
@@ -297,35 +282,89 @@ async fn chat_completions(
     let stream = req.stream;
 
     // Load or get existing model
-    let (slot_idx, model_path) = app.get_or_load_model(&model_id, &model_id).await?;
+    let (slot_idx, _model_path) = app.get_or_load_model(&model_id, &model_id).await?;
 
-    if stream {
-        // SSE streaming response
-        let id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
-        let created = Utc::now().timestamp();
+    // Build prompt using model's chat template
+    {
+        let slot = &app.slots[slot_idx];
+        let s = slot.lock().await;
+        
+        if let Some(runner) = &s.runner {
+            // Convert messages to llama.cpp chat format
+            let llama_messages: Vec<LlamaChatMessage> = req.messages.iter()
+                .filter_map(|m| {
+                    match LlamaChatMessage::new(m.role.clone(), m.content.clone()) {
+                        Ok(msg) => Some(msg),
+                        Err(e) => {
+                            eprintln!("Failed to create chat message: {}", e);
+                            None
+                        }
+                    }
+                })
+                .collect();
+            
+            // Apply chat template (uses model's built-in template)
+            let prompt = runner.apply_chat_template(&llama_messages, true).map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+            })?;
 
-        let model_id_clone = model_id.clone();
-        let stream_id = id.clone();
+            if stream {
+                // Generate response first (llama.cpp generates all at once)
+                let sampling = SamplingConfig {
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    ..Default::default()
+                };
 
-        let stream = async_stream::stream! {
-            // First chunk with role
-            yield Ok(Event::default().data(serde_json::json!({
-                "id": stream_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_id_clone,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": ""},
-                    "finish_reason": null
-                }]
-            }).to_string()));
+                let generation_result = runner.generate(&prompt, &sampling);
 
-            // TODO: Stream tokens as they're generated (requires async generation API)
-            // For now, generate full response and send in one chunk
-            let slot = &app.slots[slot_idx];
-            let s = slot.lock().await;
-            if let Some(runner) = &s.runner {
+                // Now create stream with the result
+                let id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
+                let created = Utc::now().timestamp();
+                let model_id_clone = model_id.clone();
+
+                match generation_result {
+                    Ok(result) => {
+                        let stream = async_stream::stream! {
+                            // First chunk with role
+                            yield Ok::<_, axum::Error>(Event::default().data(serde_json::json!({
+                                "id": format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+                                "object": "chat.completion.chunk",
+                                "created": Utc::now().timestamp(),
+                                "model": model_id_clone.clone(),
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"role": "assistant", "content": ""},
+                                    "finish_reason": null
+                                }]
+                            }).to_string()));
+
+                            // Content chunk
+                            yield Ok(Event::default().data(serde_json::json!({
+                                "id": format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>()),
+                                "object": "chat.completion.chunk",
+                                "created": Utc::now().timestamp(),
+                                "model": model_id_clone.clone(),
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": result.text},
+                                    "finish_reason": "stop"
+                                }]
+                            }).to_string()));
+
+                            // Final [DONE] marker
+                            yield Ok(Event::default().data("[DONE]"));
+                        };
+
+                        return Ok(Sse::new(stream).into_response());
+                    }
+                    Err(e) => {
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))));
+                    }
+                }
+            } else {
+                // Non-streaming response
                 let sampling = SamplingConfig {
                     temperature,
                     top_p,
@@ -335,81 +374,37 @@ async fn chat_completions(
                 
                 match runner.generate(&prompt, &sampling) {
                     Ok(result) => {
-                        yield Ok(Event::default().data(serde_json::json!({
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model_id_clone,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": result.text},
-                                "finish_reason": "stop"
-                            }]
-                        }).to_string()));
+                        let id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
+                        
+                        return Ok(Json(ChatCompletionResponse {
+                            id,
+                            object: "chat.completion".to_string(),
+                            created: Utc::now().timestamp(),
+                            model: req.model,
+                            choices: vec![ChatChoice {
+                                index: 0,
+                                message: ChatMessage {
+                                    role: "assistant".to_string(),
+                                    content: result.text,
+                                },
+                                finish_reason: Some("stop".to_string()),
+                            }],
+                            usage: Usage {
+                                prompt_tokens: 0, // TODO: Track actual token counts
+                                completion_tokens: result.generated_tokens as i32,
+                                total_tokens: result.generated_tokens as i32,
+                            },
+                        }).into_response());
                     }
                     Err(e) => {
-                        yield Ok(Event::default().data(serde_json::json!({
-                            "error": format!("Generation failed: {}", e)
-                        }).to_string()));
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))));
                     }
                 }
             }
-
-            // Final [DONE] marker
-            yield Ok(Event::default().data("[DONE]"));
-        };
-
-        Ok(axum::response::Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/event-stream")
-            .header("Cache-Control", "no-cache")
-            .header("Connection", "keep-alive")
-            .body(axum::body::Body::from_stream(stream))
-            .unwrap())
-    } else {
-        // Non-streaming response
-        let slot = &app.slots[slot_idx];
-        let s = slot.lock().await;
-        
-        let result = if let Some(runner) = &s.runner {
-            let sampling = SamplingConfig {
-                temperature,
-                top_p,
-                max_tokens,
-                ..Default::default()
-            };
-            
-            runner.generate(&prompt, &sampling).map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
-            })
-        } else {
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Runner not available"}))))
-        };
-
-        let result = result?;
-
-        let id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
-        
-        Ok(Json(ChatCompletionResponse {
-            id,
-            object: "chat.completion".to_string(),
-            created: Utc::now().timestamp(),
-            model: req.model,
-            choices: vec![ChatChoice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: result.text,
-                },
-                finish_reason: Some("stop".to_string()),
-            }],
-            usage: Usage {
-                prompt_tokens: 0, // TODO: Track actual token counts
-                completion_tokens: result.generated_tokens as i32,
-                total_tokens: result.generated_tokens as i32,
-            },
-        }).into_response()))
+        }
     }
+
+    Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Runner not available"}))))
 }
 
 async fn health_check() -> Json<serde_json::Value> {

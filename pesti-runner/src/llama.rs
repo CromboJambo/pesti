@@ -32,8 +32,7 @@ pub mod context;
 pub mod model;
 pub mod sampler;
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use llama_cpp_2::{
@@ -238,7 +237,7 @@ impl LlamaRunnerBuilder {
 
         Ok(LlamaRunner {
             model,
-            context: Rc::new(RefCell::new(context)),
+            context: Arc::new(Mutex::new(context)),
         })
     }
 }
@@ -246,8 +245,13 @@ impl LlamaRunnerBuilder {
 /// High-level llama.cpp runner. Wraps model loading, context management, and inference.
 pub struct LlamaRunner {
     model: &'static LlamaModel,
-    context: Rc<RefCell<LlamaContext<'static>>>,
+    context: Arc<Mutex<LlamaContext<'static>>>,
 }
+
+// LlamaRunner is safe to send between threads because all access to the
+// underlying llama_context is serialized through our Mutex. The raw pointer
+// itself isn't thread-safe for concurrent access, but we prevent that.
+unsafe impl Send for LlamaRunner {}
 
 impl LlamaRunner {
     /// Create a new builder for constructing a runner.
@@ -274,7 +278,7 @@ impl LlamaRunner {
     }
 
     /// Get raw access to the LlamaContext for advanced operations.
-    pub fn context(&self) -> &Rc<RefCell<LlamaContext<'static>>> {
+    pub fn context(&self) -> &Arc<Mutex<LlamaContext<'static>>> {
         &self.context
     }
 
@@ -329,19 +333,19 @@ impl LlamaRunner {
 
     /// Run inference on a batch of tokens.
     pub fn decode(&self, batch: &mut LlamaBatch) -> Result<()> {
-        let mut ctx = self.context.borrow_mut();
+        let mut ctx = self.context.lock().unwrap();
         ctx.decode(batch)?;
         Ok(())
     }
 
     /// Get logits for the entire batch.
     pub fn get_logits(&self) -> Vec<f32> {
-        self.context.borrow().get_logits().to_vec()
+        self.context.lock().unwrap().get_logits().to_vec()
     }
 
     /// Get logits for a specific sequence.
     pub fn get_logits_ith(&self, i: i32) -> Result<Vec<f32>> {
-        let ctx = self.context.borrow();
+        let ctx = self.context.lock().unwrap();
         let logits = ctx.get_logits_ith(i);
         Ok(logits.to_vec())
     }
@@ -382,7 +386,7 @@ impl LlamaRunner {
         let t_first_sample = Instant::now();
         let mut tokens: Vec<LlamaToken> = vec![];
         let mut token = {
-            let ctx = self.context.borrow_mut();
+            let ctx = self.context.lock().unwrap();
             let _logits = ctx.get_logits_ith((prompt_len - 1) as i32);
             sampler.sample(&ctx, (prompt_len - 1) as i32)
         };
@@ -411,7 +415,7 @@ impl LlamaRunner {
 
             // Sample next token
             let _logits = self.get_logits_ith(0)?;
-            let ctx = self.context.borrow();
+            let ctx = self.context.lock().unwrap();
             let next_token = sampler.sample(&ctx, 0);
             drop(ctx);
 
@@ -450,7 +454,7 @@ impl LlamaRunner {
             .collect();
 
         // Get timings
-        let mut ctx = self.context.borrow_mut();
+        let mut ctx = self.context.lock().unwrap();
         let timings = ctx.timings();
         drop(ctx);
 
@@ -528,7 +532,7 @@ impl LlamaRunner {
         // Sample first token
         let mut tokens: Vec<LlamaToken> = vec![];
         let mut full_text = String::new();
-        let ctx = self.context.borrow_mut();
+        let ctx = self.context.lock().unwrap();
         let _logits = ctx.get_logits_ith((prompt_len - 1) as i32);
         let mut token = sampler.sample(&ctx, (prompt_len - 1) as i32);
         tokens.push(token);
@@ -576,7 +580,7 @@ impl LlamaRunner {
             // Sample next token. get_logits_ith/sample take the batch index:
             // each iteration uses a fresh 1-token batch, so the index is 0.
             let _logits = self.get_logits_ith(0)?;
-            let ctx = self.context.borrow();
+            let ctx = self.context.lock().unwrap();
             let next_token = sampler.sample(&ctx, 0);
             drop(ctx);
 
@@ -625,7 +629,7 @@ impl LlamaRunner {
         let gen_time = t_gen_start.elapsed().as_secs_f64() * 1000.0;
 
         // Get timings
-        let mut ctx = self.context.borrow_mut();
+        let mut ctx = self.context.lock().unwrap();
         let timings = ctx.timings();
         drop(ctx);
 
@@ -678,42 +682,42 @@ impl LlamaRunner {
         self.decode(&mut batch)?;
 
         // Get embeddings from the last token of the sequence
-        let ctx = self.context.borrow();
+        let ctx = self.context.lock().unwrap();
         let emb = ctx.embeddings_ith((tokens.len() - 1) as i32)?;
         Ok(emb.to_vec())
     }
 
     /// Clear the KV cache.
     pub fn clear_kv_cache(&self) -> Result<()> {
-        let mut ctx = self.context.borrow_mut();
+        let mut ctx = self.context.lock().unwrap();
         ctx.clear_kv_cache();
         Ok(())
     }
 
     /// Reset the model's timings.
     pub fn reset_timings(&self) {
-        let mut ctx = self.context.borrow_mut();
+        let mut ctx = self.context.lock().unwrap();
         ctx.reset_timings();
     }
 
     /// Print memory breakdown.
     pub fn print_memory_breakdown(&self) {
-        self.context.borrow().print_memory_breakdown();
+        self.context.lock().unwrap().print_memory_breakdown();
     }
 
     /// Get the context's KV cache size.
     pub fn n_ctx(&self) -> u32 {
-        self.context.borrow().n_ctx()
+        self.context.lock().unwrap().n_ctx()
     }
 
     /// Get the context's batch size.
     pub fn n_batch(&self) -> u32 {
-        self.context.borrow().n_batch()
+        self.context.lock().unwrap().n_batch()
     }
 
     /// Get the context's ubatch size.
     pub fn n_ubatch(&self) -> u32 {
-        self.context.borrow().n_ubatch()
+        self.context.lock().unwrap().n_ubatch()
     }
 
     /// Get the context's session manager.
@@ -802,18 +806,17 @@ impl From<KvCacheType> for llama_cpp_2::context::params::KvCacheType {
 
 /// Manages session save/load.
 pub struct SessionManager {
-    context: Rc<RefCell<LlamaContext<'static>>>,
+    context: Arc<Mutex<LlamaContext<'static>>>,
 }
 
 impl SessionManager {
-    pub fn new(context: Rc<RefCell<LlamaContext<'static>>>) -> Self {
+    pub fn new(context: Arc<Mutex<LlamaContext<'static>>>) -> Self {
         Self { context }
     }
 
     /// Save the current context state to a file.
     pub fn save(&self, path: &str) -> Result<(), String> {
-        self.context
-            .borrow()
+        self.context.lock().unwrap()
             .state_save_file(path, &[])
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -821,8 +824,7 @@ impl SessionManager {
 
     /// Load context state from a file.
     pub fn load(&self, path: &str) -> Result<(), String> {
-        self.context
-            .borrow_mut()
+        self.context.lock().unwrap()
             .state_load_file(path, 0)
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -840,8 +842,7 @@ impl SessionManager {
         path: &str,
         tokens: &[LlamaToken],
     ) -> Result<(), String> {
-        self.context
-            .borrow_mut()
+        self.context.lock().unwrap()
             .state_seq_save_file(path, seq_id, tokens)
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -854,8 +855,7 @@ impl SessionManager {
         path: &str,
         max_tokens: usize,
     ) -> Result<(), String> {
-        self.context
-            .borrow_mut()
+        self.context.lock().unwrap()
             .state_seq_load_file(path, dest_seq_id, max_tokens)
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -863,13 +863,13 @@ impl SessionManager {
 
     /// Get the size needed to save the full state.
     pub fn state_size(&self) -> Result<usize, String> {
-        let size = self.context.borrow().get_state_size();
+        let size = self.context.lock().unwrap().get_state_size();
         Ok(size)
     }
 
     /// Get the size needed to save a specific sequence's state.
     pub fn state_seq_size(&self, seq_id: i32) -> Result<usize, String> {
-        let ctx = self.context.borrow();
+        let ctx = self.context.lock().unwrap();
         let size = ctx.state_seq_get_size_ext(seq_id, LlamaStateSeqFlags::default());
         Ok(size)
     }
