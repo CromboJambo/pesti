@@ -373,14 +373,19 @@ impl LlamaRunner {
         );
 
         // Create batch for prompt
+        eprintln!("DEBUG generate: creating LlamaBatch with n_tokens={}, n_seqs={}", prompt_len, 1);
         let mut batch = LlamaBatch::new(prompt_len, 1);
+        eprintln!("DEBUG generate: LlamaBatch created");
         for (i, tok) in prompt_tokens.iter().enumerate() {
             batch.add(*tok, i as i32, &[0], true)?;
         }
+        eprintln!("DEBUG generate: added {} tokens to batch", prompt_len);
 
         // Prefill
         let t_prefill_start = Instant::now();
+        eprintln!("DEBUG generate: calling prefill decode");
         self.decode(&mut batch)?;
+        eprintln!("DEBUG generate: prefill decode succeeded");
         let prefill_time = t_prefill_start.elapsed().as_secs_f64() * 1000.0;
         info!(
             "Prefill: {:.2}ms ({:.2} tok/s)",
