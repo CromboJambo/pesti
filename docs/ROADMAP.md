@@ -1,4 +1,8 @@
-# PESTI Roadmap
+# PESTI Detailed Phase Roadmap
+
+*Detailed week-by-week work, optimization analysis, and phase deliverables.*
+
+[← Back to main roadmap](../ROADMAP.md) | [pesti-runner module roadmap](../pesti-runner/ROADMAP.md)
 
 **Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 

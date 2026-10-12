@@ -4,15 +4,13 @@
 
 [← Back to main roadmap](../ROADMAP.md)
 
-## Current State (Week 25 Complete)
+## Current State (Week 28 Complete)
 
 Working GPU inference path for Qwen2.5-0.5B-Instruct with fused attention kernel and F16 compute.
 Numerical conformance validated vs llama.cpp reference outputs at all sequence lengths tested.
 
-**Throughput:** pesti-runner: 307.68 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti) — **Phase 1 target of 100 tok/s achieved.**
-Remaining ~1.6x gap to llama.cpp baseline (504.04 tok/s) is the Phase 4 optimization target.
-
-**Week 25 completed October 2, 2026.** All planned deliverables finished including token embedding fix that resolved GGUF weight loading for Llama-family models.
+**Throughput:** pesti-runner: ~307 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti) — Phase 1 target of 100 tok/s achieved.
+Remaining ~1.6x gap to llama.cpp baseline (504.04 tok/s) is the optimization target.
 
 ### Working Features
 - ✅ Transformer layer forward pass (attention + FFN)
@@ -22,27 +20,21 @@ Remaining ~1.6x gap to llama.cpp baseline (504.04 tok/s) is the Phase 4 optimiza
 - ✅ RMSNorm, SwiGLU activation
 - ✅ GPU dispatch layer with CPU fallback counter
 - ✅ Per-layer capture for debugging/verification
-- ✅ F16 GPU inference via cuBLAS Hgemm (Phase 2b complete)
+- ✅ F16 GPU inference via cuBLAS Hgemm
 - ✅ Trait-based linear layer integration (`new_linear_layer()` factory)
-- ✅ Non-matmul GPU kernels: SwiGLU, RMSNorm, RoPE, Softmax (Phase 3 complete)
+- ✅ Non-matmul GPU kernels: SwiGLU, RMSNorm, RoPE, Softmax
+- ✅ GPU weight caching via lazy upload
 
 ### Known Issues
 | Issue | Status | Impact |
 |-------|--------|--------|
 | pesti-safetensors: 4 failing tests (Q4_K/Q5_K/Q6_K dequant + config) | Open | Can't fully validate quantized model loading via safetensors path |
 
-### Cleanup Completed
-- Week 21: Archived 72 non-compiling examples to `examples-disabled/`, 17 non-compiling integration tests to `tests-disabled/`
-- Active surface: 43 compiling examples, 10 passing integration tests
-
 ## Upcoming Work
 
-### Week 25: Optimization and Scale (IN PROGRESS)
-- [x] Establish comparable tok/s benchmark against llama.cpp on same model/hardware — pesti-runner: 81.78 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti). ~6x gap identified as optimization target.
-- [x] F16 GPU inference via candle_bridge redesign — implemented in `pesti-runner/src/kernel/cuda_bridge.rs` using cudarc's cuBLAS hgemm; integrated into dispatch layer with automatic fallback. All 5 conformance tests pass including numerical stability at seq=4096.
-- [x] Trait-based linear layer integration — replaced all LinearDispatch call sites across model.rs, runtime.rs, and test examples with `new_linear_layer()` factory. Weight uploads now happen internally at construction time via `build_layer_dispatch()`, eliminating redundant explicit upload calls. Build OK, 70/71 tests pass (one pre-existing rope test failure).
-- [x] Phase 3: non-matmul GPU kernels — SwiGLU, RMSNorm, RoPE, Softmax all implemented as CUDA kernels. RoPE computed in pure Rust to avoid PTX version incompatibility; embeddings passed directly in F16 to avoid GPU dtype conversion overhead.
-- [ ] Profile GEMM vs attention kernel time split at production sequence lengths — identify remaining bottlenecks
+### Optimization Path Decision (Week 29)
+GEMM compute at practical optimum via plain cuBLAS. Evaluating optimization targets:
+- [ ] Profile GEMM vs attention kernel time split at production sequence lengths
 - [ ] KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
 - [ ] Spike: TMA descriptors for async prefetching
 
@@ -53,8 +45,8 @@ Remaining ~1.6x gap to llama.cpp baseline (504.04 tok/s) is the Phase 4 optimiza
 forward_with_dispatch() 
   → dispatch_gemm()        // CUTLASS GEMM via cudarc
   → attention_forward()    // Fused QKV+attention+output kernel
-  → rmsnorm_gpu()          // CUDA kernel (Phase 3)
-  → swiglu_forward()       // CUDA kernel (Phase 3)
+  → rmsnorm_gpu()          // CUDA kernel
+  → swiglu_forward()       // CUDA kernel
 ```
 
 ### Known Failure Modes (Module-Specific)
@@ -63,9 +55,12 @@ forward_with_dispatch()
 - **Numerical stability at scale:** Softmax overflow manifests at seq=4096+. Always test long sequences.
 
 ## References
+- [Main roadmap](../ROADMAP.md) — Project-level goals and completed work
+- [Detailed phase work](../docs/ROADMAP.md) — Week-by-week optimization analysis
+- [Architecture refactor spec](../docs/REFACTOR_SPEC.md) — Phase deliverables and conformance requirements
 - [EDR-007: Fused Attention Kernel Correctness Fix](../docs/FUSED-ATTENTION-FIX.md)
 - [Week 17 GPU e2e correctness results](../docs/history/WEEK_17_GPU_E2E_CORRECTNESS.md)
 - [CUDA synchronization root cause analysis](../docs/CUDA_SYNC_ROOT_CAUSE.md)
 
 ---
-*Updated: October 2, 2026 — Week 25, Phase 3 complete, F16 compute validated*
+*Updated: October 12, 2026 — Module roadmap restructured with links to main roadmap*
