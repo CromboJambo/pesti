@@ -57,7 +57,10 @@ use crate::kernel::linear::{LinearLayer, new_linear_layer};
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
+use crate::kernel::RawHandle;
 use std::sync::Arc;
+
+
 
 use candle_core::{DType, Device, Tensor};
 use half::f16;
@@ -350,6 +353,128 @@ impl DispatchContext {
     }
 
     // ── Core dispatch: GEMM ──────────────────────────────────────────────
+
+    /// Upload a weight matrix to the device once and return a handle for reuse.
+    /// Caller is responsible for calling `free_weight_buffer` when done.
+    pub fn upload_weights(&self, weights: &[f16]) -> Result<RawHandle, DispatchError> {
+        let bytes = std::mem::size_of_val(weights);
+        let handle = self
+            .memory
+            .alloc(bytes)
+            .map_err(|e| DispatchError::Memory(format!("weight alloc: {e}")))?;
+        let raw: &[u8] = unsafe { std::slice::from_raw_parts(weights.as_ptr() as *const u8, bytes) };
+        self.memory
+            .h2d(raw, handle)
+            .map_err(|e| DispatchError::Transfer(format!("weight H2D: {e}")))?;
+        Ok(handle)
+    }
+
+    /// Free a previously uploaded weight buffer.
+    pub fn free_weight_buffer(&self, handle: RawHandle) {
+        let _ = self.memory.free(handle);
+    }
+
+    /// GEMM with pre-uploaded weights (persistent device buffer).
+    /// A is still transferred per-call; B is expected to already be on the device.
+    pub fn dispatch_gemm_with_cached_weights(
+        &self,
+        a_host: &[f16],
+        b_handle: RawHandle,
+        c_init: Option<&[f32]>,
+        m: usize,
+        n: usize,
+        k: usize,
+        alpha: f32,
+        beta: f32,
+    ) -> Result<Vec<f32>, DispatchError> {
+        use crate::profiler;
+
+        let c_len = m * n;
+        if !self.prefer_gpu || !self.gpu_available() {
+            debug!(m, n, k, "GEMM (cached weights): GPU not available, using CPU");
+            return self.dispatch_gemm_cpu(a_host, &[], c_init, m, n, k, alpha, beta);
+        }
+
+        let a_bytes = std::mem::size_of_val(a_host);
+        let c_bytes = c_len * std::mem::size_of::<f32>();
+
+        let _alloc_timer = profiler::time(profiler::KernelCategory::Alloc);
+        let a_handle = self
+            .memory
+            .alloc(a_bytes)
+            .map_err(|e| DispatchError::Memory(format!("alloc A: {e}")))?;
+        let c_handle = self
+            .memory
+            .alloc(c_bytes)
+            .map_err(|e| DispatchError::Memory(format!("alloc C: {e}")))?;
+        drop(_alloc_timer);
+
+        let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
+        let mut c_buf = DeviceBuffer::<f32>::from_backend(c_handle, c_len);
+
+        // Only transfer A (input) — B is already on device via b_handle
+        let a_bytes_raw: &[u8] =
+            unsafe { std::slice::from_raw_parts(a_host.as_ptr() as *const u8, a_bytes) };
+        let _h2d_timer = profiler::time(profiler::KernelCategory::H2DTransfer);
+        self.memory
+            .h2d(a_bytes_raw, a_handle)
+            .map_err(|e| DispatchError::Transfer(format!("H2D A: {e}")))?;
+        drop(_h2d_timer);
+
+        if let Some(c_init_data) = c_init {
+            let c_init_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    c_init_data.as_ptr() as *const u8,
+                    std::mem::size_of_val(c_init_data),
+                )
+            };
+            self.memory
+                .h2d(c_init_bytes, c_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D C init: {e}")))?;
+        }
+
+        // Reconstruct b_buf from handle (no data transfer needed)
+        let b_len = k * n;
+        let b_buf = DeviceBuffer::<f16>::from_backend(b_handle, b_len);
+
+        let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
+        let matmul_ok = self
+            .engine
+            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
+            .is_ok();
+        drop(_gemm_timer);
+
+        let mut c_host = vec![0.0f32; c_len];
+        let mut d2h_ok = false;
+        if matmul_ok {
+            let c_bytes_out: &mut [u8] =
+                unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
+            let _d2h_timer = profiler::time(profiler::KernelCategory::D2HTransfer);
+            d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
+            drop(_d2h_timer);
+
+            if d2h_ok {
+                let _sync_timer = profiler::time(profiler::KernelCategory::Sync);
+                if self.memory.sync().is_err() {
+                    d2h_ok = false;
+                }
+                drop(_sync_timer);
+            }
+        }
+
+        // Only free A and C — B (weights) stays on device for reuse
+        let _ = self.memory.free(a_handle);
+        let _ = self.memory.free(c_handle);
+
+        if !matmul_ok || !d2h_ok {
+            self.gpu_fallback_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            warn!("GEMM (cached weights): GPU path failed, falling back to CPU");
+            return self.dispatch_gemm_cpu(a_host, &[], c_init, m, n, k, alpha, beta);
+        }
+
+        Ok(c_host)
+    }
 
     /// Dispatch a GEMM operation: C = alpha * A @ B + beta * C.
     ///

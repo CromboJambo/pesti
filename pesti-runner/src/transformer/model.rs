@@ -14,6 +14,7 @@ use tracing::debug;
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
+use crate::kernel::RawHandle;
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
@@ -387,12 +388,14 @@ pub struct LlamaModel {
     /// full weight matrices on every forward call.
     #[cfg(feature = "cuda")]
     pub dispatch_layers: Option<Vec<crate::kernel::dispatch::LayerDispatch>>,
-    /// Cached transposed f16 tensor of the output-head (LM head) weight
-    /// [hidden, vocab], built once at construction. The output head is the
-    /// single largest weight in the model; transposing + re-uploading it
-    /// every forward call dominated step time.
+    /// Cached transposed f16 output weight [hidden × vocab] for fast per-token
+    /// GEMM without rebuilding from scratch every step. Built once at construction.
     #[cfg(feature = "cuda")]
-    pub output_weight_t_gpu: Option<Tensor>,
+    pub output_weight_t_f16: Option<Vec<half::f16>>,
+    /// GPU handle for the cached output weight matrix — uploaded once, reused
+    /// on every decode step via dispatch_gemm_with_cached_weights.
+    #[cfg(feature = "cuda")]
+    pub output_weight_t_gpu: Option<RawHandle>,
 }
 
 impl LlamaModel {
@@ -511,7 +514,7 @@ impl LlamaModel {
         #[cfg(feature = "cuda")]
         let dispatch_layers = Some(Self::build_dispatch_layers(&layers));
         #[cfg(feature = "cuda")]
-        let output_weight_t_gpu = Self::build_output_weight_t_gpu(&output, &config, vocab_size);
+        let output_weight_t_f16 = Self::build_output_weight_t_f16(&output, &config, vocab_size);
 
         Ok(Self {
             config,
@@ -531,7 +534,9 @@ impl LlamaModel {
             #[cfg(feature = "cuda")]
             dispatch_layers,
             #[cfg(feature = "cuda")]
-            output_weight_t_gpu,
+            output_weight_t_f16,
+            #[cfg(feature = "cuda")]
+            output_weight_t_gpu: None,
         })
     }
 
@@ -645,19 +650,15 @@ impl LlamaModel {
         }
     }
 
-    /// Build the transposed output-head (LM head) weight tensor [hidden, vocab]
-    /// on the bridge GPU device, once. Returns `None` when the bridge is not
-    /// CUDA-backed or the output layer is missing (CPU path transposes per
-    /// call, as before).
-    fn build_output_weight_t_gpu(
+    /// Build the transposed f16 output weight matrix [hidden × vocab] ONCE at
+    /// construction. This is used by forward_with_dispatch to avoid rebuilding
+    /// the 45M-element transpose on every decode step (which dominated step time).
+    fn build_output_weight_t_f16(
         output: &Option<Linear>,
         config: &LlamaConfig,
         vocab_size: u32,
-    ) -> Option<Tensor> {
+    ) -> Option<Vec<half::f16>> {
         let output = output.as_ref()?;
-        if !crate::kernel::candle_bridge::bridge_is_cuda() {
-            return None;
-        }
         let hidden = config.embed_dim;
         let vocab = vocab_size as usize;
         let weight = &output.weight;
@@ -671,20 +672,7 @@ impl LlamaModel {
                 w_t.push(w_f16[v * hidden + k]);
             }
         }
-        match Tensor::from_vec(
-            w_t,
-            (hidden, vocab),
-            crate::kernel::candle_bridge::bridge_device(),
-        ) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to cache output-head GPU weight tensor, using per-call transpose"
-                );
-                None
-            }
-        }
+        Some(w_t)
     }
 
     /// Build a model from already-loaded safetensors weights.
@@ -745,7 +733,7 @@ impl LlamaModel {
         #[cfg(feature = "cuda")]
         let dispatch_layers = Some(Self::build_dispatch_layers(&layers));
         #[cfg(feature = "cuda")]
-        let output_weight_t_gpu = Self::build_output_weight_t_gpu(&output, &config, vocab_size);
+        let output_weight_t_f16 = Self::build_output_weight_t_f16(&output, &config, vocab_size);
 
         Ok(Self {
             config,
@@ -765,7 +753,9 @@ impl LlamaModel {
             #[cfg(feature = "cuda")]
             dispatch_layers,
             #[cfg(feature = "cuda")]
-            output_weight_t_gpu,
+            output_weight_t_f16,
+            #[cfg(feature = "cuda")]
+            output_weight_t_gpu: None,
         })
     }
 
@@ -1476,13 +1466,6 @@ impl LlamaModel {
             .as_ref()
             .ok_or_else(|| RunnerError::Kernel("dispatch context not initialized".into()))?;
 
-        // DEBUG: Log which path we're taking
-        if start_pos == 0 {
-            println!(
-                "[DEBUG] forward_with_dispatch called with GPU available: {}",
-                ctx.gpu_available()
-            );
-        }
         // Initialize GPU KV caches on first call.
         // `PESTI_KV_MAX_SEQ` caps the allocation for testing on shared GPUs.
         let kv_max_seq = std::env::var("PESTI_KV_MAX_SEQ")
@@ -1512,23 +1495,12 @@ impl LlamaModel {
                 value_caches.push(value_cache);
             }
             self.kv_caches = Some((key_caches, value_caches));
-            println!(
-                "[DEBUG] KV caches initialized: {} layers",
-                self.config.num_layers
-            );
         }
 
         let (key_caches, value_caches) = self
             .kv_caches
             .as_mut()
             .ok_or_else(|| RunnerError::Kernel("kv caches not initialized".into()))?;
-
-        // DEBUG: Log current KV cache state before forward pass
-        println!(
-            "[DEBUG] forward_with_dispatch: start_pos={}, seq_len={}",
-            start_pos,
-            key_caches[0].seq_len()
-        );
 
         let mut h = hidden.to_vec();
 
@@ -1624,26 +1596,27 @@ impl LlamaModel {
         let alpha = 1.0f32;
         let beta = 0.0f32;
 
-        // The output weight is stored [vocab, hidden] row-major (GGUF layout:
-        // token_embd ne=[hidden, vocab], ne[0] fastest). dispatch_gemm expects B as
-        // [k=hidden, n=vocab], so transpose it: B[k, v] = W[v, k].
-        // (The CPU fallback Linear::forward reads W[v, k] directly and is
-        // correct; this dispatch path previously fed the un-transposed buffer
-        // and computed a scrambled projection.)
-        let vocab = self.vocab_size as usize;
-        let hidden = self.config.embed_dim;
-        let weight = &output.weight;
-        let output_f16: Vec<half::f16> = (0..hidden)
-            .flat_map(|k| (0..vocab).map(move |v| half::f16::from_f32(weight[v * hidden + k])))
-            .collect();
+        // Use the cached transposed f16 output weight matrix (built once at
+        // construction) instead of rebuilding from scratch every decode step.
+        // This eliminates per-token f32→f16 conversion + CPU transpose of the
+        // entire [vocab × hidden] matrix (~45M ops for Qwen2.5-0.5B).
+        let output_f16 = self.output_weight_t_f16.as_ref().unwrap();
 
-        // Dispatch GEMM: C[1×vocab] = alpha * A[1×hidden] @ B[hidden×vocab] + beta*C
-        // Use dispatch_gemm (auto-selects GPU when available) instead of dispatch_gemm_cpu
-        let logits_vec = ctx.dispatch_gemm(
+        // Upload weights to GPU once, cache the handle for reuse across all decode steps.
+        if self.output_weight_t_gpu.is_none() {
+            debug!("Uploading output head weights to GPU (one-time)...");
+            let handle = ctx.upload_weights(output_f16)?;
+            self.output_weight_t_gpu = Some(handle);
+            debug!("Output head weights uploaded to GPU");
+        }
+
+        // Use cached GPU weights for the GEMM — no per-step weight transfer.
+        let gpu_handle = self.output_weight_t_gpu.unwrap();
+        let logits_vec = ctx.dispatch_gemm_with_cached_weights(
             &h.iter()
                 .map(|&v| half::f16::from_f32(v))
                 .collect::<Vec<half::f16>>(),
-            &output_f16,
+            gpu_handle,
             None,
             1,                        // m: output batch (1 token)
             self.vocab_size as usize, // n: vocab_size logits
@@ -1845,6 +1818,15 @@ impl LlamaModel {
 
             if pos >= self.config.max_seq_len {
                 break;
+            }
+        }
+
+        // Clean up cached GPU weight buffer
+        #[cfg(feature = "cuda")]
+        if let Some(handle) = self.output_weight_t_gpu.take() {
+            debug!("Freeing cached output head weights from GPU");
+            if let Some(ctx) = &self.dispatch {
+                ctx.free_weight_buffer(handle);
             }
         }
 
