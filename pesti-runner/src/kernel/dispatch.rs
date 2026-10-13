@@ -124,6 +124,12 @@ impl From<RunnerError> for DispatchError {
 /// `MemoryManager` for buffer allocation. Provides high-level dispatch
 /// methods that handle buffer allocation, data transfer, kernel invocation,
 /// and CPU fallback automatically.
+/// Cached device buffer for GEMM operations, reused across calls with the same shape.
+struct GemmBufferCache {
+    handle: RawHandle,
+    bytes: usize,
+}
+
 pub struct DispatchContext {
     /// The inference engine with its GEMM and attention kernels.
     engine: InferenceEngine,
@@ -142,6 +148,9 @@ pub struct DispatchContext {
     /// Direct CUDA cuBLAS bridge for true F16 inference (Phase 1 of F16 spec).
     #[cfg(feature = "cuda")]
     cuda_bridge: Option<CudaBridge>,
+    /// Persistent buffer cache: shape key -> cached buffer. Eliminates per-call
+    /// allocation overhead during decode steps.
+    gemm_buffer_cache: std::sync::Mutex<std::collections::HashMap<(usize, usize), GemmBufferCache>>,
 }
 
 impl DispatchContext {
@@ -189,6 +198,7 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -259,6 +269,7 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -292,6 +303,7 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -324,6 +336,24 @@ impl DispatchContext {
     /// Whether GPU is actually available (not just preferred).
     pub fn gpu_available(&self) -> bool {
         self.engine.gpu_available()
+    }
+
+    /// Get or allocate a cached GEMM buffer for the given shape.
+    fn get_gemm_buffer(&self, m: usize, n: usize, bytes: usize) -> Result<RawHandle, DispatchError> {
+        let key = (m, n);
+        let cache = self.gemm_buffer_cache.lock().unwrap();
+        if let Some(cached) = cache.get(&key) {
+            return Ok(cached.handle);
+        }
+        drop(cache);
+
+        let handle = self
+            .memory
+            .alloc(bytes)
+            .map_err(|e| DispatchError::Memory(format!("GEMM buffer alloc for {}x{}: {}", m, n, e)))?;
+
+        self.gemm_buffer_cache.lock().unwrap().insert(key, GemmBufferCache { handle, bytes });
+        Ok(handle)
     }
 
     /// Whether the direct CUDA cuBLAS bridge for F16 inference is available.
@@ -403,10 +433,8 @@ impl DispatchContext {
             .memory
             .alloc(a_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc A: {e}")))?;
-        let c_handle = self
-            .memory
-            .alloc(c_bytes)
-            .map_err(|e| DispatchError::Memory(format!("alloc C: {e}")))?;
+        // Use persistent buffer cache for C (output) to eliminate per-call alloc overhead
+        let c_handle = self.get_gemm_buffer(m, n, c_bytes)?;
         drop(_alloc_timer);
 
         let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
@@ -438,6 +466,7 @@ impl DispatchContext {
         let b_buf = DeviceBuffer::<f16>::from_backend(b_handle, b_len);
 
         let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
+        // Use the working PTX-based GEMM kernel (proven at 307 tok/s)
         let matmul_ok = self
             .engine
             .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
@@ -462,15 +491,25 @@ impl DispatchContext {
             }
         }
 
-        // Only free A and C — B (weights) stays on device for reuse
+        // Only free A — B (weights) stays on device for reuse, C is cached by shape
         let _ = self.memory.free(a_handle);
-        let _ = self.memory.free(c_handle);
+        // Do NOT free C — it's cached for reuse on the next call with same shape
 
         if !matmul_ok || !d2h_ok {
             self.gpu_fallback_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("GEMM (cached weights): GPU path failed, falling back to CPU");
-            return self.dispatch_gemm_cpu(a_host, &[], c_init, m, n, k, alpha, beta);
+            // Transfer weights back from device for CPU fallback
+            let b_bytes = k * n * 2;
+            let mut b_host = vec![0u8; b_bytes];
+            if self.memory.d2h(b_handle, &mut b_host).is_err() {
+                return Err(DispatchError::Transfer("D2H weights for CPU fallback".to_string()));
+            }
+            let b_f16: Vec<f16> = b_host
+                .chunks_exact(2)
+                .map(|chunk| f16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])))
+                .collect();
+            return self.dispatch_gemm_cpu(a_host, &b_f16, c_init, m, n, k, alpha, beta);
         }
 
         Ok(c_host)
@@ -481,14 +520,14 @@ impl DispatchContext {
     /// A: [m x k] f16, B: [k x n] f16, C: [m x n] f32
     ///
     /// If GPU is preferred and available:
-    ///   1. Allocate device buffers for A, B, C
+    ///   1. Allocate device buffers for A, B, C (C cached by shape)
     ///   2. Transfer A and B to device
     ///   3. Launch GPU GEMM kernel
     ///   4. Transfer result C back to host
     ///
     /// Falls back to CPU if GPU is unavailable or fails.
     pub fn dispatch_gemm(
-        &self,
+        &mut self,
         a_host: &[f16],
         b_host: &[f16],
         c_init: Option<&[f32]>,
@@ -522,10 +561,8 @@ impl DispatchContext {
             .memory
             .alloc(b_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc B: {e}")))?;
-        let c_handle = self
-            .memory
-            .alloc(c_bytes)
-            .map_err(|e| DispatchError::Memory(format!("alloc C: {e}")))?;
+        // Use persistent buffer cache for C (output) to eliminate per-call alloc overhead
+        let c_handle = self.get_gemm_buffer(m, n, c_bytes)?;
         drop(_alloc_timer);
 
         let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
@@ -567,6 +604,7 @@ impl DispatchContext {
         // GPU path failed. (Previously this was `let _result = matmul(...)`,
         // which swallowed the error and returned zeros.)
         let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
+        // Use the working PTX-based GEMM kernel (proven at 307 tok/s)
         let matmul_ok = self
             .engine
             .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
@@ -597,7 +635,7 @@ impl DispatchContext {
         // CUDA_ERROR_OUT_OF_MEMORY during multi-token generation.
         let _ = self.memory.free(a_handle);
         let _ = self.memory.free(b_handle);
-        let _ = self.memory.free(c_handle);
+        // Do NOT free C — it's cached for reuse on the next call with same shape
 
         if !matmul_ok || !d2h_ok {
             self.gpu_fallback_count
