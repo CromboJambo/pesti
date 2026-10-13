@@ -3,12 +3,15 @@
 //! Measures performance of SIMD-optimized CpuAttentionKernel
 //! Usage: cargo run --package pesti-runner --example cpu_attention_bench
 
-use half::f16;
-use pesti_runner::kernel::device_buf::DeviceBuffer;
-use pesti_runner::kernel::{AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel};
-use std::time::Instant;
-
+#[cfg(feature = "cuda")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use half::f16;
+    use pesti_runner::kernel::device_buf::DeviceBuffer;
+    use pesti_runner::kernel::{
+        AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
+    };
+    use std::time::Instant;
+
     println!("=== CPU Attention SIMD Benchmark ===\n");
 
     // Test configs matching the optimization plan
@@ -94,4 +97,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Benchmark Complete ===");
     Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn main() {
+    println!("⚠️  Requires --features cuda");
 }
