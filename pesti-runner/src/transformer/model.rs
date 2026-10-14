@@ -7,15 +7,14 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 
-use candle_core::Tensor;
 use pesti_gguf::types::GgufHeader;
 use tracing::debug;
 
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
-use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
+use crate::kernel::dispatch::DispatchContext;
 use crate::kernel::RawHandle;
-use crate::kernel::linear::{LinearLayer, new_linear_layer};
+use crate::kernel::linear::LinearLayer;
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
 use crate::kernel::{GemmKernel, Kvcache};
@@ -1586,7 +1585,7 @@ impl LlamaModel {
         }
 
         // Output head projection: hidden → logits via GEMM
-        let output = self
+        let _output = self
             .output
             .as_ref()
             .ok_or_else(|| RunnerError::ModelLoad("missing output layer for GPU forward".into()))?;

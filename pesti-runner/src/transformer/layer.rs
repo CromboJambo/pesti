@@ -7,9 +7,8 @@
 //! FFN uses SwiGLU: gate = x @ W1^T, up = x @ W3^T,
 //!   output = (silu(gate) * up) @ W2^T
 
-use crate::kernel::device_buf::DeviceBuffer;
 #[cfg(feature = "cuda")]
-use crate::kernel::rope::{CpuRopeKernel, RopeKernel};
+use crate::kernel::rope::RopeKernel;
 use crate::transformer::kv_cache::LayerKvCache;
 use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;

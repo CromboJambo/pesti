@@ -52,13 +52,12 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
-use crate::kernel::linear::{LinearLayer, new_linear_layer};
+use crate::kernel::linear::LinearLayer;
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
 use crate::kernel::RawHandle;
-use std::sync::Arc;
 
 
 
@@ -1021,7 +1020,7 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        use crate::kernel::linear::{LinearLayer, new_linear_layer};
+        use crate::kernel::linear::new_linear_layer;
         // Convert f16 weights to f32 for the linear layer
         let weight_f32: Vec<f32> = weights_f16.iter().map(|w| (*w).into()).collect();
         let inner = new_linear_layer(weight_f32, bias, in_features, out_features);

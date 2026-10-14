@@ -6,7 +6,6 @@
 //! CPU or GPU.
 
 use crate::error::{Result, RunnerError};
-use std::sync::Arc;
 
 /// Linear layer trait — the unified interface for all linear operations.
 pub trait LinearLayer: Send + Sync {

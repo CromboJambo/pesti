@@ -6,10 +6,7 @@
 use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
-use cudarc::driver::{
-    safe::{CudaContext, CudaStream},
-    sys,
-};
+use cudarc::driver::safe::{CudaContext, CudaStream};
 
 /// Configuration for fused decode attention.
 #[derive(Debug)]

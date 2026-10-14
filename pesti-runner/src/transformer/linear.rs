@@ -12,7 +12,7 @@
 #![allow(clippy::redundant_closure)]
 
 use crate::kernel::device_buf::DeviceBuffer;
-use crate::kernel::{CpuGemmKernel, GemmArch, GemmKernel};
+use crate::kernel::GemmKernel;
 use half::f16;
 use std::sync::Arc;
 
@@ -168,11 +168,10 @@ impl Linear {
 
         // Try GPU GEMM path if kernel is available and weights are on device.
         #[cfg(feature = "cuda")]
-        if let Some(ref gemm) = self.gemm_kernel {
-            if gemm.is_available() && self.gpu_weight.is_some() {
+        if let Some(ref gemm) = self.gemm_kernel
+            && gemm.is_available() && self.gpu_weight.is_some() {
                 return self.forward_gpu(gemm, x, m, k, n);
             }
-        }
 
         // CPU fallback: hand-written matmul with rayon parallelism.
         self.forward_cpu(x, batch_size)

@@ -3,9 +3,6 @@
 //! Uses cudarc's safe API: CudaBlas + Gemm trait with CudaSlice memory management.
 
 use half::f16;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "cuda")]
 use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig};
