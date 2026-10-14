@@ -5,8 +5,7 @@
 //!
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
-pub mod cpu_optimized; // Optimized CPU attention with SIMD and parallelism
-pub mod cpu_optimized_ndarray; // ndarray-based implementation for comparison
+pub mod cpu_optimized; // Optimized CPU attention with parallelism and cache blocking
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
 #[cfg(feature = "cuda")]
