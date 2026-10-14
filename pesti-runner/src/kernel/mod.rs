@@ -14,7 +14,6 @@
 //!   gemm.rs         - GEMM trait, config, types, CPU fallback
 //!   builder.rs      - PTX builder, kernel registration, launch config
 //!   tma_descriptor.rs - Blackwell TMA global cache read descriptor (speculative bit layout)
-//!   tma_bridge.rs   - Bridge to cuda-oxide 128-byte TmaDescriptor + host-side creation
 //!   kvcache.rs      - KV cache with TMA descriptor support
 //!   attention.rs    - Attention kernel trait, config, CPU fallback
 //!   softmax.rs      - Softmax kernel trait, CPU/CUDA implementations
@@ -65,21 +64,17 @@
 //! - KV cache stores K and V in a single contiguous buffer with V offset by head_stride * max_seq
 //! - tcgen05: K must be divisible by 64 (tile constraint), 128-thread blocks, 128x128x16 tiles
 //!
+
 #[cfg(feature = "cuda")]
 pub mod attention;
 #[cfg(not(feature = "cuda"))]
 pub mod attention_stub;
 #[cfg(feature = "cuda")]
 pub mod fused_attention_conformant;
-// Removed: fused_attention_wrapper_conformant (placeholder)
-#[cfg(feature = "cuda")]
-pub mod batched_parallel_attention; // Batch processing + warp-level parallelism (Phase 3)
 #[cfg(feature = "cuda")]
 pub mod builder;
 #[cfg(not(feature = "cuda"))]
 pub mod builder_stub;
-#[cfg(feature = "cuda")]
-pub mod cached_rope; // Cached RoPE frequencies across layers (Phase 4.2)
 pub mod candle_bridge;
 #[cfg(feature = "cuda")]
 pub mod cuda_bridge;
@@ -87,15 +82,9 @@ pub mod device_buf;
 pub mod device_tensor;
 pub mod dispatch;
 #[cfg(feature = "cuda")]
-pub mod flash_attention_v2; // Flash attention with shared memory tiling (Phase 4.1)
-#[cfg(feature = "cuda")]
 pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
-pub mod fused_linear_attention; // QKV + attention + output fusion (Phase 2)
-#[cfg(feature = "cuda")]
 pub mod gemm;
-#[cfg(feature = "cuda")]
-pub mod gemm_cutlass;
 #[cfg(not(feature = "cuda"))]
 pub mod gemm_stub;
 #[cfg(feature = "cuda")]
@@ -110,33 +99,20 @@ pub mod memory_stub;
 #[cfg(feature = "cuda")]
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
-pub mod one_stage_attention; // New: One-stage full fusion kernel integration
-#[cfg(feature = "cuda")]
-pub mod optimized_kvcache; // FP16, paged allocation, pinned memory optimizations
-#[cfg(feature = "cuda")]
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
-pub mod rmsnorm;
 pub mod rope;
 pub mod slow_friend;
 pub mod softmax;
-pub mod swiglu;
 #[cfg(feature = "cuda")]
 pub mod tma_bridge;
 #[cfg(feature = "cuda")]
 pub mod tma_descriptor;
-#[cfg(feature = "cuda")]
-pub mod wgmma_gemm; // WGMMA tensor core GEMM integration (Phase 4.3)
-#[cfg(feature = "cuda")]
-pub mod weight_cache; // GPU weight cache - upload once, reuse across calls
 
 #[cfg(feature = "cuda")]
 pub use attention::{
     AttentionArch, AttentionConfig, AttentionError, AttentionKernel, AttentionSlice,
     CpuAttentionKernel, CudaAttentionKernel, CudaAttentionKernelBuilder,
 };
-
-#[cfg(feature = "flash-attention")]
-pub use flash_attention::{FlashAttentionConfig, FlashAttentionKernel};
 
 #[cfg(not(feature = "cuda"))]
 pub use attention_stub::{
@@ -177,8 +153,6 @@ pub use memory_stub::{CpuMemoryBackend, MemoryBackend, MemoryError, MemoryManage
 #[cfg(feature = "cuda")]
 pub use q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
-pub use rmsnorm::rmsnorm_cpu;
-#[cfg(feature = "cuda")]
 pub use rope::{CpuRopeKernel, CudaRopeKernel, CudaRopeKernelBuilder, RopeKernel, apply_rope_cpu};
 #[cfg(not(feature = "cuda"))]
 pub use rope::{RopeKernel, apply_rope_cpu};
@@ -186,8 +160,6 @@ pub use rope::{RopeKernel, apply_rope_cpu};
 pub use softmax::{
     CpuSoftmaxKernel, SoftmaxError, SoftmaxKernel, SoftmaxKernelBuilder, softmax_cpu,
 };
-#[cfg(feature = "cuda")]
-pub use swiglu::swiglu_cpu;
 #[cfg(feature = "cuda")]
 pub use tma_bridge::HostTmaDescriptor;
 #[cfg(feature = "cuda")]
