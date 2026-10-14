@@ -93,6 +93,8 @@ pub mod kvcache;
 pub mod kvcache_stub;
 pub mod linear;
 #[cfg(feature = "cuda")]
+pub mod weight_cache;
+#[cfg(feature = "cuda")]
 pub mod memory;
 #[cfg(not(feature = "cuda"))]
 pub mod memory_stub;

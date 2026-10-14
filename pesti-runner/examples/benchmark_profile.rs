@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 const MODEL_PATH: &str =
-    "/home/crombo/projects/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const PROMPT: &str = "Write a short story about a robot learning to cook.";
 const NUM_TOKENS: usize = 8;
 

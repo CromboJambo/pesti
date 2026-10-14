@@ -196,14 +196,20 @@ impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        // Upload weights for this forward pass (no persistent caching to avoid OOM)
-        crate::kernel::cuda_bridge::gemm_f16(
+        // Use candle_bridge's cached GEMM — weights are uploaded once and reused.
+        // This eliminates the per-forward-pass H2D weight transfer that was
+        // identified as a major bottleneck in Week 26 profiling.
+        crate::kernel::candle_bridge::gemm(
             &x_f16,
             &self.weight_f16,
+            None,
             batch_size,
-            self.out_features,
             self.in_features,
+            self.out_features,
+            1.0,
+            0.0,
         )
+        .map_err(|e| RunnerError::Kernel(format!("candle_bridge gemm failed: {}", e)))
     }
 
     fn in_features(&self) -> usize {
