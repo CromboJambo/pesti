@@ -1800,6 +1800,8 @@ impl AttentionDispatch {
     /// Phase 1 fused decode attention: single-query (batch=1, seq=1) softmax + weighted sum.
     /// Uses the optimized fused_decode_attention kernel that computes
     /// softmax(q @ K^T / sqrt(d)) @ V in one kernel launch per query head.
+    /// All heads are launched asynchronously; sync happens once at the end.
+    /// GQA optimization: transfer K/V once per KV head, reuse across query heads.
     #[cfg(feature = "cuda")]
     fn forward_gpu_decode_fused(
         &self,
@@ -1817,16 +1819,23 @@ impl AttentionDispatch {
         let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
             .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
 
-        // Process each query head independently (GQA: multiple Q heads per KV head)
-        let mut attn_concat = Vec::with_capacity(self.num_heads);
-        for q_h in 0..self.num_heads {
-            let kv_h = q_h / (self.num_heads / self.num_kv_heads);
+        // Pre-allocate all device buffers and launch all kernels asynchronously.
+        // GQA optimization: transfer K/V once per KV head, not per query head.
+        let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
+        let k_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+        let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+        let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
 
-            // Extract Q row for this head from RoPE'd tensor [head_dim]
-            let q_offset = q_h * self.head_dim;
-            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
+        // Store handles for later cleanup and D2H
+        let mut q_handles = Vec::with_capacity(self.num_heads);
+        let mut out_handles = Vec::with_capacity(self.num_heads);
 
-            // Build expanded K/V tensors for this KV head group: [cache_len, head_dim] f16
+        // GQA: Build expanded K/V tensors once per KV head
+        let heads_per_kv = self.num_heads / self.num_kv_heads;
+        let mut kv_handles: Vec<(RawHandle, RawHandle)> = Vec::with_capacity(self.num_kv_heads);
+
+        for kv_h in 0..self.num_kv_heads {
+            // Build expanded K/V tensors for this KV head: [cache_len, head_dim] f16
             let mut k_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
             let mut v_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
 
@@ -1837,16 +1846,7 @@ impl AttentionDispatch {
                 v_expanded.extend_from_slice(&v_slice);
             }
 
-            // Allocate device buffers for this head
-            let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
-            let k_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
-            let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
-            let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
-
-            let q_handle = ctx
-                .memory
-                .alloc(q_bytes)
-                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
+            // Allocate and transfer K/V once for this KV head
             let k_handle = ctx
                 .memory
                 .alloc(k_bytes)
@@ -1855,18 +1855,6 @@ impl AttentionDispatch {
                 .memory
                 .alloc(v_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
-            let out_handle = ctx
-                .memory
-                .alloc(out_bytes)
-                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
-
-            // Transfer Q (f32 -> f16 on device), K, V to device
-            let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
-            let q_bytes_raw: &[u8] =
-                unsafe { std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes) };
-            ctx.memory
-                .h2d(q_bytes_raw, q_handle)
-                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
 
             let k_bytes_raw: &[u8] =
                 unsafe { std::slice::from_raw_parts(k_expanded.as_ptr() as *const u8, k_bytes) };
@@ -1880,41 +1868,85 @@ impl AttentionDispatch {
                 .h2d(v_bytes_raw, v_handle)
                 .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
 
-            // Launch fused decode attention kernel for this head
-            if let Some(ref kernel) = self.fused_decode_kernel {
+            kv_handles.push((k_handle, v_handle));
+        }
+
+        // Phase 1: Allocate Q buffers and transfer Q data for all query heads
+        for q_h in 0..self.num_heads {
+            // Extract Q row for this head from RoPE'd tensor [head_dim]
+            let q_offset = q_h * self.head_dim;
+            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
+
+            // Allocate device buffer for Q and output
+            let q_handle = ctx
+                .memory
+                .alloc(q_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
+            let out_handle = ctx
+                .memory
+                .alloc(out_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
+
+            // Transfer Q (f32 -> f16 on device) to device
+            let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
+            let q_bytes_raw: &[u8] =
+                unsafe { std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes) };
+            ctx.memory
+                .h2d(q_bytes_raw, q_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
+
+            q_handles.push(q_handle);
+            out_handles.push(out_handle);
+        }
+
+        // Phase 2: Launch all kernels asynchronously (no sync between heads)
+        if let Some(ref kernel) = self.fused_decode_kernel {
+            for q_h in 0..self.num_heads {
+                let kv_h = q_h / heads_per_kv;
+                let (k_handle, v_handle) = &kv_handles[kv_h];
+
                 kernel
                     .launch(
-                        q_handle.as_ptr() as u64,
+                        q_handles[q_h].as_ptr() as u64,
                         k_handle.as_ptr() as u64,
                         v_handle.as_ptr() as u64,
                         scale,
                         cache_len,
                         self.head_dim,
-                        out_handle.as_ptr() as u64,
+                        out_handles[q_h].as_ptr() as u64,
                     )
                     .map_err(|e| DispatchError::Kernel(format!("fused decode kernel: {e}")))?;
             }
+        }
 
-            // Synchronize and read back result for this head
-            ctx.memory
-                .sync()
-                .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+        // Phase 3: Sync once after all kernels complete
+        ctx.memory
+            .sync()
+            .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
 
+        // Phase 4: Read back all results
+        let mut attn_concat = Vec::with_capacity(self.num_heads);
+        for q_h in 0..self.num_heads {
             let mut out_f32 = vec![0.0f32; self.head_dim];
             let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
             ctx.memory
-                .d2h(out_handle, unsafe {
+                .d2h(out_handles[q_h], unsafe {
                     std::slice::from_raw_parts_mut(out_ptr, out_bytes)
                 })
                 .map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
+            attn_concat.push(out_f32);
+        }
 
-            // Free device buffers for this head
-            let _ = ctx.memory.free(q_handle);
+        // Free all device buffers
+        for handle in q_handles {
+            let _ = ctx.memory.free(handle);
+        }
+        for (k_handle, v_handle) in kv_handles {
             let _ = ctx.memory.free(k_handle);
             let _ = ctx.memory.free(v_handle);
-            let _ = ctx.memory.free(out_handle);
-
-            attn_concat.push(out_f32);
+        }
+        for handle in out_handles {
+            let _ = ctx.memory.free(handle);
         }
 
         // Flatten all heads back to [num_heads * head_dim]
