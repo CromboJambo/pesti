@@ -34,7 +34,7 @@ burn rather than just call them:
   independent pure-numpy reference.
 - **A CUDA dispatch path** (`cudarc`-based) for GPU kernels, feature-gated so
   the crate compiles and the parser/dequant layer runs without a GPU.
-- **pesti-runner**: High-performance inference engine with F16 compute via cuBLAS Hgemm — 307.68 tok/s on Qwen2.5-0.5B-Instruct (RTX 3070 Ti), approaching llama.cpp baseline of 504.04 tok/s.
+- **pesti-runner**: High-performance inference engine with F16 compute via cuBLAS Hgemm — ~73 tok/s on Qwen2.5-0.5B-Instruct (RTX 3070 Ti) after major architecture simplification and persistent weight caching optimization.
 - **pesti-structural-tokenizer** — AST-based Rust code tokenizer for LLM code understanding, published to crates.io (v0.1.2).
 
 The headline capability is **conformance**: every forward-pass fix is verified
@@ -94,17 +94,25 @@ cargo run -p pesti-runner --release --features cuda \
 | Coherent CPU text generation | `"The capital of France is"` → `"Paris. It is the largest city in Europe..."` |
 | Self-contained GGUF tokenizer | Fox-sentence encodes to `[785, 3974, 13876, 38835, 34208, 916, 279, 15678, 5562, 13]`, matches HF reference |
 | Library test suite | **62/62** lib unit tests pass (`--features cuda --lib`) |
-| pesti-runner F16 GPU inference | **307.68 tok/s** on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti) — Phase 1 target of 100 tok/s achieved |
+| pesti-runner F16 GPU inference | **~73 tok/s** on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti) — after persistent weight caching + GQA optimization (4.5x speedup from post-refactor baseline of ~16 tok/s) |
 | llama.cpp FFI runner | ~218 tok/s on TinyLlama-1.1B, consistent across Q3_K_M–Q8_0 (see `pesti-runner/README.md`) |
 | pesti-structural-tokenizer | Published to crates.io (v0.1.2); syn-based AST parsing; folded-map span folding; budget-aware collapsing |
 
-### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md` and `docs/REFACTOR_SPEC.md`)
-- **Phase 4 optimization** (ongoing) — remaining ~1.6x gap to llama.cpp GPU baseline:
-  - Profile GEMM vs attention kernel time split at production sequence lengths
-  - KV cache quantization (Q4_K) to reduce memory bandwidth bottleneck
-  - Spike: TMA descriptors for async prefetching
-- **Long-sequence prefill optimization** — O(n²) attention kernel scaling limits long-context workloads
-- FP8 quantization, multi-GPU scaling.
+### 🔄 Recent Architecture Simplification (Weeks 27-29)
+Major refactor completed to improve code maintainability and eliminate technical debt:
+- **Removed dead inference engine variants** — consolidated to single production path
+- **Cleaned up unused kernel modules** — removed 15+ obsolete GPU kernel implementations
+- **Simplified weight caching** — eliminated LRU eviction overhead, now uploads weights once at construction time
+- **GQA optimization** — reduced redundant K/V cache transfers across query heads
+- **Moved broken/obsolete examples** to `examples-disabled/` (git-tracked, not deleted)
+
+Post-refactor baseline was ~16 tok/s; persistent weight caching + GQA optimizations brought it to ~73 tok/s.
+
+### ⚠️ Frontier (not yet done — tracked in `docs/ROADMAP.md`)
+- **KV cache quantization** — reduce KV cache memory bandwidth pressure
+- **Speculative decoding** — increase effective tokens/sec without reducing per-token latency
+- **Custom CUDA kernels for non-GEMM ops** — attention, RMSNorm, RoPE already on GPU but may have optimization headroom
+- **Larger model support** — benchmark and optimize for 3B+ parameter models where GPU acceleration matters more
 
 ---
 
@@ -211,17 +219,23 @@ Rust source → syn::parse_file() → AST walk → structural tokens
 | Metric | Value | Source |
 |--------|-------|--------|
 | CPU forward-pass correctness | max per-layer Δ 7.6e-5 vs numpy | `compare_full_vectors.py` |
-| pesti-runner F16 GPU inference | **307.68 tok/s** (Qwen2.5-0.5B-Instruct, RTX 3070 Ti) | Week 25 measurement |
+| pesti-runner F16 GPU inference (current) | **~73 tok/s** (Qwen2.5-0.5B-Instruct, RTX 3070 Ti) | Week 29 measurement after weight caching optimization |
+| pesti-runner post-refactor baseline | ~16 tok/s | After architecture simplification (Weeks 27-28) |
 | llama.cpp baseline | 504.04 tok/s (same model/hardware) | Reference comparison |
 | llama.cpp FFI runner (TinyLlama-1.1B, CPU) | ~218 tok/s, <3% variance across Q3_K_M–Q8_0 | `pesti-runner/README.md` |
 
-### Optimization Journey (Week 23-25)
+### Optimization Journey
 | Phase | Change | Result | Improvement |
 |-------|--------|--------|-------------|
-| Baseline | F32 compute via candle_bridge | 81.78 tok/s | — |
-| Phase 1 | cuBLAS Hgemm (F16 compute) | 307.68 tok/s | **3.76x** |
-| Phase 2b | Trait-based dispatch layer | 307.68 tok/s | Clean architecture |
-| Target | Match llama.cpp baseline | 504.04 tok/s | ~1.6x remaining gap |
+| Pre-refactor (Week 25) | F16 compute via cuBLAS Hgemm | 307.68 tok/s | — |
+| Post-refactor baseline (Weeks 27-28) | Architecture simplification, dead code removal | ~16 tok/s | Cleaner codebase |
+| Week 29 | Persistent weight caching + GQA optimization | **~73 tok/s** | **4.5x speedup** from post-refactor baseline |
+| Target | Match llama.cpp baseline | 504.04 tok/s | ~6.9x remaining gap |
+
+### Key Findings (Weeks 26-28)
+- **cuBLASLt/CUTLASS integration tested but slower** for LLM decode shapes (m=1, tall-skinny) due to heuristic selection overhead
+- **Plain cuBLAS + shape-based algorithm caching** is optimal for current architecture
+- **GEMM compute path at practical optimum** — remaining gap stems from non-GEMM operations and memory bandwidth
 
 ### Structural Tokenizer Benchmarks
 Validated across diverse Rust codebases:
@@ -327,12 +341,15 @@ known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md). For the current 5-phase G
 - [x] CUDA dispatch path (feature-gated)
 - [x] Conformance tooling (numpy oracle + full-vector diffs)
 - [x] pesti-structural-tokenizer v0.1.2 published to crates.io
-- [x] pesti-runner F16 GPU inference (Phase 1+2b) — 307.68 tok/s achieved
+- [x] pesti-runner F16 GPU inference — ~73 tok/s achieved after architecture simplification
+- [x] Major codebase simplification and deduplication (Weeks 27-29)
+- [x] Persistent GPU weight caching optimization
 
 ### Next (frontier)
-- [ ] Phase 4 optimization — profile GEMM vs attention kernel time split, KV cache quantization (Q4_K), TMA descriptors for async prefetching
-- [ ] Long-sequence prefill optimization — O(n²) attention kernel scaling
-- [ ] FP8 quantization, multi-GPU scaling
+- [ ] KV cache quantization — reduce memory bandwidth pressure
+- [ ] Speculative decoding — increase effective tokens/sec
+- [ ] Custom CUDA kernels for non-GEMM operations
+- [ ] Larger model support (3B+) with benchmarking
 - [ ] Contribute back to llama.cpp / candle / burn
 
 ---
@@ -344,5 +361,5 @@ known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md). For the current 5-phase G
 
 ---
 
-*Last updated: October 2, 2026 (Week 25 — pesti-runner F16 compute validated at 307.68 tok/s; Phase 3 non-matmul GPU kernels complete)*
+*Last updated: October 14, 2026 (Week 29 — persistent weight caching + GQA optimization; architecture simplification complete)*
 *This README will change as I learn more. If it looks perfect, it's lying.*

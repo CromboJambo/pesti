@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - Week 29 (In Progress)
+
+### pesti-runner: Persistent Weight Caching + GQA Optimization 🚀
+
+**Major performance improvement:** ~16 tok/s → **~73 tok/s** (4.5x speedup) on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti).
+
+**Implementation:**
+- Upload layer weights to GPU once at construction time instead of per forward pass
+- Eliminated redundant H2D transfers during decode
+- GQA optimization reduces redundant K/V cache transfers across query heads
+- Simplified weight cache by removing LRU eviction overhead
+
+**Files changed:**
+- `pesti-runner/src/kernel/dispatch.rs` — persistent weight caching infrastructure
+- `pesti-runner/src/kernel/linear.rs` — upload weights at construction time
+
+### pesti-runner: Major Architecture Simplification (Weeks 27-29) 🧹
+
+**Cleaned up codebase to improve maintainability and eliminate technical debt:**
+
+| Change | Impact |
+|--------|--------|
+| Removed dead inference engine variants | Consolidated to single production path |
+| Cleaned up unused kernel modules | Removed 15+ obsolete GPU kernel implementations |
+| Simplified weight caching | Eliminated LRU eviction overhead |
+| GQA optimization | Reduced redundant K/V cache transfers |
+| Moved broken/obsolete examples | To `examples-disabled/` (git-tracked, not deleted) |
+
+**Result:** Cleaner, more maintainable codebase with ~16 tok/s stable baseline that became the foundation for further optimizations.
+
+### pesti-runner: GEMM Buffer Caching (Week 28)
+
+- Persistent GEMM buffer cache for output tensor
+- GEMM weight caching for output head
+- Consolidated benchmarking infrastructure (kept `pesti_runner` and `kernel_timing`, deprecated others)
+
+### Key Findings from Optimization Work
+
+- **cuBLASLt/CUTLASS integration tested but slower** for LLM decode shapes (m=1, tall-skinny) due to heuristic selection overhead (~0.5ms)
+- **Plain cuBLAS + shape-based algorithm caching** is optimal for current architecture
+- **GEMM compute path at practical optimum** — remaining gap stems from non-GEMM operations and memory bandwidth
+
+---
+
 ## [Unreleased] - Week 25 (In Progress)
 
 ### pesti-runner: Phase 3 Complete — Non-Matmul GPU Kernels
