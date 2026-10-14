@@ -37,7 +37,15 @@ struct WeightCache {
     tensors: HashMap<CacheKey, Tensor>,
 }
 
-#[derive(Debug)]
+impl WeightCache {
+    fn new() -> Self {
+        Self {
+            tensors: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct CacheKey {
     ptr: usize,
     len: usize,
@@ -61,7 +69,7 @@ impl Eq for CacheKey {}
 static WEIGHT_CACHE: OnceLock<Mutex<WeightCache>> = OnceLock::new();
 
 fn weight_cache() -> &'static Mutex<WeightCache> {
-    WEIGHT_CACHE.get_or_init(|| Mutex::new(WeightCache { tensors: HashMap::new() }))
+    WEIGHT_CACHE.get_or_init(|| Mutex::new(WeightCache::new()))
 }
 
 /// Get or create cached GPU tensor for a weight buffer.
