@@ -11,7 +11,7 @@ name = "pesti"
 path = "src/main.rs"
 
 [dependencies]
-pesti-runner = { path = "../pesti-runner" }
+pesti-runner = { path = "../pesti-runner", features = ["cuda"] }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

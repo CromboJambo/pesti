@@ -206,7 +206,6 @@ impl Model {
                 capture_per_layer: None,
                 dispatch_layers: None,
                 output_weight_t_gpu: None,
-                output_weight_t_f16: None,
                 q4k_kvcache: None,
             },
             #[cfg(not(feature = "cuda"))]

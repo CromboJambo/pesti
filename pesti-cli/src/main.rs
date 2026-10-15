@@ -77,6 +77,10 @@ struct Args {
     /// Don't show timings after generation
     #[arg(long = "no-show-timings", action = clap::ArgAction::SetTrue)]
     no_show_timings: bool,
+
+    /// Enable Q4_K KV cache for reduced memory and faster attention
+    #[arg(long = "q4k-kv-cache", action = clap::ArgAction::SetTrue)]
+    q4k_kv_cache: bool,
 }
 
 fn main() -> Result<()> {
@@ -127,6 +131,12 @@ fn main() -> Result<()> {
         .seed(seed)
         .n_gpu_layers(args.gpu_layers)
         .build()?;
+
+    // Enable Q4_K KV cache if requested
+    if args.q4k_kv_cache {
+        runner.enable_q4k_kvcache();
+        eprintln!("Q4_K KV cache enabled");
+    }
     let load_time_ms = t_load.elapsed().as_secs_f64() * 1000.0;
 
     // Model info

@@ -19,7 +19,9 @@ fn main() {
     println!("Loading model from {}", model_path);
     let t_load = Instant::now();
     let weights = load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
+    println!("Building dispatch layers...");
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
+    println!("Dispatch layers built, CUDA available: {}", model.dispatch.is_some());
 
     // Load tokenizer separately (GGUF models don't auto-attach)
     let (_tokenizer_config, tokenizer) = load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)

@@ -52,14 +52,12 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
-use crate::kernel::linear::LinearLayer;
+use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
-use crate::kernel::RawHandle;
-
-
+use std::sync::Arc;
 
 use candle_core::{DType, Device, Tensor};
 use half::f16;
@@ -123,12 +121,6 @@ impl From<RunnerError> for DispatchError {
 /// `MemoryManager` for buffer allocation. Provides high-level dispatch
 /// methods that handle buffer allocation, data transfer, kernel invocation,
 /// and CPU fallback automatically.
-/// Cached device buffer for GEMM operations, reused across calls with the same shape.
-struct GemmBufferCache {
-    handle: RawHandle,
-    bytes: usize,
-}
-
 pub struct DispatchContext {
     /// The inference engine with its GEMM and attention kernels.
     engine: InferenceEngine,
@@ -147,9 +139,6 @@ pub struct DispatchContext {
     /// Direct CUDA cuBLAS bridge for true F16 inference (Phase 1 of F16 spec).
     #[cfg(feature = "cuda")]
     cuda_bridge: Option<CudaBridge>,
-    /// Persistent buffer cache: shape key -> cached buffer. Eliminates per-call
-    /// allocation overhead during decode steps.
-    gemm_buffer_cache: std::sync::Mutex<std::collections::HashMap<(usize, usize), GemmBufferCache>>,
 }
 
 impl DispatchContext {
@@ -197,7 +186,6 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
-            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -268,7 +256,6 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
-            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -302,7 +289,6 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
-            gemm_buffer_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -337,24 +323,6 @@ impl DispatchContext {
         self.engine.gpu_available()
     }
 
-    /// Get or allocate a cached GEMM buffer for the given shape.
-    fn get_gemm_buffer(&self, m: usize, n: usize, bytes: usize) -> Result<RawHandle, DispatchError> {
-        let key = (m, n);
-        let cache = self.gemm_buffer_cache.lock().unwrap();
-        if let Some(cached) = cache.get(&key) {
-            return Ok(cached.handle);
-        }
-        drop(cache);
-
-        let handle = self
-            .memory
-            .alloc(bytes)
-            .map_err(|e| DispatchError::Memory(format!("GEMM buffer alloc for {}x{}: {}", m, n, e)))?;
-
-        self.gemm_buffer_cache.lock().unwrap().insert(key, GemmBufferCache { handle, bytes });
-        Ok(handle)
-    }
-
     /// Whether the direct CUDA cuBLAS bridge for F16 inference is available.
     #[cfg(feature = "cuda")]
     pub fn cuda_bridge_available(&self) -> bool {
@@ -383,150 +351,19 @@ impl DispatchContext {
 
     // ── Core dispatch: GEMM ──────────────────────────────────────────────
 
-    /// Upload a weight matrix to the device once and return a handle for reuse.
-    /// Caller is responsible for calling `free_weight_buffer` when done.
-    pub fn upload_weights(&self, weights: &[f16]) -> Result<RawHandle, DispatchError> {
-        let bytes = std::mem::size_of_val(weights);
-        let handle = self
-            .memory
-            .alloc(bytes)
-            .map_err(|e| DispatchError::Memory(format!("weight alloc: {e}")))?;
-        let raw: &[u8] = unsafe { std::slice::from_raw_parts(weights.as_ptr() as *const u8, bytes) };
-        self.memory
-            .h2d(raw, handle)
-            .map_err(|e| DispatchError::Transfer(format!("weight H2D: {e}")))?;
-        Ok(handle)
-    }
-
-    /// Free a previously uploaded weight buffer.
-    pub fn free_weight_buffer(&self, handle: RawHandle) {
-        let _ = self.memory.free(handle);
-    }
-
-    /// GEMM with pre-uploaded weights (persistent device buffer).
-    /// A is still transferred per-call; B is expected to already be on the device.
-    pub fn dispatch_gemm_with_cached_weights(
-        &self,
-        a_host: &[f16],
-        b_handle: RawHandle,
-        c_init: Option<&[f32]>,
-        m: usize,
-        n: usize,
-        k: usize,
-        alpha: f32,
-        beta: f32,
-    ) -> Result<Vec<f32>, DispatchError> {
-        use crate::profiler;
-
-        let c_len = m * n;
-        if !self.prefer_gpu || !self.gpu_available() {
-            debug!(m, n, k, "GEMM (cached weights): GPU not available, using CPU");
-            return self.dispatch_gemm_cpu(a_host, &[], c_init, m, n, k, alpha, beta);
-        }
-
-        let a_bytes = std::mem::size_of_val(a_host);
-        let c_bytes = c_len * std::mem::size_of::<f32>();
-
-        let _alloc_timer = profiler::time(profiler::KernelCategory::Alloc);
-        let a_handle = self
-            .memory
-            .alloc(a_bytes)
-            .map_err(|e| DispatchError::Memory(format!("alloc A: {e}")))?;
-        // Use persistent buffer cache for C (output) to eliminate per-call alloc overhead
-        let c_handle = self.get_gemm_buffer(m, n, c_bytes)?;
-        drop(_alloc_timer);
-
-        let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
-        let mut c_buf = DeviceBuffer::<f32>::from_backend(c_handle, c_len);
-
-        // Only transfer A (input) — B is already on device via b_handle
-        let a_bytes_raw: &[u8] =
-            unsafe { std::slice::from_raw_parts(a_host.as_ptr() as *const u8, a_bytes) };
-        let _h2d_timer = profiler::time(profiler::KernelCategory::H2DTransfer);
-        self.memory
-            .h2d(a_bytes_raw, a_handle)
-            .map_err(|e| DispatchError::Transfer(format!("H2D A: {e}")))?;
-        drop(_h2d_timer);
-
-        if let Some(c_init_data) = c_init {
-            let c_init_bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    c_init_data.as_ptr() as *const u8,
-                    std::mem::size_of_val(c_init_data),
-                )
-            };
-            self.memory
-                .h2d(c_init_bytes, c_handle)
-                .map_err(|e| DispatchError::Transfer(format!("H2D C init: {e}")))?;
-        }
-
-        // Reconstruct b_buf from handle (no data transfer needed)
-        let b_len = k * n;
-        let b_buf = DeviceBuffer::<f16>::from_backend(b_handle, b_len);
-
-        let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
-        // Use the working PTX-based GEMM kernel (proven at 307 tok/s)
-        let matmul_ok = self
-            .engine
-            .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
-            .is_ok();
-        drop(_gemm_timer);
-
-        let mut c_host = vec![0.0f32; c_len];
-        let mut d2h_ok = false;
-        if matmul_ok {
-            let c_bytes_out: &mut [u8] =
-                unsafe { std::slice::from_raw_parts_mut(c_host.as_mut_ptr() as *mut u8, c_bytes) };
-            let _d2h_timer = profiler::time(profiler::KernelCategory::D2HTransfer);
-            d2h_ok = self.memory.d2h(c_handle, c_bytes_out).is_ok();
-            drop(_d2h_timer);
-
-            if d2h_ok {
-                let _sync_timer = profiler::time(profiler::KernelCategory::Sync);
-                if self.memory.sync().is_err() {
-                    d2h_ok = false;
-                }
-                drop(_sync_timer);
-            }
-        }
-
-        // Only free A — B (weights) stays on device for reuse, C is cached by shape
-        let _ = self.memory.free(a_handle);
-        // Do NOT free C — it's cached for reuse on the next call with same shape
-
-        if !matmul_ok || !d2h_ok {
-            self.gpu_fallback_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("GEMM (cached weights): GPU path failed, falling back to CPU");
-            // Transfer weights back from device for CPU fallback
-            let b_bytes = k * n * 2;
-            let mut b_host = vec![0u8; b_bytes];
-            if self.memory.d2h(b_handle, &mut b_host).is_err() {
-                return Err(DispatchError::Transfer("D2H weights for CPU fallback".to_string()));
-            }
-            let b_f16: Vec<f16> = b_host
-                .chunks_exact(2)
-                .map(|chunk| f16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])))
-                .collect();
-            return self.dispatch_gemm_cpu(a_host, &b_f16, c_init, m, n, k, alpha, beta);
-        }
-
-        Ok(c_host)
-    }
-
     /// Dispatch a GEMM operation: C = alpha * A @ B + beta * C.
     ///
     /// A: [m x k] f16, B: [k x n] f16, C: [m x n] f32
     ///
     /// If GPU is preferred and available:
-    ///   1. Allocate device buffers for A, B, C (C cached by shape)
+    ///   1. Allocate device buffers for A, B, C
     ///   2. Transfer A and B to device
     ///   3. Launch GPU GEMM kernel
     ///   4. Transfer result C back to host
     ///
     /// Falls back to CPU if GPU is unavailable or fails.
     pub fn dispatch_gemm(
-        &mut self,
+        &self,
         a_host: &[f16],
         b_host: &[f16],
         c_init: Option<&[f32]>,
@@ -560,8 +397,10 @@ impl DispatchContext {
             .memory
             .alloc(b_bytes)
             .map_err(|e| DispatchError::Memory(format!("alloc B: {e}")))?;
-        // Use persistent buffer cache for C (output) to eliminate per-call alloc overhead
-        let c_handle = self.get_gemm_buffer(m, n, c_bytes)?;
+        let c_handle = self
+            .memory
+            .alloc(c_bytes)
+            .map_err(|e| DispatchError::Memory(format!("alloc C: {e}")))?;
         drop(_alloc_timer);
 
         let a_buf = DeviceBuffer::<f16>::from_backend(a_handle, a_host.len());
@@ -603,7 +442,6 @@ impl DispatchContext {
         // GPU path failed. (Previously this was `let _result = matmul(...)`,
         // which swallowed the error and returned zeros.)
         let _gemm_timer = profiler::time(profiler::KernelCategory::Gemm);
-        // Use the working PTX-based GEMM kernel (proven at 307 tok/s)
         let matmul_ok = self
             .engine
             .matmul(alpha, &a_buf, &b_buf, beta, &mut c_buf, m, n, k)
@@ -634,7 +472,7 @@ impl DispatchContext {
         // CUDA_ERROR_OUT_OF_MEMORY during multi-token generation.
         let _ = self.memory.free(a_handle);
         let _ = self.memory.free(b_handle);
-        // Do NOT free C — it's cached for reuse on the next call with same shape
+        let _ = self.memory.free(c_handle);
 
         if !matmul_ok || !d2h_ok {
             self.gpu_fallback_count
@@ -1020,7 +858,7 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        use crate::kernel::linear::new_linear_layer;
+        use crate::kernel::linear::{LinearLayer, new_linear_layer};
         // Convert f16 weights to f32 for the linear layer
         let weight_f32: Vec<f32> = weights_f16.iter().map(|w| (*w).into()).collect();
         let inner = new_linear_layer(weight_f32, bias, in_features, out_features);
@@ -1800,8 +1638,6 @@ impl AttentionDispatch {
     /// Phase 1 fused decode attention: single-query (batch=1, seq=1) softmax + weighted sum.
     /// Uses the optimized fused_decode_attention kernel that computes
     /// softmax(q @ K^T / sqrt(d)) @ V in one kernel launch per query head.
-    /// All heads are launched asynchronously; sync happens once at the end.
-    /// GQA optimization: transfer K/V once per KV head, reuse across query heads.
     #[cfg(feature = "cuda")]
     fn forward_gpu_decode_fused(
         &self,
@@ -1819,23 +1655,16 @@ impl AttentionDispatch {
         let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
             .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
 
-        // Pre-allocate all device buffers and launch all kernels asynchronously.
-        // GQA optimization: transfer K/V once per KV head, not per query head.
-        let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
-        let k_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
-        let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
-        let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
+        // Process each query head independently (GQA: multiple Q heads per KV head)
+        let mut attn_concat = Vec::with_capacity(self.num_heads);
+        for q_h in 0..self.num_heads {
+            let kv_h = q_h / (self.num_heads / self.num_kv_heads);
 
-        // Store handles for later cleanup and D2H
-        let mut q_handles = Vec::with_capacity(self.num_heads);
-        let mut out_handles = Vec::with_capacity(self.num_heads);
+            // Extract Q row for this head from RoPE'd tensor [head_dim]
+            let q_offset = q_h * self.head_dim;
+            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
 
-        // GQA: Build expanded K/V tensors once per KV head
-        let heads_per_kv = self.num_heads / self.num_kv_heads;
-        let mut kv_handles: Vec<(RawHandle, RawHandle)> = Vec::with_capacity(self.num_kv_heads);
-
-        for kv_h in 0..self.num_kv_heads {
-            // Build expanded K/V tensors for this KV head: [cache_len, head_dim] f16
+            // Build expanded K/V tensors for this KV head group: [cache_len, head_dim] f16
             let mut k_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
             let mut v_expanded: Vec<half::f16> = Vec::with_capacity(cache_len * self.head_dim);
 
@@ -1846,7 +1675,16 @@ impl AttentionDispatch {
                 v_expanded.extend_from_slice(&v_slice);
             }
 
-            // Allocate and transfer K/V once for this KV head
+            // Allocate device buffers for this head
+            let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
+            let k_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+            let v_bytes = std::mem::size_of::<half::f16>() * cache_len * self.head_dim;
+            let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
+
+            let q_handle = ctx
+                .memory
+                .alloc(q_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
             let k_handle = ctx
                 .memory
                 .alloc(k_bytes)
@@ -1855,6 +1693,18 @@ impl AttentionDispatch {
                 .memory
                 .alloc(v_bytes)
                 .map_err(|e| DispatchError::Memory(format!("alloc v: {e}")))?;
+            let out_handle = ctx
+                .memory
+                .alloc(out_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
+
+            // Transfer Q (f32 -> f16 on device), K, V to device
+            let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
+            let q_bytes_raw: &[u8] =
+                unsafe { std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes) };
+            ctx.memory
+                .h2d(q_bytes_raw, q_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
 
             let k_bytes_raw: &[u8] =
                 unsafe { std::slice::from_raw_parts(k_expanded.as_ptr() as *const u8, k_bytes) };
@@ -1868,85 +1718,41 @@ impl AttentionDispatch {
                 .h2d(v_bytes_raw, v_handle)
                 .map_err(|e| DispatchError::Transfer(format!("H2D v: {e}")))?;
 
-            kv_handles.push((k_handle, v_handle));
-        }
-
-        // Phase 1: Allocate Q buffers and transfer Q data for all query heads
-        for q_h in 0..self.num_heads {
-            // Extract Q row for this head from RoPE'd tensor [head_dim]
-            let q_offset = q_h * self.head_dim;
-            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
-
-            // Allocate device buffer for Q and output
-            let q_handle = ctx
-                .memory
-                .alloc(q_bytes)
-                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
-            let out_handle = ctx
-                .memory
-                .alloc(out_bytes)
-                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
-
-            // Transfer Q (f32 -> f16 on device) to device
-            let q_f16: Vec<half::f16> = q_row.iter().map(|&x| half::f16::from_f32(x)).collect();
-            let q_bytes_raw: &[u8] =
-                unsafe { std::slice::from_raw_parts(q_f16.as_ptr() as *const u8, q_bytes) };
-            ctx.memory
-                .h2d(q_bytes_raw, q_handle)
-                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
-
-            q_handles.push(q_handle);
-            out_handles.push(out_handle);
-        }
-
-        // Phase 2: Launch all kernels asynchronously (no sync between heads)
-        if let Some(ref kernel) = self.fused_decode_kernel {
-            for q_h in 0..self.num_heads {
-                let kv_h = q_h / heads_per_kv;
-                let (k_handle, v_handle) = &kv_handles[kv_h];
-
+            // Launch fused decode attention kernel for this head
+            if let Some(ref kernel) = self.fused_decode_kernel {
                 kernel
                     .launch(
-                        q_handles[q_h].as_ptr() as u64,
+                        q_handle.as_ptr() as u64,
                         k_handle.as_ptr() as u64,
                         v_handle.as_ptr() as u64,
                         scale,
                         cache_len,
                         self.head_dim,
-                        out_handles[q_h].as_ptr() as u64,
+                        out_handle.as_ptr() as u64,
                     )
                     .map_err(|e| DispatchError::Kernel(format!("fused decode kernel: {e}")))?;
             }
-        }
 
-        // Phase 3: Sync once after all kernels complete
-        ctx.memory
-            .sync()
-            .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+            // Synchronize and read back result for this head
+            ctx.memory
+                .sync()
+                .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
 
-        // Phase 4: Read back all results
-        let mut attn_concat = Vec::with_capacity(self.num_heads);
-        for q_h in 0..self.num_heads {
             let mut out_f32 = vec![0.0f32; self.head_dim];
             let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
             ctx.memory
-                .d2h(out_handles[q_h], unsafe {
+                .d2h(out_handle, unsafe {
                     std::slice::from_raw_parts_mut(out_ptr, out_bytes)
                 })
                 .map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
-            attn_concat.push(out_f32);
-        }
 
-        // Free all device buffers
-        for handle in q_handles {
-            let _ = ctx.memory.free(handle);
-        }
-        for (k_handle, v_handle) in kv_handles {
+            // Free device buffers for this head
+            let _ = ctx.memory.free(q_handle);
             let _ = ctx.memory.free(k_handle);
             let _ = ctx.memory.free(v_handle);
-        }
-        for handle in out_handles {
-            let _ = ctx.memory.free(handle);
+            let _ = ctx.memory.free(out_handle);
+
+            attn_concat.push(out_f32);
         }
 
         // Flatten all heads back to [num_heads * head_dim]

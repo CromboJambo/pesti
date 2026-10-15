@@ -6,6 +6,7 @@
 //! CPU or GPU.
 
 use crate::error::{Result, RunnerError};
+use std::sync::Arc;
 
 /// Linear layer trait — the unified interface for all linear operations.
 pub trait LinearLayer: Send + Sync {
@@ -164,11 +165,11 @@ impl LinearLayer for CpuLinearLayer {
     }
 }
 
-/// GPU implementation using cudarc's cublasLt API with persistent weight caching.
+/// GPU implementation using cudarc's cublasLt API with lazy weight caching.
 #[cfg(feature = "cuda")]
 pub struct GpuLinearLayer {
-    /// Persistent device buffer for weights (uploaded once at construction).
-    w_dev: Option<cudarc::driver::CudaSlice<half::f16>>,
+    weight_f16: Vec<half::f16>,
+    weight_dev: std::sync::Mutex<Option<cudarc::driver::CudaSlice<half::f16>>>,
     bias: Option<Vec<f32>>,
     in_features: usize,
     out_features: usize,
@@ -183,45 +184,37 @@ impl GpuLinearLayer {
         out_features: usize,
     ) -> Self {
         let weight_f16: Vec<half::f16> = weight.iter().map(|&v| half::f16::from_f32(v)).collect();
-
-        // Upload weights to GPU once at construction time for persistent caching.
-        // This eliminates the per-forward-pass H2D weight transfer that was
-        // identified as a major bottleneck in Week 26 profiling.
-        let w_dev = match crate::kernel::cuda_bridge::upload_weights_to_gpu(&weight_f16) {
-            Ok(dev) => Some(dev),
-            Err(e) => {
-                tracing::warn!("Failed to upload weights to GPU, falling back to per-pass upload: {}", e);
-                None
-            }
-        };
-
+        drop(weight);
         Self {
-            w_dev,
+            weight_f16,
+            weight_dev: std::sync::Mutex::new(None),
             bias,
             in_features,
             out_features,
         }
+    }
+
+    fn get_or_upload_weights(&self) -> Result<cudarc::driver::CudaSlice<half::f16>> {
+        let mut guard = self.weight_dev.lock().unwrap();
+        if let Some(w) = guard.as_ref() {
+            // Clone the Arc to return ownership
+            return Ok(w.clone());
+        }
+        let w_dev = crate::kernel::cuda_bridge::upload_weights_to_gpu(&self.weight_f16)?;
+        *guard = Some(w_dev);
+        Ok(guard.as_ref().unwrap().clone())
     }
 }
 
 #[cfg(feature = "cuda")]
 impl LinearLayer for GpuLinearLayer {
     fn forward(&self, x: &[f32], batch_size: usize) -> Result<Vec<f32>> {
+        let w_dev = self.get_or_upload_weights()?;
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
-        if let Some(ref w_dev) = self.w_dev {
-            // Use persistent device weights (uploaded once at construction).
-            crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
-                &x_f16,
-                w_dev,
-                batch_size,
-                self.out_features,
-                self.in_features,
-            )
-        } else {
-            // Fallback: upload weights per pass (should be rare)
-            Err(RunnerError::Kernel("GPU linear layer has no device weights".to_string()))
-        }
+        crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
+            &x_f16, &w_dev, batch_size, self.out_features, self.in_features,
+        )
     }
 
     fn in_features(&self) -> usize {
@@ -233,12 +226,13 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn upload_weights_to_gpu(&mut self) -> Result<()> {
-        // Already uploaded at construction time
+        // Lazy upload happens on first forward pass, nothing to do here
         Ok(())
     }
 
     fn weights_on_gpu(&self) -> bool {
-        true
+        let guard = self.weight_dev.lock().unwrap();
+        guard.is_some()
     }
 
     fn layer_name(&self) -> &str {
@@ -246,23 +240,19 @@ impl LinearLayer for GpuLinearLayer {
     }
 
     fn clone_layer(&self) -> Box<dyn LinearLayer> {
-        // Clone by converting device weights back to host F32, then reconstructing.
-        // This is expensive but correct for model cloning scenarios.
-        let w_host = match &self.w_dev {
-            Some(dev) => {
-                let stream = crate::kernel::cuda_bridge::get_stream();
-                let mut host_buf = vec![half::f16::from_f32(0.0); dev.len()];
-                stream.memcpy_dtoh(dev, &mut host_buf).expect("D2H copy failed during clone");
-                host_buf.iter().map(|v| v.to_f32()).collect::<Vec<f32>>()
-            }
-            None => vec![],
-        };
         Box::new(GpuLinearLayer::from_f32(
-            w_host,
+            self.weight_f16.iter().map(|v| v.to_f32()).collect(),
             self.bias.clone(),
             self.in_features,
             self.out_features,
         ))
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for GpuLinearLayer {
+    fn drop(&mut self) {
+        // weight_dev is freed automatically when CudaSlice drops
     }
 }
 
