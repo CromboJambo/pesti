@@ -28,13 +28,25 @@ jobs:
       - name: Install Rust toolchain (nightly for cuda-oxide)
         uses: dtolnay/rust-toolchain@nightly
       
+      - name: Install system dependencies (CUDA toolkit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg2
+          curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb | sudo dpkg -i
+          sudo apt-get update
+          sudo apt-get install -y cuda-toolkit-12-6
+          export PATH=/usr/local/cuda-12.6/bin:$PATH
+          echo "CUDA path: $(which nvcc)"
+      
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "release"
       
       - name: Verify build with nightly
-        run: cargo check --workspace
+        run: |
+          export PATH=/usr/local/cuda-12.6/bin:$PATH
+          cargo check --workspace
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
