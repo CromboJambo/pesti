@@ -34,7 +34,7 @@ pub struct ErrorAnalyzer {
     current_fn_returns_result: bool,
     
     /// Stack of "error expected" contexts
-    error_handled_depth: u32,
+    _error_handled_depth: u32,
     
     pub annotations: HashMap<usize, ErrorAnnotation>,
 }
@@ -44,7 +44,7 @@ impl ErrorAnalyzer {
         Self {
             current_fn_returns_option: false,
             current_fn_returns_result: false,
-            error_handled_depth: 0,
+            _error_handled_depth: 0,
             annotations: HashMap::new(),
         }
     }
@@ -71,7 +71,7 @@ impl ErrorAnalyzer {
     }
 
     /// Analyze entire function for error handling patterns
-    pub fn analyze_function(&mut self, func_name: &str, return_type: &str, body: &str) {
+    pub fn analyze_function(&mut self, _func_name: &str, return_type: &str, body: &str) {
         let fn_node_id = 0; // Simplified
         
         self.set_return_type(return_type);
