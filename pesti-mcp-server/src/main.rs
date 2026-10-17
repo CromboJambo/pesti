@@ -107,7 +107,8 @@ async fn main() -> anyhow::Result<()> {
     let server = PestiMcpServer;
 
     eprintln!("PESTI MCP Server starting...");
-    rmcp::serve_server(server, (tokio::io::stdin(), tokio::io::stdout())).await?;
+    let running = rmcp::serve_server(server, (tokio::io::stdin(), tokio::io::stdout())).await?;
+    running.waiting().await?;
 
     Ok(())
 }
