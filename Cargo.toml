@@ -9,7 +9,7 @@ members = [
     "pesti-mcp-server",
     "pesti-server",
     "pesti-cli",
-    "pesti-studio",
+    "pesti-studio", "pesti-embeddings",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"
