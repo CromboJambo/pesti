@@ -1,10 +1,11 @@
 //! Embedding model runner using PESTI's transformer primitives.
 
 use anyhow::{anyhow, Result};
-use pesti_runner::gguf_weight_loader::load_gguf_weights;
+use pesti_runner::transformer::model::LlamaModel;
 use pesti_runner::transformer::tokenizer::{
     load_tokenizer_from_gguf, PestiTokenizer, TokenizerBackend,
 };
+use pesti_runner::load_gguf_weights;
 use std::path::Path;
 
 use crate::pooling::{pool, PoolingStrategy};
@@ -40,6 +41,7 @@ impl Default for EmbeddingConfig {
 pub struct Embedder {
     config: EmbeddingConfig,
     tokenizer: PestiTokenizer,
+    model: LlamaModel,
     embed_dim: usize,
 }
 
@@ -55,23 +57,30 @@ impl Embedder {
 
     /// Load an embedding model with custom configuration.
     pub fn load_with_config(config: &EmbeddingConfig) -> Result<Self> {
-        // Load GGUF weights to extract architecture info
-        let weights = load_gguf_weights(Path::new(&config.model_path))?;
-
-        // Extract embedding dimension from tensor shape
-        let (embed_dim, _) = weights.tensor_shape("token_embd.weight");
-        if embed_dim == 0 {
-            return Err(anyhow!("Failed to determine embedding dimension"));
-        }
+        // Load GGUF weights
+        let weights = load_gguf_weights(Path::new(&config.model_path)).map_err(|e| {
+            anyhow!(
+                "Failed to load GGUF weights from '{}': {}",
+                config.model_path,
+                e
+            )
+        })?;
 
         // Load tokenizer using pesti-runner's infrastructure
         let (_tokenizer_config, tokenizer) =
             load_tokenizer_from_gguf(Path::new(&config.model_path), TokenizerBackend::MistralRs)
                 .map_err(|e| anyhow!("Failed to load tokenizer: {}", e))?;
 
+        // Build model from weights
+        let model = LlamaModel::from_gguf_weights(weights)
+            .map_err(|e| anyhow!("Failed to build model from GGUF weights: {}", e))?;
+
+        let embed_dim = model.config.embed_dim;
+
         Ok(Self {
             config: config.clone(),
             tokenizer,
+            model,
             embed_dim,
         })
     }
@@ -93,11 +102,75 @@ impl Embedder {
             return Err(anyhow!("Empty token sequence"));
         }
 
-        // Run forward pass through transformer layers
-        let hidden_states = self.forward(&truncated)?;
+        // Embed each token using the model's learned token embeddings
+        let seq_len = truncated.len();
+        let mut hidden_states = Vec::with_capacity(seq_len * self.embed_dim);
+        for (pos, &token_id) in truncated.iter().enumerate() {
+            let embedding = self
+                .model
+                .embed(token_id, pos)
+                .map_err(|e| anyhow!("Failed to embed token {}: {}", token_id, e))?;
+            hidden_states.extend(embedding);
+        }
+
+        // Pass through all transformer layers with correct sequence length.
+        let mut output = hidden_states;
+        for layer in self.model.layers.iter() {
+            // Attention sub-layer: x + attn(RMSNorm(x))
+            // Attention handles multi-token sequences correctly via seq_len parameter
+            let normed = layer.attention_norm.forward(&output, seq_len);
+            let attn_out = layer.attention.forward(&normed, 1, seq_len, 0);
+
+            // Residual: x + attn_out
+            let mut h = vec![0.0f32; output.len()];
+            for j in 0..output.len().min(attn_out.len()) {
+                h[j] = output[j] + attn_out[j];
+            }
+
+            // FFN sub-layer: h + ffn(RMSNorm(h))
+            // Workaround: pesti-runner's swiglu_cpu only handles one row at a time,
+            // so we process each token position individually through the FFN.
+            let normed_ffn = layer.ffn_norm.forward(&h, seq_len);
+            let mut ffn_out = vec![0.0f32; h.len()];
+            for pos in 0..seq_len {
+                let row_start = pos * self.embed_dim;
+                let row_end = row_start + self.embed_dim;
+                let normed_row = &normed_ffn[row_start..row_end];
+                let ffn_row = layer.feed_forward.forward(normed_row, 1);
+                for j in 0..self.embed_dim {
+                    ffn_out[row_start + j] = ffn_row[j];
+                }
+            }
+
+            // Residual: h + ffn_out
+            for j in 0..h.len().min(ffn_out.len()) {
+                h[j] += ffn_out[j];
+            }
+
+            output = h;
+        }
+
+        // Reshape to [seq_len, embed_dim] for pooling
+        let mut token_embeddings = Vec::with_capacity(seq_len);
+        for i in 0..seq_len {
+            let row_start = i * self.embed_dim;
+            let row_end = row_start + self.embed_dim;
+            if row_end > output.len() {
+                return Err(anyhow!(
+                    "Output too short: expected {} elements, got {}",
+                    seq_len * self.embed_dim,
+                    output.len()
+                ));
+            }
+            let mut row = Vec::with_capacity(self.embed_dim);
+            for j in row_start..row_end {
+                row.push(output[j]);
+            }
+            token_embeddings.push(row);
+        }
 
         // Apply pooling strategy
-        let pooled = pool(&hidden_states, self.config.pooling);
+        let pooled = pool(&token_embeddings, self.config.pooling);
 
         // Optionally normalize
         if self.config.normalize {
@@ -114,28 +187,6 @@ impl Embedder {
             embeddings.push(self.embed(text)?);
         }
         Ok(embeddings)
-    }
-
-    /// Forward pass through transformer layers.
-    ///
-    /// Returns sequence of hidden states (one per token).
-    fn forward(&self, token_ids: &[u32]) -> Result<Vec<Vec<f32>>> {
-        // TODO: Implement actual transformer forward pass using pesti-runner primitives
-        // For now, return placeholder embeddings for testing
-
-        let seq_len = token_ids.len();
-        let mut hidden_states = Vec::with_capacity(seq_len);
-
-        for &token_id in token_ids {
-            // Placeholder: use token ID to generate deterministic but fake embedding
-            let mut emb = vec![0.0f32; self.embed_dim];
-            for i in 0..self.embed_dim {
-                emb[i] = ((token_id as f32) + (i as f32)) * 0.01;
-            }
-            hidden_states.push(emb);
-        }
-
-        Ok(hidden_states)
     }
 
     /// Get embedding dimension.
