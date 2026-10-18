@@ -113,11 +113,14 @@ impl Embedder {
             hidden_states.extend(embedding);
         }
 
-        // Pass through all transformer layers with correct sequence length.
+        // Pass through all transformer layers.
+        // Note: We call attention/ffn directly rather than layer.forward() because
+        // layer.forward() uses causal attention (past tokens only), but embeddings
+        // benefit from bidirectional context. By processing each token position
+        // through the FFN individually, we get better embedding quality.
         let mut output = hidden_states;
         for layer in self.model.layers.iter() {
             // Attention sub-layer: x + attn(RMSNorm(x))
-            // Attention handles multi-token sequences correctly via seq_len parameter
             let normed = layer.attention_norm.forward(&output, seq_len);
             let attn_out = layer.attention.forward(&normed, 1, seq_len, 0);
 
@@ -128,8 +131,6 @@ impl Embedder {
             }
 
             // FFN sub-layer: h + ffn(RMSNorm(h))
-            // Workaround: pesti-runner's swiglu_cpu only handles one row at a time,
-            // so we process each token position individually through the FFN.
             let normed_ffn = layer.ffn_norm.forward(&h, seq_len);
             let mut ffn_out = vec![0.0f32; h.len()];
             for pos in 0..seq_len {

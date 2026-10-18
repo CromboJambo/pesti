@@ -309,7 +309,7 @@ impl FeedForward {
         let up = self.w3.forward(x, batch_size);
 
         // CPU SwiGLU for now (GPU kernel available in kernel/swiglu.rs)
-        let swiglu_out = swiglu_cpu(&gate, &up, self.intermediate_dim);
+        let swiglu_out = swiglu_cpu(&gate, &up, batch_size * self.intermediate_dim);
         self.w2.forward(&swiglu_out, batch_size)
     }
 }
@@ -348,22 +348,22 @@ impl TransformerLayer {
         seq_len: usize,
         start_pos: usize,
     ) -> Vec<f32> {
-        let embed_dim = x.len() / batch_size;
+        let embed_dim = x.len() / (batch_size * seq_len);
 
         // Attention sub-layer: x + attn(RMSNorm(x))
-        let normed = self.attention_norm.forward(x, batch_size);
+        let normed = self.attention_norm.forward(x, batch_size * seq_len);
         let attn_out = self
             .attention
             .forward(&normed, batch_size, seq_len, start_pos);
 
         // Residual: x + attn_out
-        let mut h = vec![0.0f32; batch_size * embed_dim];
+        let mut h = vec![0.0f32; batch_size * seq_len * embed_dim];
         for i in 0..h.len().min(x.len()).min(attn_out.len()) {
             h[i] = x[i] + attn_out[i];
         }
 
         // FFN sub-layer: h + ffn(RMSNorm(h))
-        let normed_ffn = self.ffn_norm.forward(&h, batch_size);
+        let normed_ffn = self.ffn_norm.forward(&h, batch_size * seq_len);
         let ffn_out = self.feed_forward.forward(&normed_ffn, batch_size);
 
         // Residual: h + ffn_out
