@@ -30,6 +30,7 @@ pub mod memory_pool; // Pre-allocated device memory pool for efficiency
 pub mod model;
 pub mod model_loader;
 pub mod model_manager;
+pub mod model_router; // JEV-powered model routing
 pub mod peft; // Parameter-efficient fine-tuning adapters (LoRA, QLoRA)
 pub mod plug_in;
 pub mod profiler;

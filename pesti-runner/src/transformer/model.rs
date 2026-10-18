@@ -14,6 +14,8 @@ use tracing::debug;
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
+#[cfg(feature = "cuda")]
+use crate::kernel::rope::CudaRopeKernel;
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
@@ -603,6 +605,8 @@ impl LlamaModel {
             fused_kernel: None, // Set later via set_fused_kernel() after CUDA init
             #[cfg(feature = "cuda")]
             fused_decode_kernel: None, // Set later via set_fused_decode_kernel() after CUDA init
+            #[cfg(feature = "cuda")]
+            rope_kernel: None, // Set later via set_rope_kernel() after CUDA init
         };
 
         let w1 = crate::kernel::dispatch::LinearDispatch::new(
@@ -1737,6 +1741,17 @@ impl LlamaModel {
     pub fn upload_weights_to_gpu(&mut self) {
         // Weight uploads are handled internally by LinearLayer trait objects
         // at construction time in build_layer_dispatch(). No per-layer calls needed.
+    }
+
+    /// Set the CUDA rope kernel on all layers for optimized RoPE computation.
+    /// Call this after loading the model and before the first forward pass.
+    #[cfg(feature = "cuda")]
+    pub fn set_rope_kernel(&mut self, kernel: std::sync::Arc<CudaRopeKernel>) {
+        if let Some(dispatch_layers) = &mut self.dispatch_layers {
+            for layer_dispatch in dispatch_layers {
+                layer_dispatch.attention.set_rope_kernel(kernel.clone());
+            }
+        }
     }
 
     /// Generate tokens autoregressively with GPU acceleration support.

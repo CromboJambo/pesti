@@ -32,12 +32,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(stream.clone()),
             ) {
                 for layer in &mut model.layers {
-                    layer.attention.set_fused_kernel(kernel);
+                    layer.attention.set_fused_kernel(kernel.clone());
                 }
                 println!(
                     "Fused attention kernel enabled on all {} layers",
                     model.config.num_layers
                 );
+                
+                // Set up rope kernel for optimized RoPE computation
+                if let Ok(rope_kernel) = pesti_runner::kernel::rope::CudaRopeKernel::new(&ctx) {
+                    let rope_kernel = std::sync::Arc::new(rope_kernel);
+                    for layer in &mut model.layers {
+                        layer.attention.set_rope_kernel(rope_kernel.clone());
+                    }
+                    println!(
+                        "RoPE kernel enabled on all {} layers",
+                        model.config.num_layers
+                    );
+                } else {
+                    println!("Failed to build RoPE kernel");
+                }
             } else {
                 println!("Failed to build fused attention kernel");
             }

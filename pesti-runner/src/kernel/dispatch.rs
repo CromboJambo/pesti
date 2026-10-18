@@ -52,6 +52,8 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
+#[cfg(feature = "cuda")]
+use crate::kernel::rope::CudaRopeKernel;
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
@@ -935,6 +937,9 @@ pub struct AttentionDispatch {
     #[cfg(feature = "cuda")]
     pub fused_decode_kernel:
         Option<crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel>,
+    /// Pre-compiled CUDA rope kernel for GPU acceleration (set after construction).
+    #[cfg(feature = "cuda")]
+    pub rope_kernel: Option<Arc<CudaRopeKernel>>,
 }
 
 impl AttentionDispatch {
@@ -969,6 +974,8 @@ impl AttentionDispatch {
             fused_kernel,
             #[cfg(feature = "cuda")]
             fused_decode_kernel,
+            #[cfg(feature = "cuda")]
+            rope_kernel: None,
         }
     }
 
@@ -988,6 +995,12 @@ impl AttentionDispatch {
         kernel: crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel,
     ) {
         self.fused_decode_kernel = Some(kernel);
+    }
+
+    /// Set the pre-compiled CUDA rope kernel for GPU acceleration.
+    #[cfg(feature = "cuda")]
+    pub fn set_rope_kernel(&mut self, kernel: Arc<CudaRopeKernel>) {
+        self.rope_kernel = Some(kernel);
     }
 
     /// Check if fused attention kernel is available.
@@ -1232,8 +1245,8 @@ impl AttentionDispatch {
     // ── GPU-accelerated helpers ────────────────────────────────────────
 
     /// Apply RoPE to Q [1, seq_len, num_heads, head_dim] and K
-    /// [1, seq_len, num_kv_heads, head_dim] for global positions
-    /// start_pos..start_pos+seq_len (Qwen2.5 interleaved pairing).
+    /// Apply RoPE using pesti's own CUDA kernel instead of candle tensor ops.
+    /// This avoids runtime PTX compilation on older GPUs (e.g., RTX 3070 Ti).
     fn rope_tensors(
         &self,
         q: &Tensor,
@@ -1241,132 +1254,202 @@ impl AttentionDispatch {
         seq_len: usize,
         start_pos: usize,
     ) -> Result<(Tensor, Tensor), DispatchError> {
-        let hd = self.head_dim;
-        let half = hd / 2;
-        let (cos, sin) = candle_bridge::rope_embeddings(seq_len, hd, self.rope_base, start_pos)
-            .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
+        #[cfg(feature = "cuda")]
+        {
+            // Use pesti's rope kernel for GPU path
+            let head_dim = self.head_dim;
 
-        // rope_embeddings returns [seq_len, half] in f32. Match q/k dtype.
-        let dt = q.dtype();
-        let cos = cos
-            .to_dtype(dt)
-            .map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
-        let sin = sin
-            .to_dtype(dt)
-            .map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
+            // Convert tensors to f32 flat arrays
+            let q_f32 = candle_bridge::tensor_to_f32_flat(q)
+                .map_err(|e| DispatchError::Kernel(format!("q tensor to f32: {e}")))?;
+            let k_f32 = candle_bridge::tensor_to_f32_flat(k)
+                .map_err(|e| DispatchError::Kernel(format!("k tensor to f32: {e}")))?;
 
-        // q/k layout is [batch, seq_len, heads, head_dim]. After chunking on last dim,
-        // we get [batch, seq_len, heads, half]. cos/sin are [seq_len, half] — need to
-        // broadcast to match. Use expand instead of relying on implicit broadcasting.
-        let q_chunks = q
-            .chunk(2, q.dims().len() - 1)
-            .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
-        let k_chunks = k
-            .chunk(2, k.dims().len() - 1)
-            .map_err(|e| DispatchError::Kernel(format!("k chunk: {e}")))?;
-        let q0 = q_chunks[0].clone();
-        let q1 = q_chunks[1].clone();
-        let k0 = k_chunks[0].clone();
-        let k1 = k_chunks[1].clone();
+            // Use cached rope kernel if available, otherwise build it
+            use crate::kernel::rope::{CudaRopeKernelBuilder, CudaRopeKernel};
+            let rope_kernel = match &self.rope_kernel {
+                Some(k) => Arc::clone(k),
+                None => {
+                    // Build from fused kernel's context/stream as fallback
+                    let fused = self.fused_kernel.as_ref().ok_or_else(|| {
+                        DispatchError::Kernel("fused attention kernel not initialized".into())
+                    })?;
 
-        // Expand cos/sin from [seq, half] to match Q shape [batch, seq, heads, half]
-        let q_shape = q.dims();
-        let batch_q = q_shape[0];
-        let seq_q = q_shape[1];
-        let heads_q = q_shape[2];
+                    let built = CudaRopeKernelBuilder::new(
+                        Arc::clone(fused.context()),
+                        Arc::clone(fused.stream()),
+                    )
+                    .build()
+                    .map_err(|e| DispatchError::Kernel(format!("rope kernel build: {e}")))?;
+                    Arc::new(built)
+                }
+            };
 
-        // cos/sin: [seq, half] -> unsqueeze(0) -> [1, seq, half]
-        let cos_q = cos
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
-        // Expand to [batch, seq, half]
-        let cos_q = cos_q
-            .expand(&[batch_q, seq_q, half])
-            .map_err(|e| DispatchError::Kernel(format!("cos expand q batch/seq: {e}")))?;
-        // Unsqueeze for heads dim: [batch, seq, 1, half]
-        let cos_q = cos_q
-            .unsqueeze(2)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q heads: {e}")))?;
-        // Expand to match all heads: [batch, seq, heads, half]
-        let cos_q = cos_q
-            .expand(&[batch_q, seq_q, heads_q, half])
-            .map_err(|e| DispatchError::Kernel(format!("cos expand q heads: {e}")))?;
+            // Allocate device buffers for Q and K using cuda_shim directly
+            // Allocate device buffers from host data
+            use crate::kernel::device_buf::DeviceBuffer;
+            let mut q_buf = DeviceBuffer::from_host(q_f32);
+            let mut k_buf = DeviceBuffer::from_host(k_f32);
 
-        let sin_q = sin
-            .clone()
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
-        let sin_q = sin_q
-            .expand(&[batch_q, seq_q, half])
-            .map_err(|e| DispatchError::Kernel(format!("sin expand q batch/seq: {e}")))?;
-        let sin_q = sin_q
-            .unsqueeze(2)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q heads: {e}")))?;
-        let sin_q = sin_q
-            .expand(&[batch_q, seq_q, heads_q, half])
-            .map_err(|e| DispatchError::Kernel(format!("sin expand q heads: {e}")))?;
+            // Apply RoPE kernel in-place on GPU
+            rope_kernel.apply_gpu(
+                &mut q_buf,
+                &mut k_buf,
+                self.num_heads,
+                seq_len,
+                start_pos,
+                head_dim,
+                self.rope_base,
+            ).map_err(|e| DispatchError::Kernel(format!("rope kernel apply: {e}")))?;
 
-        // Same for K (different head count)
-        let k_shape = k.dims();
-        let batch_k = k_shape[0];
-        let seq_k = k_shape[1];
-        let heads_k = k_shape[2];
+            // Copy results back to host
+            let q_out_f32 = q_buf.to_host();
+            let k_out_f32 = k_buf.to_host();
 
-        let cos_k = cos
-            .clone()
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
-        let cos_k = cos_k
-            .expand(&[batch_k, seq_k, half])
-            .map_err(|e| DispatchError::Kernel(format!("cos expand k batch/seq: {e}")))?;
-        let cos_k = cos_k
-            .unsqueeze(2)
-            .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k heads: {e}")))?;
-        let cos_k = cos_k
-            .expand(&[batch_k, seq_k, heads_k, half])
-            .map_err(|e| DispatchError::Kernel(format!("cos expand k heads: {e}")))?;
+            // Convert back to tensors using f16 intermediate (avoids f32 tensor creation)
+            let q_f16: Vec<f16> = q_out_f32.iter().map(|&v| f16::from_f32(v)).collect();
+            let k_f16: Vec<f16> = k_out_f32.iter().map(|&v| f16::from_f32(v)).collect();
 
-        let sin_k = sin
-            .clone()
-            .unsqueeze(0)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
-        let sin_k = sin_k
-            .expand(&[batch_k, seq_k, half])
-            .map_err(|e| DispatchError::Kernel(format!("sin expand k batch/seq: {e}")))?;
-        let sin_k = sin_k
-            .unsqueeze(2)
-            .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k heads: {e}")))?;
-        let sin_k = sin_k
-            .expand(&[batch_k, seq_k, heads_k, half])
-            .map_err(|e| DispatchError::Kernel(format!("sin expand k heads: {e}")))?;
+            let q_shape = q.dims();
+            let k_shape = k.dims();
+            let q_out = candle_bridge::f16_to_tensor(&q_f16, &q_shape, None)
+                .map_err(|e| DispatchError::Kernel(format!("q tensor from f16: {e}")))?;
+            let k_out = candle_bridge::f16_to_tensor(&k_f16, &k_shape, None)
+                .map_err(|e| DispatchError::Kernel(format!("k tensor from f16: {e}")))?;
 
-        // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
-        let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
-        let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
-        let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
-        let q1c =
-            (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
-        let q0s =
-            (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
-        let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
+            Ok((q_out, k_out))
+        }
 
-        // Apply RoPE to K
-        let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
-        let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
-        let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
-        let k1c =
-            (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
-        let k0s =
-            (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
-        let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
+        #[cfg(not(feature = "cuda"))]
+        {
+            // CPU fallback using candle tensor operations
+            let hd = self.head_dim;
+            let half = hd / 2;
+            let (cos, sin) = candle_bridge::rope_embeddings(seq_len, hd, self.rope_base, start_pos)
+                .map_err(|e| DispatchError::Kernel(format!("rope_embeddings: {e}")))?;
 
-        let last_dim = q.dims().len() - 1;
-        let q_out = Tensor::cat(&[&qr0, &qr1], last_dim)
-            .map_err(|e| DispatchError::Kernel(format!("rope cat q: {e}")))?;
-        let k_out = Tensor::cat(&[&kr0, &kr1], last_dim)
-            .map_err(|e| DispatchError::Kernel(format!("rope cat k: {e}")))?;
+            // rope_embeddings returns [seq_len, half] in f32. Match q/k dtype.
+            let dt = q.dtype();
+            let cos = cos
+                .to_dtype(dt)
+                .map_err(|e| DispatchError::Kernel(format!("cos cast: {e}")))?;
+            let sin = sin
+                .to_dtype(dt)
+                .map_err(|e| DispatchError::Kernel(format!("sin cast: {e}")))?;
 
-        Ok((q_out, k_out))
+            // q/k layout is [batch, seq_len, heads, head_dim]. After chunking on last dim,
+            // we get [batch, seq_len, heads, half]. cos/sin are [seq_len, half] — need to
+            // broadcast to match. Use expand instead of relying on implicit broadcasting.
+            let q_chunks = q
+                .chunk(2, q.dims().len() - 1)
+                .map_err(|e| DispatchError::Kernel(format!("q chunk: {e}")))?;
+            let k_chunks = k
+                .chunk(2, k.dims().len() - 1)
+                .map_err(|e| DispatchError::Kernel(format!("k chunk: {e}")))?;
+            let q0 = q_chunks[0].clone();
+            let q1 = q_chunks[1].clone();
+            let k0 = k_chunks[0].clone();
+            let k1 = k_chunks[1].clone();
+
+            // Expand cos/sin from [seq, half] to match Q shape [batch, seq, heads, half]
+            let q_shape = q.dims();
+            let batch_q = q_shape[0];
+            let seq_q = q_shape[1];
+            let heads_q = q_shape[2];
+
+            // cos/sin: [seq, half] -> unsqueeze(0) -> [1, seq, half]
+            let cos_q = cos
+                .unsqueeze(0)
+                .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q: {e}")))?;
+            // Expand to [batch, seq, half]
+            let cos_q = cos_q
+                .expand(&[batch_q, seq_q, half])
+                .map_err(|e| DispatchError::Kernel(format!("cos expand q batch/seq: {e}")))?;
+            // Unsqueeze for heads dim: [batch, seq, 1, half]
+            let cos_q = cos_q
+                .unsqueeze(2)
+                .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze q heads: {e}")))?;
+            // Expand to match all heads: [batch, seq, heads, half]
+            let cos_q = cos_q
+                .expand(&[batch_q, seq_q, heads_q, half])
+                .map_err(|e| DispatchError::Kernel(format!("cos expand q heads: {e}")))?;
+
+            let sin_q = sin
+                .clone()
+                .unsqueeze(0)
+                .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q: {e}")))?;
+            let sin_q = sin_q
+                .expand(&[batch_q, seq_q, half])
+                .map_err(|e| DispatchError::Kernel(format!("sin expand q batch/seq: {e}")))?;
+            let sin_q = sin_q
+                .unsqueeze(2)
+                .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze q heads: {e}")))?;
+            let sin_q = sin_q
+                .expand(&[batch_q, seq_q, heads_q, half])
+                .map_err(|e| DispatchError::Kernel(format!("sin expand q heads: {e}")))?;
+
+            // Same for K (different head count)
+            let k_shape = k.dims();
+            let batch_k = k_shape[0];
+            let seq_k = k_shape[1];
+            let heads_k = k_shape[2];
+
+            let cos_k = cos
+                .clone()
+                .unsqueeze(0)
+                .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k: {e}")))?;
+            let cos_k = cos_k
+                .expand(&[batch_k, seq_k, half])
+                .map_err(|e| DispatchError::Kernel(format!("cos expand k batch/seq: {e}")))?;
+            let cos_k = cos_k
+                .unsqueeze(2)
+                .map_err(|e| DispatchError::Kernel(format!("cos unsqueeze k heads: {e}")))?;
+            let cos_k = cos_k
+                .expand(&[batch_k, seq_k, heads_k, half])
+                .map_err(|e| DispatchError::Kernel(format!("cos expand k heads: {e}")))?;
+
+            let sin_k = sin
+                .clone()
+                .unsqueeze(0)
+                .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k: {e}")))?;
+            let sin_k = sin_k
+                .expand(&[batch_k, seq_k, half])
+                .map_err(|e| DispatchError::Kernel(format!("sin expand k batch/seq: {e}")))?;
+            let sin_k = sin_k
+                .unsqueeze(2)
+                .map_err(|e| DispatchError::Kernel(format!("sin unsqueeze k heads: {e}")))?;
+            let sin_k = sin_k
+                .expand(&[batch_k, seq_k, heads_k, half])
+                .map_err(|e| DispatchError::Kernel(format!("sin expand k heads: {e}")))?;
+
+            // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
+            let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
+            let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
+            let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
+            let q1c =
+                (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
+            let q0s =
+                (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
+            let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
+
+            // Apply RoPE to K
+            let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
+            let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
+            let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
+            let k1c =
+                (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
+            let k0s =
+                (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
+            let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
+
+            let last_dim = q.dims().len() - 1;
+            let q_out = Tensor::cat(&[&qr0, &qr1], last_dim)
+                .map_err(|e| DispatchError::Kernel(format!("rope cat q: {e}")))?;
+            let k_out = Tensor::cat(&[&kr0, &kr1], last_dim)
+                .map_err(|e| DispatchError::Kernel(format!("rope cat k: {e}")))?;
+
+            Ok((q_out, k_out))
+        }
     }
 
     /// GPU-accelerated full attention path: RoPE + KV write + SDPA via
