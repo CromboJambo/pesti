@@ -113,42 +113,12 @@ impl Embedder {
             hidden_states.extend(embedding);
         }
 
-        // Pass through all transformer layers.
-        // Note: We call attention/ffn directly rather than layer.forward() because
-        // layer.forward() uses causal attention (past tokens only), but embeddings
-        // benefit from bidirectional context. By processing each token position
-        // through the FFN individually, we get better embedding quality.
+        // Pass through all transformer layers using layer.forward().
+        // pesti-runner's attention is already full (non-causal) attention,
+        // which is correct for embedding models that need bidirectional context.
         let mut output = hidden_states;
         for layer in self.model.layers.iter() {
-            // Attention sub-layer: x + attn(RMSNorm(x))
-            let normed = layer.attention_norm.forward(&output, seq_len);
-            let attn_out = layer.attention.forward(&normed, 1, seq_len, 0);
-
-            // Residual: x + attn_out
-            let mut h = vec![0.0f32; output.len()];
-            for j in 0..output.len().min(attn_out.len()) {
-                h[j] = output[j] + attn_out[j];
-            }
-
-            // FFN sub-layer: h + ffn(RMSNorm(h))
-            let normed_ffn = layer.ffn_norm.forward(&h, seq_len);
-            let mut ffn_out = vec![0.0f32; h.len()];
-            for pos in 0..seq_len {
-                let row_start = pos * self.embed_dim;
-                let row_end = row_start + self.embed_dim;
-                let normed_row = &normed_ffn[row_start..row_end];
-                let ffn_row = layer.feed_forward.forward(normed_row, 1);
-                for j in 0..self.embed_dim {
-                    ffn_out[row_start + j] = ffn_row[j];
-                }
-            }
-
-            // Residual: h + ffn_out
-            for j in 0..h.len().min(ffn_out.len()) {
-                h[j] += ffn_out[j];
-            }
-
-            output = h;
+            output = layer.forward(&output, 1, seq_len, 0);
         }
 
         // Reshape to [seq_len, embed_dim] for pooling
