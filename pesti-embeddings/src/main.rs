@@ -61,6 +61,7 @@ fn main() -> Result<()> {
         } => {
             let config = pesti_embeddings::EmbeddingConfig {
                 model_path: model,
+                tokenizer_path: None,
                 pooling: match pooling.as_str() {
                     "mean" => PoolingStrategy::Mean,
                     "first" => PoolingStrategy::First,

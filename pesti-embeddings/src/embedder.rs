@@ -1,11 +1,11 @@
 //! Embedding model runner using PESTI's transformer primitives.
 
 use anyhow::{anyhow, Result};
+use pesti_runner::load_gguf_weights;
 use pesti_runner::transformer::model::LlamaModel;
 use pesti_runner::transformer::tokenizer::{
     load_tokenizer_from_gguf, PestiTokenizer, TokenizerBackend,
 };
-use pesti_runner::load_gguf_weights;
 use std::path::Path;
 
 use crate::pooling::{pool, PoolingStrategy};
@@ -16,6 +16,8 @@ use crate::similarity::l2_normalize_owned;
 pub struct EmbeddingConfig {
     /// Path to GGUF or tokenizer files
     pub model_path: String,
+    /// Optional path to tokenizer.json (for models without BPE merges in GGUF)
+    pub tokenizer_path: Option<String>,
     /// Pooling strategy (default: Mean)
     pub pooling: PoolingStrategy,
     /// Whether to L2-normalize output embeddings
@@ -28,6 +30,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model_path: String::new(),
+            tokenizer_path: None,
             pooling: PoolingStrategy::Mean,
             normalize: true,
             max_seq_len: 512,
@@ -66,10 +69,50 @@ impl Embedder {
             )
         })?;
 
-        // Load tokenizer using pesti-runner's infrastructure
-        let (_tokenizer_config, tokenizer) =
-            load_tokenizer_from_gguf(Path::new(&config.model_path), TokenizerBackend::MistralRs)
-                .map_err(|e| anyhow!("Failed to load tokenizer: {}", e))?;
+        // Load tokenizer — try GGUF-embedded first, fall back to tokenizer.json
+        let tokenizer = if let Some(ref tok_path) = config.tokenizer_path {
+            // Use explicit tokenizer path
+            let (_, tok) = pesti_runner::safetensors_tokenizer::load_tokenizer_from_safetensors(
+                Path::new(tok_path),
+            )
+            .map_err(|e| anyhow!("Failed to load tokenizer from '{}': {}", tok_path, e))?;
+            PestiTokenizer::MistralRs(tok)
+        } else {
+            // Try GGUF-embedded tokenizer (requires BPE merges)
+            match load_tokenizer_from_gguf(Path::new(&config.model_path), TokenizerBackend::MistralRs)
+            {
+                Ok((_, tok)) => tok,
+                Err(e) => {
+                    // Fall back to looking for tokenizer.json in model directory
+                    let model_dir = Path::new(&config.model_path)
+                        .parent()
+                        .ok_or_else(|| anyhow!("Model path has no parent directory"))?;
+                    let tok_json = model_dir.join("tokenizer.json");
+                    if tok_json.exists() {
+                        eprintln!(
+                            "GGUF tokenizer failed ({}) — loading from {}",
+                            e,
+                            tok_json.display()
+                        );
+                        let (_, tok) = pesti_runner::safetensors_tokenizer
+                            ::load_tokenizer_from_safetensors(&tok_json)
+                            .map_err(|e| {
+                                anyhow!(
+                                    "Failed to load tokenizer from '{}': {}",
+                                    tok_json.display(),
+                                    e
+                                )
+                            })?;
+                        PestiTokenizer::MistralRs(tok)
+                    } else {
+                        return Err(anyhow!(
+                            "Failed to load tokenizer: {} (no tokenizer.json found in model directory)",
+                            e
+                        ));
+                    }
+                }
+            }
+        };
 
         // Build model from weights
         let model = LlamaModel::from_gguf_weights(weights)

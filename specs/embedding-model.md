@@ -210,13 +210,18 @@ Embedding models typically have shorter max sequence lengths (512-514 tokens) co
 
 ## Success Criteria
 
-- [x] Embed a single text and produce correct-dimension vector
+- [x] Embed a single text and produce correct-dimension vector (verified with embeddinggemma-300m)
 - [ ] Cosine similarity matches Python reference implementation within 0.01 (requires model download)
 - [ ] GPU path produces same results as CPU path (blocked on pesti-runner GPU layer integration)
 - [ ] Batch processing is faster than sequential individual embeddings (future optimization)
 - [x] CLI tool works for embed, similar, and batch commands
 
 **Note:** Phase 2 (CUDA acceleration) is complete in pesti-embeddings — the embedder now uses `layer.forward()` which will automatically leverage GPU when pesti-runner integrates CUDA kernels into its transformer layer. No further changes needed in this crate.
+
+## Known Limitations
+
+- **Tokenizer support:** pesti-runner's GGUF tokenizer loader only supports BPE merges format (`tokenizer.ggml.merges`). Embedding models using sentencepiece or other tokenizers require a `tokenizer.json` file in the model directory, which pesti-embeddings now auto-detects and loads via the `tokenizers` crate.
+- **Model architecture:** pesti-runner's weight loader is optimized for Qwen2/Llama architectures. Gemma-based embedding models (e.g., embeddinggemma-300m) load but may fail during inference due to architectural differences in FFN layer naming/conventions. This is a pesti-runner limitation, not an embedding spec issue.
 
 ## Dependencies
 
