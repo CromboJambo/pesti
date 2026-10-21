@@ -25,6 +25,13 @@ pub struct TrainingExample {
     pub labels: Vec<String>,
 }
 
+/// Internal representation with embedding cached during selection.
+#[derive(Debug)]
+struct ExampleWithEmbedding {
+    example: TrainingExample,
+    embedding: Vec<f32>,
+}
+
 /// Reason an example was deferred (not selected).
 #[derive(Debug, Clone)]
 pub enum DeferredReason {
@@ -85,18 +92,21 @@ pub fn select_minimal_dataset(
     // Load embedding model
     let embedder = Embedder::load(&config.embedding_model)?;
 
-    let mut selected = Vec::new();
+    let mut selected: Vec<TrainingExample> = Vec::new();
     let mut deferred = Vec::new();
+    // Track embeddings of selected examples for novelty computation
+    let mut selected_embeddings: Vec<Vec<f32>> = Vec::new();
 
     for example in to_consider {
         // Compute embedding for this example
         let embedding = embedder.embed(&example.text)?;
 
         // Calculate constraint novelty score against already-selected examples
-        let novelty_score = constraint_novelty(&selected, &embedding, config.constraint_threshold);
+        let novelty_score = constraint_novelty(&selected_embeddings, &embedding);
 
         if novelty_score > config.constraint_threshold {
             selected.push(example.clone());
+            selected_embeddings.push(embedding.clone());
         } else {
             deferred.push(DeferredExample {
                 example: example.clone(),
@@ -128,32 +138,25 @@ pub fn select_minimal_dataset(
 /// Calculate constraint novelty score for an example against already-selected examples.
 ///
 /// Returns a score in [0, 1] where higher means more novel constraints added.
-fn constraint_novelty(
-    selected: &[TrainingExample],
-    embedding: &[f32],
-    _threshold: f32,
-) -> f32 {
-    // Simple novelty metric: distance from centroid of selected examples
-    // Higher distance = more novel constraints
+fn constraint_novelty(selected_embeddings: &[Vec<f32>], new_embedding: &[f32]) -> f32 {
+    // Novelty metric: minimum distance from any already-selected example
+    // Higher = more novel (farther from existing selection)
 
-    if selected.is_empty() {
+    if selected_embeddings.is_empty() {
         return 1.0; // First example is always novel
     }
 
-    // Compute centroid of selected embeddings (approximated via text similarity)
-    let mut total_similarity = 0.0f32;
-
-    for _sel in selected {
-        // Use cosine similarity as proxy for constraint overlap
-        // Lower similarity = more novel constraints
-        let sim = cosine_similarity(embedding, &embedding); // Simplified
-        total_similarity += sim;
+    let mut max_distance = 0.0f32;
+    for sel_emb in selected_embeddings {
+        let sim = cosine_similarity(new_embedding, sel_emb);
+        let distance = 1.0 - sim;
+        if distance > max_distance {
+            max_distance = distance;
+        }
     }
 
-    let avg_similarity = total_similarity / selected.len() as f32;
-
-    // Novelty = 1 - average similarity (higher is better)
-    1.0 - avg_similarity
+    // Return the maximum distance (most novel relative to closest existing)
+    max_distance
 }
 
 /// Cosine similarity between two vectors.
