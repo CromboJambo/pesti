@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 29 (In Progress)
 
+### pesti-durable-objects: New Durable Objects Crate 🆕
+
+**New crate providing durable object persistence for fleet coordination.**
+
+Extracted from herdr's session management architecture, this crate provides:
+- Snapshot-based persistence with versioning and migration handling
+- Object identity management via UUIDs
+- Async operations for disk I/O (tokio)
+- Atomic save/restore patterns for crash recovery
+
+**Use case**: Crabjar fleet coordination — managing agent task state across home-lab machines with persistence and versioned format evolution.
+
+**Files created:**
+- `pesti-durable-objects/src/lib.rs` — module declarations and re-exports
+- `pesti-durable-objects/src/snapshot.rs` — snapshot persistence implementation
+- `pesti-durable-objects/src/object_id.rs` — object identity management
+- `pesti-durable-objects/src/migration.rs` — version migration handling
+- `pesti-durable-objects/tests/basic.rs` — integration tests
+- `pesti-durable-objects/examples/fleet_coordination.rs` — fleet coordination example
+
+**Tests**: All passing (2 integration tests)
+
 ### pesti-runner: Persistent Weight Caching + GQA Optimization 🚀
 
 **Major performance improvement:** ~16 tok/s → **~73 tok/s** (4.5x speedup) on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti).

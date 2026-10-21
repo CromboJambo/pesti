@@ -1,0 +1,17 @@
+[package]
+name = "pesti-durable-objects"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+authors.workspace = true
+description = "Durable objects layer with snapshot persistence, versioning, and migration handling — extracted from herdr's session management architecture."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
