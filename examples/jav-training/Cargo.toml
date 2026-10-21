@@ -1,0 +1,7 @@
+[package]
+name = "jav-training-data-selection"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pesti-jav-training = { path = "../../pesti-jav-training" }

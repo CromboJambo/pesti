@@ -607,6 +607,8 @@ impl LlamaModel {
             fused_decode_kernel: None, // Set later via set_fused_decode_kernel() after CUDA init
             #[cfg(feature = "cuda")]
             rope_kernel: None, // Set later via set_rope_kernel() after CUDA init
+            #[cfg(feature = "cuda")]
+            q4k_kvcache: None,
         };
 
         let w1 = crate::kernel::dispatch::LinearDispatch::new(

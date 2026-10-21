@@ -1,0 +1,17 @@
+[package]
+name = "pesti-jav-training"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "JEV training data selection - minimal sufficient subset via constraint propagation"
+
+[dependencies]
+pesti-embeddings = { path = "../pesti-embeddings" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true
