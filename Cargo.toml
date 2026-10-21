@@ -10,7 +10,7 @@ members = [
     "pesti-server",
     "pesti-cli",
     "pesti-studio", "pesti-embeddings",
-    "pesti-jav-training",
+    "pesti-jav-training", "pesti-durable-objects",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"

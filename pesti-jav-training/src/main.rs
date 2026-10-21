@@ -49,8 +49,10 @@ fn main() -> Result<()> {
 
     let input_path = matches.get_one::<String>("input").unwrap();
     let embedding_model = matches.get_one::<String>("embedding-model").unwrap().clone();
-    let threshold = matches.get_one::<f32>("threshold").unwrap().clone();
-    let max_examples = matches.get_one::<usize>("max-examples");
+    let threshold_str = matches.get_one::<String>("threshold").unwrap().as_str();
+    let threshold: f32 = threshold_str.parse().unwrap_or(0.5);
+    let max_examples = matches.get_one::<String>("max-examples")
+        .map(|s| s.parse::<usize>().unwrap_or(0));
     let output_path = matches.get_one::<String>("output").unwrap().clone();
 
     // Load training examples from JSON lines
@@ -62,7 +64,7 @@ fn main() -> Result<()> {
     let config = SelectionConfig {
         embedding_model,
         constraint_threshold: threshold,
-        max_examples: max_examples.map(|n| *n),
+        max_examples: max_examples.map(|n| n as usize),
     };
 
     // Run JEV selection

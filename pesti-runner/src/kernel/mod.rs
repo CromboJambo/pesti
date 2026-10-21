@@ -84,6 +84,8 @@ pub mod dispatch;
 #[cfg(feature = "cuda")]
 pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
+pub mod attention_concentration; // Attention concentration validation for early-exit inference
+#[cfg(feature = "cuda")]
 pub mod gemm;
 #[cfg(not(feature = "cuda"))]
 pub mod gemm_stub;
@@ -102,6 +104,7 @@ pub mod memory_stub;
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
+pub mod q4k_quantize; // Q4_K quantization (inverse of dequantization)
 pub mod rope;
 pub mod slow_friend;
 pub mod softmax;

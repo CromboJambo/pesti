@@ -940,6 +940,9 @@ pub struct AttentionDispatch {
     /// Pre-compiled CUDA rope kernel for GPU acceleration (set after construction).
     #[cfg(feature = "cuda")]
     pub rope_kernel: Option<Arc<CudaRopeKernel>>,
+    /// Q4_K quantized KV cache (enables compressed KV storage during decode).
+    #[cfg(feature = "cuda")]
+    pub q4k_kvcache: Option<crate::kernel::q4k_kvcache::Q4KVCache>,
 }
 
 impl AttentionDispatch {
@@ -976,6 +979,8 @@ impl AttentionDispatch {
             fused_decode_kernel,
             #[cfg(feature = "cuda")]
             rope_kernel: None,
+            #[cfg(feature = "cuda")]
+            q4k_kvcache: None,
         }
     }
 
@@ -1001,6 +1006,12 @@ impl AttentionDispatch {
     #[cfg(feature = "cuda")]
     pub fn set_rope_kernel(&mut self, kernel: Arc<CudaRopeKernel>) {
         self.rope_kernel = Some(kernel);
+    }
+
+    /// Set Q4_K quantized KV cache (enables compressed KV storage during decode).
+    #[cfg(feature = "cuda")]
+    pub fn set_q4k_kvcache(&mut self, cache: crate::kernel::q4k_kvcache::Q4KVCache) {
+        self.q4k_kvcache = Some(cache);
     }
 
     /// Check if fused attention kernel is available.

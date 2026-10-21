@@ -9,6 +9,8 @@ description = "PESTI embedding model inference - text-to-vector conversion"
 [dependencies]
 pesti-runner = { path = "../pesti-runner" }
 pesti-gguf = "0.2.4"
+pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
+universal-structure = { path = "../../crabjar/universal-structure" }
 tokenizers = { version = "0.22.0", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }

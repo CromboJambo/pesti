@@ -18,6 +18,7 @@ const Q4K_BLOCK_SIZE: usize = 144; // bytes per block
 const Q4K_BLOCK_ELEMS: usize = 256; // elements per block
 
 /// Per-layer Q4_K KV cache.
+#[derive(Clone)]
 pub struct Q4KVCache {
     /// Device buffer for quantized K data (Q4_K blocks).
     k_buffer: DeviceBuffer<u8>,
