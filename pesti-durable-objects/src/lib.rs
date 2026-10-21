@@ -16,3 +16,9 @@ pub mod migration;
 // Re-export core types
 pub use snapshot::{save_snapshot, load_snapshot, SnapshotError};
 pub use object_id::ObjectId;
+
+// Optional hermes agent memory integration
+#[cfg(feature = "hermes-memory")]
+pub mod hermes_memory;
+#[cfg(feature = "hermes-memory")]
+pub use hermes_memory::{create_hermes_object, load_hermes_object, persist_hermes_object};

@@ -31,6 +31,23 @@ Extracted from herdr's session management architecture, this crate provides:
 
 **Tests**: All passing (2 integration tests)
 
+### pesti-durable-objects: Hermes Agent Memory Integration 🆕
+
+**Optional hermes-memory feature enabled via mirror-log dependency.**
+
+When built with `--features hermes-memory`, pesti-durable-objects integrates with the mirror-log crate to provide hermes agent memory support using mirror-log's SQLite backend, provenance tracking, and decay management.
+
+**Implementation:**
+- Conditional compilation with `#[cfg(feature = "hermes-memory")]`
+- Uses mirror-log's session management for durable object persistence
+- Object identity via UUID-based event IDs
+- Append-only event logging with provenance entries
+- Decay tracking for lifecycle management
+- Checkpoint-based versioning
+
+**Dependencies:**
+- Updated mirror-lab workspace rusqlite from v0.32 to v0.37 for compatibility
+
 ### pesti-runner: Persistent Weight Caching + GQA Optimization 🚀
 
 **Major performance improvement:** ~16 tok/s → **~73 tok/s** (4.5x speedup) on Qwen2.5-0.5B-Instruct-Q4_K_M (RTX 3070 Ti).

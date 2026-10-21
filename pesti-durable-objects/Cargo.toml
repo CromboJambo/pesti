@@ -13,5 +13,11 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 
+# Optional hermes agent memory integration via mirror-log
+mirror-log = { path = "../../mirror-lab/mirror-log", optional = true }
+
+[features]
+hermes-memory = ["dep:mirror-log"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
