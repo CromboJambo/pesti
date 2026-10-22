@@ -18,10 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Initialize llama model via pesti-runner API
-    let mut model = pesti_runner::llama_cpp::LlamaModel::new();
+    let mut model = pesti_runner::transformer::LlamaModel::load_gguf(model_path)?;
     println!("Loading model...");
     let load_start = Instant::now();
-    model.load_gguf(model_path)?;
     println!("Model loaded in {:.1}s", load_start.elapsed().as_secs_f64());
 
     // Enable fused attention kernel (softmax on GPU, no host transfer)
@@ -31,12 +30,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Use hardcoded token IDs from llama.cpp oracle: "What is 2+2?"
     // Token IDs: [50280, 374, 2610, 9219, 374, 2706, 4333]
-    let input_ids: Vec<pesti_runner::llama_cpp::LlamaToken> = vec![50280, 374, 2610, 9219, 374, 2706, 4333];
+    let input_ids: Vec<u32> = vec![50280, 374, 2610, 9219, 374, 2706, 4333];
 
     println!("\nRunning warmup pass...");
     let mut seq_len = 0;
     for &tid in &input_ids {
-        let emb = model.embed(tid)?;
+        let emb = model.embed(tid, seq_len)?;
         let logits = model.forward_with_dispatch(&emb, seq_len)?;
         seq_len += 1;
     }
@@ -49,18 +48,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bench_start = Instant::now();
     seq_len = 0;
     for &tid in &input_ids {
-        let emb = model.embed(tid)?;
+        let emb = model.embed(tid, seq_len)?;
         let logits = model.forward_with_dispatch(&emb, seq_len)?;
         seq_len += 1;
     }
 
     let mut last_token_id = input_ids[input_ids.len() - 1];
     for _ in 0..NUM_TOKENS {
-        let emb = model.embed(last_token_id)?;
+        let emb = model.embed(last_token_id, seq_len)?;
         let logits = model.forward_with_dispatch(&emb, seq_len)?;
         // Argmax for greedy decoding
         let (best_idx, _) = logits.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap();
-        last_token_id = best_idx as pesti_runner::llama_cpp::LlamaToken;
+        last_token_id = best_idx as u32;
         seq_len += 1;
     }
 

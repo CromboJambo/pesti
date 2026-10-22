@@ -1,17 +1,23 @@
 //! Benchmark pesti-runner's own CUDA inference stack (not llama.cpp FFI).
 //! Mirrors the llama.cpp generate() flow using pesti-runner's transformer stack.
+//! Uses proper GPU kernel attachment via dispatch layers.
 
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
 use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use pesti_runner::profiler;
 use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
-use rand::SeedableRng;
+use pesti_runner::kernel::fused_attention_conformant::{build_fused_attention_kernel_conformant, FusedAttentionArch};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 fn main() {
-    let model_path = "conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let model_path = "/home/crombo/models/gguf/Qwen2.5-0.5B-Q4_K_M.gguf";
     let prompt = "What is the capital of France?";
+
+    // Initialize CUDA runtime first (before loading model) — use GPU 1 (more free memory)
+    let runtime = pesti_runner::CudaRuntime::new(1).expect("failed to init cuda runtime");
+    println!("CUDA device: {}", runtime.device_info().name);
 
     // Initialize profiler
     let _profiler = profiler::init();
@@ -19,13 +25,39 @@ fn main() {
     println!("Loading model from {}", model_path);
     let t_load = Instant::now();
     let weights = load_gguf_weights(Path::new(model_path)).expect("Failed to load GGUF weights");
-    println!("Building dispatch layers...");
+    // Build model using dispatch layers with fused kernel attachment
+    println!("Building model with dispatch layers...");
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
-    println!("Dispatch layers built, CUDA available: {}", model.dispatch.is_some());
+    println!(
+        "Dispatch layers built, CUDA available: {}",
+        !model.layers.is_empty()
+    );
+
+    // Build and attach fused attention kernel to each layer
+    println!("Attaching fused attention kernels...");
+    let ctx = runtime.cuda_context();
+    let stream = runtime.new_stream().expect("failed to create stream");
+    
+    match build_fused_attention_kernel_conformant(
+        FusedAttentionArch::MmaSync,
+        Arc::new(ctx.clone()),
+        Arc::new(stream),
+    ) {
+        Ok(kernel) => {
+            for layer in &mut model.layers {
+                layer.attention.set_fused_kernel(Some(Arc::new(kernel)));
+            }
+            println!("Fused attention kernel enabled on all {} layers", model.config.num_layers);
+        }
+        Err(e) => {
+            eprintln!("Failed to build fused kernel: {}", e);
+        }
+    }
 
     // Load tokenizer separately (GGUF models don't auto-attach)
-    let (_tokenizer_config, tokenizer) = load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)
-        .expect("Failed to load tokenizer from GGUF");
+    let (_tokenizer_config, tokenizer) =
+        load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)
+            .expect("Failed to load tokenizer from GGUF");
     model.tokenizer = Some(tokenizer);
 
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
@@ -75,7 +107,6 @@ fn main() {
         top_p: 0.95,
         seed: Some(42),
     };
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
     for i in 0..max_tokens {
         let t_step = Instant::now();

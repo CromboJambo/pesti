@@ -1276,23 +1276,32 @@ impl AttentionDispatch {
             let k_f32 = candle_bridge::tensor_to_f32_flat(k)
                 .map_err(|e| DispatchError::Kernel(format!("k tensor to f32: {e}")))?;
 
-            // Use cached rope kernel if available, otherwise build it
+            // Use cached rope kernel if available, otherwise build it or fall back to CPU
             use crate::kernel::rope::{CudaRopeKernelBuilder, CudaRopeKernel};
             let rope_kernel = match &self.rope_kernel {
                 Some(k) => Arc::clone(k),
                 None => {
-                    // Build from fused kernel's context/stream as fallback
-                    let fused = self.fused_kernel.as_ref().ok_or_else(|| {
-                        DispatchError::Kernel("fused attention kernel not initialized".into())
-                    })?;
+                    // Try to build from fused kernel's context/stream as fallback
+                    let fused = self.fused_kernel.as_ref();
+                    if fused.is_none() {
+                        // No fused kernel available — fall back to CPU RoPE immediately
+                        println!("[WARN] No fused attention kernel, falling back to CPU RoPE");
+                        return self.rope_tensors_cpu(q, k, seq_len, start_pos);
+                    }
 
-                    let built = CudaRopeKernelBuilder::new(
-                        Arc::clone(fused.context()),
-                        Arc::clone(fused.stream()),
+                    match CudaRopeKernelBuilder::new(
+                        Arc::clone(fused.unwrap().context()),
+                        Arc::clone(fused.unwrap().stream()),
                     )
                     .build()
-                    .map_err(|e| DispatchError::Kernel(format!("rope kernel build: {e}")))?;
-                    Arc::new(built)
+                    {
+                        Ok(built) => Arc::new(built),
+                        Err(e) => {
+                            // GPU rope kernel failed to build — fall back to CPU RoPE via candle
+                            println!("[WARN] GPU rope kernel build failed ({e}), falling back to CPU RoPE");
+                            return self.rope_tensors_cpu(q, k, seq_len, start_pos);
+                        }
+                    }
                 }
             };
 
@@ -1461,6 +1470,153 @@ impl AttentionDispatch {
 
             Ok((q_out, k_out))
         }
+    }
+
+    /// CPU RoPE fallback using candle tensor operations.
+    /// Computes on CPU to minimize GPU memory pressure, then moves results back.
+    fn rope_tensors_cpu(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seq_len: usize,
+        start_pos: usize,
+    ) -> Result<(Tensor, Tensor), DispatchError> {
+        use candle_core::Device;
+
+        eprintln!("[DEBUG] rope_tensors_cpu called: q dims={:?}, dtype={:?}, device={:?}", 
+                  q.dims(), q.dtype(), q.device());
+        eprintln!("[DEBUG] rope_tensors_cpu called: k dims={:?}, dtype={:?}, device={:?}", 
+                  k.dims(), k.dtype(), k.device());
+
+        let head_dim = self.head_dim;
+        let num_heads_q = q.dims()[2];
+        let num_heads_k = k.dims()[2];
+
+        // Move Q/K to CPU for RoPE computation
+        let q_cpu = q
+            .to_device(&Device::Cpu)
+            .map_err(|e| DispatchError::Kernel(format!("rope q to cpu: {e}")))?;
+        let k_cpu = k
+            .to_device(&Device::Cpu)
+            .map_err(|e| DispatchError::Kernel(format!("rope k to cpu: {e}")))?;
+
+        // Convert to F32 for computation precision
+        let q_f32 = q_cpu
+            .to_dtype(DType::F32)
+            .map_err(|e| DispatchError::Kernel(format!("rope q to f32: {e}")))?;
+        let k_f32 = k_cpu
+            .to_dtype(DType::F32)
+            .map_err(|e| DispatchError::Kernel(format!("rope k to f32: {e}")))?;
+
+        // Build position indices for RoPE on CPU
+        let positions: Vec<i64> = (start_pos as i64..(start_pos + seq_len) as i64).collect();
+        let pos_tensor = Tensor::from_vec(positions, seq_len, &Device::Cpu)
+            .map_err(|e| DispatchError::Kernel(format!("rope pos tensor: {e}")))?
+            .to_dtype(DType::F32)
+            .map_err(|e| DispatchError::Kernel(format!("rope pos to f32: {e}")))?;
+
+        // Compute theta values for RoPE frequencies
+        let inv_freq: Vec<f32> = (0..head_dim / 2)
+            .map(|i| {
+                let idx = i as f32 * 2.0 / head_dim as f32;
+                1.0 / self.rope_base.powf(idx)
+            })
+            .collect();
+
+        // Compute frequencies: pos * inv_freq on CPU
+        let freq_tensor = Tensor::from_vec(inv_freq.clone(), head_dim / 2, &Device::Cpu)
+            .map_err(|e| DispatchError::Kernel(format!("rope freq tensor: {e}")))?;
+        let angles = pos_tensor
+            .unsqueeze(1)
+            .map_err(|e| DispatchError::Kernel(format!("rope unsqueeze: {e}")))?
+            .broadcast_mul(&freq_tensor)
+            .map_err(|e| DispatchError::Kernel(format!("rope broadcast_mul: {e}")))?;
+
+        // Compute sin and cos on CPU
+        let cos = angles
+            .cos()
+            .map_err(|e| DispatchError::Kernel(format!("rope cos: {e}")))?;
+        let sin = angles
+            .sin()
+            .map_err(|e| DispatchError::Kernel(format!("rope sin: {e}")))?;
+
+        // Convert to match input dtype (F16) before moving back to GPU
+        let q_dtype = q.dtype();
+
+        // Expand cos/sin for Q heads using unsqueeze + expand (same pattern as GPU code)
+        let cos_q = cos
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("rope cos unsqueeze q: {e}")))?
+            .expand(&[1, seq_len, num_heads_q, head_dim / 2])
+            .map_err(|e| DispatchError::Kernel(format!("rope cos expand q: {e}")))?;
+        let sin_q = sin
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("rope sin unsqueeze q: {e}")))?
+            .expand(&[1, seq_len, num_heads_q, head_dim / 2])
+            .map_err(|e| DispatchError::Kernel(format!("rope sin expand q: {e}")))?;
+
+        // Expand cos/sin for K heads using unsqueeze + expand
+        let cos_k = cos
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("rope cos unsqueeze k: {e}")))?
+            .expand(&[1, seq_len, num_heads_k, head_dim / 2])
+            .map_err(|e| DispatchError::Kernel(format!("rope cos expand k: {e}")))?;
+        let sin_k = sin
+            .unsqueeze(0)
+            .map_err(|e| DispatchError::Kernel(format!("rope sin unsqueeze k: {e}")))?
+            .expand(&[1, seq_len, num_heads_k, head_dim / 2])
+            .map_err(|e| DispatchError::Kernel(format!("rope sin expand k: {e}")))?;
+
+        // Split Q into halves for RoPE rotation on CPU
+        let q0 = q_f32
+            .narrow(q_f32.dims().len() - 1, 0, head_dim / 2)
+            .map_err(|e| DispatchError::Kernel(format!("rope q narrow: {e}")))?;
+        let q1 = q_f32
+            .narrow(q_f32.dims().len() - 1, head_dim / 2, head_dim / 2)
+            .map_err(|e| DispatchError::Kernel(format!("rope q narrow2: {e}")))?;
+
+        // Apply RoPE to Q on CPU
+        let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
+        let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
+        let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
+        let q1c = (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
+        let q0s = (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
+        let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
+
+        // Apply RoPE to K on CPU
+        let k0 = k_f32
+            .narrow(k_f32.dims().len() - 1, 0, head_dim / 2)
+            .map_err(|e| DispatchError::Kernel(format!("rope k narrow: {e}")))?;
+        let k1 = k_f32
+            .narrow(k_f32.dims().len() - 1, head_dim / 2, head_dim / 2)
+            .map_err(|e| DispatchError::Kernel(format!("rope k narrow2: {e}")))?;
+
+        let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
+        let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
+        let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
+        let k1c = (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
+        let k0s = (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
+        let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
+
+        let last_dim = q.dims().len() - 1;
+        let q_out_cpu = Tensor::cat(&[&qr0, &qr1], last_dim)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat q: {e}")))?;
+        let k_out_cpu = Tensor::cat(&[&kr0, &kr1], last_dim)
+            .map_err(|e| DispatchError::Kernel(format!("rope cat k: {e}")))?;
+
+        // Convert back to original dtype and move to GPU
+        let q_out = q_out_cpu
+            .to_dtype(q_dtype)
+            .map_err(|e| DispatchError::Kernel(format!("rope q out dtype: {e}")))?
+            .to_device(q.device())
+            .map_err(|e| DispatchError::Kernel(format!("rope q out to gpu: {e}")))?;
+        let k_out = k_out_cpu
+            .to_dtype(k.dtype())
+            .map_err(|e| DispatchError::Kernel(format!("rope k out dtype: {e}")))?
+            .to_device(k.device())
+            .map_err(|e| DispatchError::Kernel(format!("rope k out to gpu: {e}")))?;
+
+        Ok((q_out, k_out))
     }
 
     /// GPU-accelerated full attention path: RoPE + KV write + SDPA via
