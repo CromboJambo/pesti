@@ -1,0 +1,22 @@
+[package]
+name = "pesti-training"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "QLoRA fine-tuning pipeline for crabjar decision engine training data"
+
+[dependencies]
+pesti-runner = { path = "../pesti-runner" }
+qwen2-bpe = { path = "../crates/qwen2-bpe" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

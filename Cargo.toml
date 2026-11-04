@@ -11,6 +11,7 @@ members = [
     "pesti-cli",
     "pesti-studio", "pesti-embeddings",
     "pesti-jav-training", "pesti-durable-objects",
+    "pesti-training",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
 resolver = "2"
