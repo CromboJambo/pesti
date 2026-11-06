@@ -9,11 +9,11 @@ members = [
     "pesti-mcp-server",
     "pesti-server",
     "pesti-cli",
-    "pesti-studio", "pesti-embeddings",
-    "pesti-jav-training", "pesti-durable-objects",
+    "pesti-studio",
+    "pesti-durable-objects",
     "pesti-training",
 ]
-exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance"]
+exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance", "pesti-embeddings"]
 resolver = "2"
 
 [workspace.lints.rust]

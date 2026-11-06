@@ -2,7 +2,7 @@
 //! Parses into AST via syn, then manually walks emitting semantic tokens.
 //! Supports budget-aware collapsing for LLM context size management.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use syn::{Item, parse_file};
 
 mod folder;
@@ -11,12 +11,28 @@ pub use folder::{Span, SpanItem, SpanKind, fold};
 pub mod semantic;
 pub use semantic::*;
 
+/// Precise location info for a token within source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpanInfo {
+    /// 1-indexed line number.
+    pub line: usize,
+    /// 1-indexed column number.
+    pub column: usize,
+    /// Byte offset from file start.
+    pub start_byte: usize,
+    /// Byte offset after token end.
+    pub end_byte: usize,
+}
+
 /// Structural token with position information
 #[derive(Debug, Clone)]
 pub struct StructuralToken {
     pub kind: TokenKind,
     pub text: String,
+    /// Legacy span field (line_start, line_end) — kept for backward compat.
     pub span: (usize, usize),
+    /// Precise location info (populated when source is available).
+    pub location: Option<SpanInfo>,
 }
 
 /// Kinds of structural tokens we emit
@@ -312,7 +328,7 @@ impl StructuralTokenizer {
         })?;
 
         let mut tokens = Vec::new();
-        self.walk_items(&ast.items, &mut tokens);
+        self.walk_items(&ast.items, src, &mut tokens);
         Ok(tokens)
     }
 
@@ -334,7 +350,7 @@ impl StructuralTokenizer {
             min_body_stmts: budget.min_body_stmts,
         };
 
-        self.walk_items_budgeted(&ast.items, &mut emissions, &mut budget_state);
+        self.walk_items_budgeted(&ast.items, &mut emissions, &mut budget_state, src);
         Ok(emissions)
     }
 
@@ -365,7 +381,7 @@ impl StructuralTokenizer {
                     Some(SemanticTag::encode(
                         own_ann.as_ref().map(|a| a.mode),
                         err_ann.as_ref().map(|a| a.handling),
-                        mut_ann.as_ref().map_or(false, |a| a.mutable),
+                        mut_ann.as_ref().is_some_and(|a| a.mutable),
                         own_ann
                             .as_ref()
                             .map(|a| a.confidence)
@@ -384,28 +400,30 @@ impl StructuralTokenizer {
         Ok(semantic_emissions)
     }
 
-    fn walk_items(&self, items: &[Item], tokens: &mut Vec<StructuralToken>) {
+    fn walk_items(&self, items: &[Item], src: &str, tokens: &mut Vec<StructuralToken>) {
         for item in items {
             match item {
                 Item::Fn(f) => {
                     let sig = format!("fn {}", f.sig.ident);
-                    self.emit(tokens, TokenKind::FnDecl, sig);
+                    self.emit_from_span(tokens, TokenKind::FnDecl, sig, src, &f.sig.ident);
 
                     // Walk function body statements
                     for stmt in &f.block.stmts {
-                        self.walk_stmt(stmt, tokens);
+                        self.walk_stmt(stmt, src, tokens);
                     }
                 }
                 Item::Struct(s) => {
                     let name = s.ident.to_string();
-                    self.emit(tokens, TokenKind::StructDecl, name);
+                    self.emit_from_span(tokens, TokenKind::StructDecl, name, src, &s.ident);
                     if let syn::Fields::Named(fields) = &s.fields {
                         for field in &fields.named {
                             if let Some(ident) = &field.ident {
-                                self.emit(
+                                self.emit_from_span(
                                     tokens,
                                     TokenKind::Ident(ident.to_string()),
                                     ident.to_string(),
+                                    src,
+                                    ident,
                                 );
                             }
                         }
@@ -413,40 +431,54 @@ impl StructuralTokenizer {
                 }
                 Item::Enum(e) => {
                     let name = e.ident.to_string();
-                    self.emit(tokens, TokenKind::EnumDecl, name);
+                    self.emit_from_span(tokens, TokenKind::EnumDecl, name, src, &e.ident);
                     for variant in &e.variants {
-                        self.emit(
+                        self.emit_from_span(
                             tokens,
                             TokenKind::Ident(variant.ident.to_string()),
                             variant.ident.to_string(),
+                            src,
+                            &variant.ident,
                         );
                     }
                 }
                 Item::Trait(t) => {
                     let name = t.ident.to_string();
-                    self.emit(tokens, TokenKind::TraitDecl, name);
+                    self.emit_from_span(tokens, TokenKind::TraitDecl, name, src, &t.ident);
                     for item in &t.items {
                         if let syn::TraitItem::Fn(m) = item {
-                            self.emit(tokens, TokenKind::FnDecl, format!("fn {}", m.sig.ident));
+                            self.emit_from_span(
+                                tokens,
+                                TokenKind::FnDecl,
+                                format!("fn {}", m.sig.ident),
+                                src,
+                                &m.sig.ident,
+                            );
                         }
                     }
                 }
                 Item::Impl(i) => {
-                    self.emit(tokens, TokenKind::ImplBlock, "impl".to_string());
+                    self.emit_kind(tokens, TokenKind::ImplBlock);
                     for item in &i.items {
                         if let syn::ImplItem::Fn(m) = item {
-                            self.emit(tokens, TokenKind::FnDecl, format!("fn {}", m.sig.ident));
+                            self.emit_from_span(
+                                tokens,
+                                TokenKind::FnDecl,
+                                format!("fn {}", m.sig.ident),
+                                src,
+                                &m.sig.ident,
+                            );
                         }
                     }
                 }
                 Item::Use(_u) => {
-                    self.emit(tokens, TokenKind::UseStmt, "use".to_string());
+                    self.emit_kind(tokens, TokenKind::UseStmt);
                 }
                 Item::Mod(m) => {
                     let name = m.ident.to_string();
-                    self.emit(tokens, TokenKind::ModDecl, name);
+                    self.emit_from_span(tokens, TokenKind::ModDecl, name, src, &m.ident);
                     if let Some((_brace, items)) = &m.content {
-                        self.walk_items(items, tokens);
+                        self.walk_items(items, src, tokens);
                     }
                 }
                 _ => {}
@@ -454,35 +486,34 @@ impl StructuralTokenizer {
         }
     }
 
-    fn walk_stmt(&self, stmt: &syn::Stmt, tokens: &mut Vec<StructuralToken>) {
+    fn walk_stmt(&self, stmt: &syn::Stmt, src: &str, tokens: &mut Vec<StructuralToken>) {
         match stmt {
             syn::Stmt::Local(_let_stmt) => {
                 self.emit_kind(tokens, TokenKind::LetStmt);
             }
             syn::Stmt::Expr(expr, semi) => {
-                self.walk_expr(expr, tokens);
+                self.walk_expr(expr, src, tokens);
                 if semi.is_some() {
                     self.emit_kind(tokens, TokenKind::Semicolon);
                 }
             }
-            syn::Stmt::Item(item) => match item {
-                Item::Fn(inner) => {
+            syn::Stmt::Item(item) => {
+                if let Item::Fn(inner) = item {
                     let sig = format!("fn {}", inner.sig.ident);
                     self.emit(tokens, TokenKind::FnDecl, sig);
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
 
-    fn walk_expr(&self, expr: &syn::Expr, tokens: &mut Vec<StructuralToken>) {
+    fn walk_expr(&self, expr: &syn::Expr, src: &str, tokens: &mut Vec<StructuralToken>) {
         match expr {
             syn::Expr::If(eif) => {
                 self.emit_kind(tokens, TokenKind::IfElse);
                 // Walk into the then branch to find break/continue/etc
                 for stmt in &eif.then_branch.stmts {
-                    self.walk_stmt(stmt, tokens);
+                    self.walk_stmt(stmt, src, tokens);
                 }
             }
             syn::Expr::While(_ewhile) => {
@@ -492,7 +523,7 @@ impl StructuralTokenizer {
                 self.emit_kind(tokens, TokenKind::ForLoop);
                 // Walk into loop body to find break/continue
                 for stmt in &efor.body.stmts {
-                    self.walk_stmt(stmt, tokens);
+                    self.walk_stmt(stmt, src, tokens);
                 }
             }
             syn::Expr::Match(_ematch) => {
@@ -626,7 +657,7 @@ impl StructuralTokenizer {
             syn::Expr::Block(eblock) => {
                 // ExprBlock has a `block` field of type Block
                 for stmt in &eblock.block.stmts {
-                    self.walk_stmt(stmt, tokens);
+                    self.walk_stmt(stmt, src, tokens);
                 }
             }
             syn::Expr::Path(epath) => {
@@ -649,15 +680,51 @@ impl StructuralTokenizer {
     }
 
     fn emit(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind, text: String) {
-        tokens.push(StructuralToken {
-            kind,
-            text,
-            span: (0, 0), // No source spans in syn-based approach
-        });
+        self.emit_with_location(tokens, kind, text, None);
     }
 
     fn emit_kind(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind) {
-        self.emit(tokens, kind, String::new());
+        self.emit_with_location(tokens, kind, String::new(), None);
+    }
+
+    /// Emit a token with precise location info computed from syn span.
+    fn emit_from_span<S>(&self, tokens: &mut Vec<StructuralToken>, kind: TokenKind, text: String, src: &str, node: &S)
+    where
+        S: syn::spanned::Spanned,
+    {
+        let span = node.span();
+
+        // Try to get source text for this span directly
+        let span_text = match span.source_text() {
+            Some(t) => t,
+            None => text.clone(),
+        };
+
+        // Find the location by searching for the span text in the source
+        if let Some(byte_offset) = src.find(&span_text) {
+            let loc = compute_span_info(src, byte_offset, byte_offset + span_text.len());
+            self.emit_with_location(tokens, kind, span_text, Some(loc));
+        } else {
+            // Fallback: no location info
+            self.emit_with_location(tokens, kind, span_text, None);
+        }
+    }
+
+    /// Emit a token with explicit location info.
+    fn emit_with_location(
+        &self,
+        tokens: &mut Vec<StructuralToken>,
+        kind: TokenKind,
+        text: String,
+        location: Option<SpanInfo>,
+    ) {
+        let line = location.map(|l| l.line).unwrap_or(0);
+        tokens.push(StructuralToken {
+            kind,
+            text,
+            span: (line, line),
+            location,
+        });
     }
 
     // Budget-aware walkers
@@ -667,6 +734,7 @@ impl StructuralTokenizer {
         items: &[Item],
         emissions: &mut Vec<Emission>,
         budget: &mut BudgetState,
+        src: &str,
     ) {
         for item in items {
             if budget.emitted >= budget.max_tokens {
@@ -676,7 +744,7 @@ impl StructuralTokenizer {
             match item {
                 Item::Fn(f) => {
                     let sig = format!("fn {}", f.sig.ident);
-                    self.emit_emission(emissions, TokenKind::FnDecl, sig);
+                    self.emit_emission_from_span(emissions, TokenKind::FnDecl, sig, src, &f.sig.ident);
                     budget.emitted += 1;
 
                     // Check if body is worth eliding (many statements)
@@ -705,20 +773,20 @@ impl StructuralTokenizer {
                 }
                 Item::Struct(s) => {
                     let name = s.ident.to_string();
-                    self.emit_emission(emissions, TokenKind::StructDecl, name);
+                    self.emit_emission_from_span(emissions, TokenKind::StructDecl, name, src, &s.ident);
                     budget.emitted += 1;
                 }
                 Item::Enum(e) => {
                     let name = e.ident.to_string();
-                    self.emit_emission(emissions, TokenKind::EnumDecl, name);
+                    self.emit_emission_from_span(emissions, TokenKind::EnumDecl, name, src, &e.ident);
                     budget.emitted += 1;
                 }
                 Item::Trait(t) => {
                     let name = t.ident.to_string();
-                    self.emit_emission(emissions, TokenKind::TraitDecl, name);
+                    self.emit_emission_from_span(emissions, TokenKind::TraitDecl, name, src, &t.ident);
                     budget.emitted += 1;
                 }
-                Item::Impl(i) => {
+                Item::Impl(_i) => {
                     self.emit_emission(emissions, TokenKind::ImplBlock, "impl".to_string());
                     budget.emitted += 1;
                 }
@@ -728,10 +796,10 @@ impl StructuralTokenizer {
                 }
                 Item::Mod(m) => {
                     let name = m.ident.to_string();
-                    self.emit_emission(emissions, TokenKind::ModDecl, name);
+                    self.emit_emission_from_span(emissions, TokenKind::ModDecl, name, src, &m.ident);
                     budget.emitted += 1;
                     if let Some((_brace, items)) = &m.content {
-                        self.walk_items_budgeted(items, emissions, budget);
+                        self.walk_items_budgeted(items, emissions, budget, src);
                     }
                 }
                 _ => {}
@@ -824,12 +892,49 @@ impl StructuralTokenizer {
     }
 
     fn emit_emission(&self, emissions: &mut Vec<Emission>, kind: TokenKind, text: String) {
-        let token = StructuralToken {
+        self.emit_emission_with_location(emissions, kind, text, None);
+    }
+
+    fn emit_emission_from_span<T: syn::spanned::Spanned>(
+        &self,
+        emissions: &mut Vec<Emission>,
+        kind: TokenKind,
+        text: String,
+        src: &str,
+        node: &T,
+    ) {
+        let span = node.span();
+
+        // Try to get source text for this span directly
+        let span_text = match span.source_text() {
+            Some(t) => t,
+            None => text.clone(),
+        };
+
+        // Find the location by searching for the span text in the source
+        if let Some(byte_offset) = src.find(&span_text) {
+            let loc = compute_span_info(src, byte_offset, byte_offset + span_text.len());
+            self.emit_emission_with_location(emissions, kind, span_text, Some(loc));
+        } else {
+            // Fallback: no location info
+            self.emit_emission_with_location(emissions, kind, span_text, None);
+        }
+    }
+
+    fn emit_emission_with_location(
+        &self,
+        emissions: &mut Vec<Emission>,
+        kind: TokenKind,
+        text: String,
+        location: Option<SpanInfo>,
+    ) {
+        let line = location.map(|l| l.line).unwrap_or(0);
+        emissions.push(Emission::Node(StructuralToken {
             kind,
             text,
-            span: (0, 0),
-        };
-        emissions.push(Emission::Node(token));
+            span: (line, line),
+            location,
+        }));
     }
 
     fn get_body_size(&self, block: &syn::Block) -> usize {
@@ -926,6 +1031,63 @@ struct BudgetState {
     max_tokens: usize,
     emitted: usize,
     min_body_stmts: usize,
+}
+
+/// Compute SpanInfo from byte offsets within source.
+fn compute_span_info(src: &str, start_byte: usize, end_byte: usize) -> SpanInfo {
+    let bytes = src.as_bytes();
+    
+    // Clamp to valid range
+    let start = start_byte.min(bytes.len());
+    let end = end_byte.min(bytes.len());
+    
+    // Compute line and column from byte offset
+    let mut line = 1;
+    let mut col = 1;
+    for (i, &b) in bytes.iter().enumerate() {
+        if i >= start { break; }
+        if b == b'\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    
+    SpanInfo {
+        line,
+        column: col,
+        start_byte,
+        end_byte,
+    }
+}
+
+/// Extract source text for a span.
+fn extract_span_text(src: &str, start_byte: usize, end_byte: usize) -> String {
+    let bytes = src.as_bytes();
+    let start = start_byte.min(bytes.len());
+    let end = end_byte.min(bytes.len());
+    String::from_utf8_lossy(&bytes[start..end]).to_string()
+}
+
+/// Count bytes from start of source to the given line/column.
+fn count_bytes_before_line_col(src: &str, target_line: u32, target_col: u32) -> usize {
+    let mut line = 1u32;
+    let mut col = 1u32;
+    
+    for (i, b) in src.bytes().enumerate() {
+        if line == target_line && col == target_col {
+            return i;
+        }
+        if b == b'\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    
+    src.len()
 }
 
 #[cfg(test)]

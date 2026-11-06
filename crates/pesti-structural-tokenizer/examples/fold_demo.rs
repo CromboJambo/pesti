@@ -5,6 +5,7 @@ fn make_token(kind: TokenKind, text: &str) -> StructuralToken {
         kind,
         text: text.to_string(),
         span: (0, 0),
+        location: None,
     }
 }
 
