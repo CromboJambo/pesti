@@ -46,50 +46,58 @@ fn main() {
         }
     };
 
-    // JSON dump: full parsed header, for conformance comparison against
-    // independent implementations (python gguf, llama-gguf).
-    // Adds per-tensor stored_size so comparisons can check dtype/block math
-    // per tensor, not just the corpus-wide sum.
     if args.json {
-        let mut out = serde_json::Map::new();
-        match serde_json::to_value(&header) {
-            Ok(v) => {
-                if let serde_json::Value::Object(map) = v {
-                    out = map;
-                }
-            }
-            Err(e) => {
-                eprintln!("error: failed to serialize header: {e}");
-                std::process::exit(1);
-            }
+        dump_json(&header);
+        return;
+    }
+
+    print_header_summary(&header);
+
+    if args.tensors_only {
+        print_tensor_names(&header);
+        return;
+    }
+
+    print_tensors(&header);
+    handle_extract(&args, &header);
+}
+
+fn dump_json(header: &pesti_gguf::GgufHeader) {
+    let mut out = serde_json::Map::new();
+    match serde_json::to_value(header) {
+        Ok(serde_json::Value::Object(map)) => out = map,
+        Ok(_) => {
+            eprintln!("error: header serialized to non-object value");
+            std::process::exit(1);
         }
-        let stored: Vec<serde_json::Value> = header
-            .tensors
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "stored_size": t.stored_size().map_err(|e| e.to_string()).ok(),
-                })
-            })
-            .collect();
-        out.insert(
-            "tensors_stored_size".to_string(),
-            serde_json::Value::Array(stored),
-        );
-        match serde_json::to_string_pretty(&out) {
-            Ok(json) => {
-                println!("{json}");
-                return;
-            }
-            Err(e) => {
-                eprintln!("error: failed to serialize header: {e}");
-                std::process::exit(1);
-            }
+        Err(e) => {
+            eprintln!("error: failed to serialize header: {e}");
+            std::process::exit(1);
         }
     }
 
-    // Print header summary
+    let stored: Vec<serde_json::Value> = header
+        .tensors
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "stored_size": t.stored_size().map_err(|e| e.to_string()).ok(),
+            })
+        })
+        .collect();
+    out.insert("tensors_stored_size".to_string(), serde_json::Value::Array(stored));
+
+    match serde_json::to_string_pretty(&out) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("error: failed to serialize header: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_header_summary(header: &pesti_gguf::GgufHeader) {
     println!("GGUF v{}", header.version);
     if let Some(alignment) = header.data_alignment {
         println!("  data alignment: {}", alignment);
@@ -98,7 +106,6 @@ fn main() {
     println!("  kv pairs: {}", header.kv_pairs.len());
     println!();
 
-    // Print architecture info
     if let Some(arch) = header.architecture() {
         println!("  architecture: {}", arch);
     }
@@ -107,7 +114,10 @@ fn main() {
     }
     println!();
 
-    // Print common config using KV pair accessors
+    print_config(header);
+}
+
+fn print_config(header: &pesti_gguf::GgufHeader) {
     let common_keys = [
         "llama.context_length",
         "llama.embedding_length",
@@ -140,77 +150,81 @@ fn main() {
         }
     }
     println!();
+}
 
-    // Print tensors
-    if args.tensors_only {
-        for tensor in &header.tensors {
-            println!("  {}", tensor.name);
-        }
+fn print_tensor_names(header: &pesti_gguf::GgufHeader) {
+    for tensor in &header.tensors {
+        println!("  {}", tensor.name);
+    }
+}
+
+fn print_tensors(header: &pesti_gguf::GgufHeader) {
+    if header.tensors.is_empty() {
         return;
     }
 
-    if !header.tensors.is_empty() {
-        println!("  tensors:");
-        for tensor in &header.tensors {
-            let shape_str = tensor
-                .shape
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("x");
-            let dtype = pesti_gguf::GgufDtype::from_u32(tensor.dtype);
-            println!(
-                "    {:60}  [{}]  dtype={:<6}  stored={:>12}  offset={}",
-                tensor.name,
-                shape_str,
-                dtype.name(),
-                tensor.stored_size().unwrap_or(0),
-                tensor.offset
-            );
-        }
-        println!();
+    println!("  tensors:");
+    for tensor in &header.tensors {
+        let shape_str = tensor
+            .shape
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("x");
+        let dtype = pesti_gguf::GgufDtype::from_u32(tensor.dtype);
+        println!(
+            "    {:60}  [{}]  dtype={:<6}  stored={:>12}  offset={}",
+            tensor.name,
+            shape_str,
+            dtype.name(),
+            tensor.stored_size().unwrap_or(0),
+            tensor.offset
+        );
     }
+    println!();
+}
 
-    // Extract specific tensor if requested
-    if let Some(tensor_name) = &args.extract {
-        if let Some(tensor) = header.tensors.iter().find(|t| t.name == *tensor_name) {
-            let stored = tensor.stored_size().unwrap_or(0);
-            println!(
-                "  extracting {} ({} bytes stored, {} dequantized)...",
-                tensor_name,
-                stored,
-                tensor.element_count()
-            );
-            match pesti_gguf::parser::extract_tensor_bytes_from_path(
-                &args.gguf_path,
-                tensor.offset,
-                stored as usize,
-            ) {
-                Ok(bytes) => {
-                    println!("  extracted {} bytes", bytes.len());
-                    // Print first 64 bytes as hex
-                    let hex_len = bytes.len().min(64);
-                    let hex = bytes[..hex_len]
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    println!("  first {} bytes (hex): {}", hex_len, hex);
-                    if bytes.len() > 64 {
-                        println!("  ... ({} more bytes)", bytes.len() - 64);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  error: failed to extract tensor: {e}");
-                }
-            }
-        } else {
-            eprintln!("  error: tensor '{}' not found", tensor_name);
-            println!("  available tensors:");
-            for tensor in &header.tensors {
-                println!("    - {}", tensor.name);
-            }
+fn handle_extract(args: &Args, header: &pesti_gguf::GgufHeader) {
+    let Some(tensor_name) = &args.extract else { return };
+
+    let Some(tensor) = header.tensors.iter().find(|t| t.name == *tensor_name) else {
+        eprintln!("  error: tensor '{}' not found", tensor_name);
+        println!("  available tensors:");
+        for tensor in &header.tensors {
+            println!("    - {}", tensor.name);
         }
+        return;
+    };
+
+    let stored = tensor.stored_size().unwrap_or(0);
+    println!(
+        "  extracting {} ({} bytes stored, {} dequantized)...",
+        tensor_name,
+        stored,
+        tensor.element_count()
+    );
+
+    match pesti_gguf::parser::extract_tensor_bytes_from_path(
+        &args.gguf_path,
+        tensor.offset,
+        stored as usize,
+    ) {
+        Ok(bytes) => print_extracted(&bytes),
+        Err(e) => eprintln!("  error: failed to extract tensor: {e}"),
+    }
+}
+
+fn print_extracted(bytes: &[u8]) {
+    println!("  extracted {} bytes", bytes.len());
+    let hex_len = bytes.len().min(64);
+    let hex = bytes[..hex_len]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("  first {} bytes (hex): {}", hex_len, hex);
+    if bytes.len() > 64 {
+        println!("  ... ({} more bytes)", bytes.len() - 64);
     }
 }
 

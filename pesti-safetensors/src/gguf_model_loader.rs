@@ -123,66 +123,40 @@ pub fn load_gguf_model(
 pub fn extract_model_config(header: &GgufHeader) -> HashMap<String, String> {
     let mut config = HashMap::new();
 
-    // Architecture
-    if let Some(arch) = header.architecture() {
-        config.insert("architecture".to_string(), arch.to_string());
-    }
-
-    // Context length
-    if let Some(ctx) = header.context_length() {
-        config.insert("context_length".to_string(), ctx.to_string());
-    }
-
-    // Embedding length
-    if let Some(embed) = header.embedding_length() {
-        config.insert("embedding_length".to_string(), embed.to_string());
-    }
-
-    // Block count
-    if let Some(blocks) = header.block_count() {
-        config.insert("block_count".to_string(), blocks.to_string());
-    }
+    insert_if_some(&mut config, "architecture", header.architecture());
+    insert_if_some(&mut config, "context_length", header.context_length());
+    insert_if_some(&mut config, "embedding_length", header.embedding_length());
+    insert_if_some(&mut config, "block_count", header.block_count());
 
     // Direct KV access for other fields
-    // Attention heads
-    if let Some(heads) = header.get_kv_u32("llama.attention.head_count") {
-        config.insert("attention_head_count".to_string(), heads.to_string());
-    }
-
-    if let Some(kv_heads) = header.get_kv_u32("llama.attention.head_count_kv") {
-        config.insert("attention_head_count_kv".to_string(), kv_heads.to_string());
-    }
-
-    // Rope
-    if let Some(rope_dim) = header.get_kv_u32("llama.rope.dimension_count") {
-        config.insert("rope_dimension_count".to_string(), rope_dim.to_string());
-    }
-
-    if let Some(rope_type) = header.get_kv_str("rope.scaling.type") {
-        config.insert("rope_scaling_type".to_string(), rope_type.to_string());
-    }
-
-    // Feed forward
-    if let Some(ff) = header.get_kv_u32("llama.feed_forward_length") {
-        config.insert("feed_forward_length".to_string(), ff.to_string());
-    }
-
-    // Normalization
-    if let Some(eps) = header.get_kv_str("llama.attention.layer_norm_rms_epsilon") {
-        config.insert("normalization_epsilon".to_string(), eps.to_string());
-    }
-
-    // File type
-    if let Some(ft) = header.get_kv_u32("general.file_type") {
-        config.insert("file_type".to_string(), ft.to_string());
-    }
-
-    // Vocabulary size
-    if let Some(vocab) = header.get_kv_u32("llama.vocab_size") {
-        config.insert("vocab_size".to_string(), vocab.to_string());
-    }
+    insert_u32_kv(&mut config, "attention_head_count", header, "llama.attention.head_count");
+    insert_u32_kv(&mut config, "attention_head_count_kv", header, "llama.attention.head_count_kv");
+    insert_u32_kv(&mut config, "rope_dimension_count", header, "llama.rope.dimension_count");
+    insert_str_kv(&mut config, "rope_scaling_type", header, "rope.scaling.type");
+    insert_u32_kv(&mut config, "feed_forward_length", header, "llama.feed_forward_length");
+    insert_str_kv(&mut config, "normalization_epsilon", header, "llama.attention.layer_norm_rms_epsilon");
+    insert_u32_kv(&mut config, "file_type", header, "general.file_type");
+    insert_u32_kv(&mut config, "vocab_size", header, "llama.vocab_size");
 
     config
+}
+
+fn insert_if_some<T: ToString>(config: &mut HashMap<String, String>, key: &str, value: Option<T>) {
+    if let Some(v) = value {
+        config.insert(key.to_string(), v.to_string());
+    }
+}
+
+fn insert_u32_kv(config: &mut HashMap<String, String>, key: &str, header: &GgufHeader, kv_key: &str) {
+    if let Some(v) = header.get_kv_u32(kv_key) {
+        config.insert(key.to_string(), v.to_string());
+    }
+}
+
+fn insert_str_kv(config: &mut HashMap<String, String>, key: &str, header: &GgufHeader, kv_key: &str) {
+    if let Some(v) = header.get_kv_str(kv_key) {
+        config.insert(key.to_string(), v.to_string());
+    }
 }
 
 /// Verify a GGUF file's integrity by parsing its header.

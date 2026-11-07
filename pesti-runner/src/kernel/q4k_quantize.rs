@@ -33,6 +33,36 @@ fn pack_scale_min_k4(j: usize, scales: &mut [u8], sc: u8, m: u8) {
     }
 }
 
+/// Group parameters computed during quantization.
+struct GroupParams {
+    scale: u8,
+    min_offset: u8,
+}
+
+/// Compute per-group scale and min offset for a group of values.
+fn compute_group_params(group: &[f32], d: f32, dmin: f32) -> GroupParams {
+    let (mut group_min, mut group_max) = (group[0], group[0]);
+    for &x in group {
+        if x < group_min { group_min = x; }
+        if x > group_max { group_max = x; }
+    }
+
+    let range = group_max - group_min;
+    let scale = if range > 0.0 {
+        (range / (d * 15.0f32)).round().clamp(1.0, 63.0) as u8
+    } else {
+        1u8
+    };
+
+    let min_offset = if group_min < 0.0 {
+        (-group_min / (dmin * scale as f32)).round().clamp(0.0, 63.0) as u8
+    } else {
+        0u8
+    };
+
+    GroupParams { scale, min_offset }
+}
+
 /// Quantize a block of f32 values to Q4_K format.
 ///
 /// Inverse of the ggml block_q4_K dequantization formula:
@@ -45,94 +75,45 @@ pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
     assert!(output.len() >= Q4K_BLOCK_SIZE, "Output buffer too small for Q4_K block");
 
     // Step 1: Compute global scale (d) and min offset (dmin).
-    // d is chosen so that d * 63 * 15 can represent the maximum absolute value.
     let max_abs = input.iter().fold(0.0f32, |max, &x| {
         if x.abs() > max { x.abs() } else { max }
     });
 
-    // Use a safety factor of 8 to avoid saturation in edge cases
     let d = if max_abs > 0.0 {
         max_abs / (8.0f32 * 63.0f32)
     } else {
         1e-6f32
     };
 
-    // In ggml, dmin is typically equal to d for symmetric ranges
     let dmin = d;
 
-    // Step 2: For each group of 32 values, compute per-group scale and min factors.
-    let mut scales = [0u8; 12]; // 8 groups × 2 values (sc, m), packed as 6-bit pairs
+    // Step 2: Compute per-group parameters and pack scales.
+    let mut scales = [0u8; 12];
+    let mut group_params = Vec::with_capacity(Q4K_GROUPS);
 
     for g in 0..Q4K_GROUPS {
         let start = g * 32;
         let group = &input[start..start + 32];
-
-        // Find min and max of this group
-        let (mut group_min, mut group_max) = (group[0], group[0]);
-        for &x in group {
-            if x < group_min { group_min = x; }
-            if x > group_max { group_max = x; }
-        }
-
-        // Compute scale factor (sc): maps value range to 4-bit precision.
-        // We want d * sc * 15 to cover both the range and absolute values.
-        let range = group_max - group_min;
-        let sc = if range > 0.0 {
-            let raw_sc = range / (d * 15.0f32);
-            raw_sc.round().clamp(1.0, 63.0) as u8
-        } else {
-            1u8 // Constant group: use minimum scale
-        };
-
-        // Compute min offset (m): maps group minimum to quantized 0.
-        // From dequant formula: -dmin * m ≈ group_min → m = -group_min / dmin
-        let m = if group_min < 0.0 {
-            let raw_m = -group_min / (dmin * sc as f32);
-            raw_m.round().clamp(0.0, 63.0) as u8
-        } else {
-            0u8 // All values positive: no offset needed
-        };
-
-        pack_scale_min_k4(g, &mut scales, sc, m);
+        let params = compute_group_params(group, d, dmin);
+        pack_scale_min_k4(g, &mut scales, params.scale, params.min_offset);
+        group_params.push(params);
     }
 
-    // Step 3: Quantize each value to a 4-bit nibble using the inverse formula.
-    let mut qs = [0u8; 128]; // 256 nibbles packed into 128 bytes
-
+    // Step 3: Quantize each value using pre-computed group parameters.
+    let mut qs = [0u8; 128];
     for g in 0..Q4K_GROUPS {
         let start = g * 32;
         let group = &input[start..start + 32];
+        let params = &group_params[g];
 
-        // Re-find min/max and recompute scale/min factors (same as above)
-        let (mut group_min, mut group_max) = (group[0], group[0]);
-        for &x in group {
-            if x < group_min { group_min = x; }
-            if x > group_max { group_max = x; }
-        }
-
-        let range = group_max - group_min;
-        let sc = if range > 0.0 {
-            (range / (d * 15.0f32)).round().clamp(1.0, 63.0) as u8
-        } else {
-            1u8
-        };
-
-        let m = if group_min < 0.0 {
-            (-group_min / (dmin * sc as f32)).round().clamp(0.0, 63.0) as u8
-        } else {
-            0u8
-        };
-
+        let denom = d * params.scale as f32;
         for (i, &x) in group.iter().enumerate() {
-            // Inverse of dequant: q = round((x + dmin * m) / (d * sc))
-            let denom = d * sc as f32;
             let q = if denom > 0.0 {
-                ((x + dmin * m as f32) / denom).round().clamp(0.0, 15.0) as u8
+                ((x + dmin * params.min_offset as f32) / denom).round().clamp(0.0, 15.0) as u8
             } else {
                 0u8
             };
 
-            // Pack two nibbles per byte (lower and upper)
             if i < 32 {
                 qs[i] = q;
             } else {
@@ -141,7 +122,7 @@ pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
         }
     }
 
-    // Step 4: Write block header (d, dmin, scales) and quantized data.
+    // Step 4: Write block header and quantized data.
     let d_f16 = f16::from_f32(d);
     output[0] = d_f16.to_le_bytes()[0];
     output[1] = d_f16.to_le_bytes()[1];
@@ -150,12 +131,10 @@ pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
     output[2] = dmin_f16.to_le_bytes()[0];
     output[3] = dmin_f16.to_le_bytes()[1];
 
-    // Write per-group scales (already packed in ggml canonical layout)
     for i in 0..12 {
         output[4 + i] = scales[i];
     }
 
-    // Write quantized data
     for i in 0..128 {
         output[16 + i] = qs[i];
     }
