@@ -62,6 +62,19 @@ When built with `--features hermes-memory`, pesti-durable-objects integrates wit
 - `pesti-runner/src/kernel/dispatch.rs` — persistent weight caching infrastructure
 - `pesti-runner/src/kernel/linear.rs` — upload weights at construction time
 
+### pesti: Cyclomatic Complexity Reduction 🧹
+
+**Refactored 4 production files to reduce cyclomatic complexity across the workspace:**
+
+| File | Change | Impact |
+|------|--------|--------|
+| `pesti-gguf-cli/src/main.rs` | Extracted 5 helper functions from main() | Complexity 16 → ~5 |
+| `pesti-safetensors/src/gguf_model_loader.rs` | Refactored extract_model_config() with helper functions | Reduced branching complexity |
+| `pesti-runner/src/kernel/q4k_quantize.rs` | Eliminated redundant group parameter computation | Removed duplicate scale/min_offset calculation |
+| `crates/pesti-gguf-standalone/src/parser.rs` | Version-specific parsing extraction (parse_gguf_v1, parse_gguf_v2_v3) | Complexity 10 → ~5 |
+
+**Verification:** All modified crates compile successfully. pesti-safetensors tests pass (40 passed). pesti-runner tests blocked by pre-existing llama-cpp-2 dependency issue.
+
 ### pesti-runner: Major Architecture Simplification (Weeks 27-29) 🧹
 
 **Cleaned up codebase to improve maintainability and eliminate technical debt:**
