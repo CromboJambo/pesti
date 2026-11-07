@@ -324,7 +324,11 @@ impl LlamaRunner {
         messages: &[LlamaChatMessage],
         add_generation_prompt: bool,
     ) -> Result<String> {
-        let tmpl = llama_cpp_2::model::LlamaChatTemplate::new("")?;
+        // Get the model's built-in chat template (or fall back to empty)
+        let tmpl = match self.model.chat_template(None) {
+            Ok(t) => t,
+            Err(_) => llama_cpp_2::model::LlamaChatTemplate::new("")?,
+        };
         let result = self
             .model
             .apply_chat_template(&tmpl, messages, add_generation_prompt)?;
