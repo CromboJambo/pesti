@@ -51,7 +51,7 @@ impl SemanticTag {
                 ErrorHandling::Ignored => 0b101,
                 _ => 0b000,
             };
-            bits |= (err_bits << 2);
+            bits |= err_bits << 2;
         }
 
         // Bit 5: confidence (proven vs inferred)
@@ -134,7 +134,7 @@ pub fn annotate_all(
             SemanticTag::encode(
                 own_ann.map(|a| a.mode),
                 err_ann.map(|a| a.handling),
-                mut_ann.map_or(false, |a| a.mutable),
+                mut_ann.is_some_and(|a| a.mutable),
                 own_ann
                     .map(|a| a.confidence)
                     .or_else(|| err_ann.map(|a| a.confidence))

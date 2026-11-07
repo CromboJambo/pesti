@@ -3,7 +3,7 @@
 //! Tracks mutability state through the AST: let vs let mut, &self vs &mut self,
 //! and mutation sites.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Mutability state of a binding or reference
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,11 +81,7 @@ impl MutabilityAnalyzer {
     /// Analyze function parameters for mutability
     fn analyze_params(&mut self, params: &[&str]) {
         for (i, param) in params.iter().enumerate() {
-            let mutable = if param.starts_with("&mut ") {
-                true
-            } else {
-                false
-            };
+            let mutable = param.starts_with("&mut ");
             
             // Bind with reference mutability kind
             let name = param.trim_start_matches('&').trim_start_matches(' ').trim_end();

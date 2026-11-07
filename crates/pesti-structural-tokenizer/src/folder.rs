@@ -31,7 +31,7 @@ impl Span {
 }
 
 pub fn fold(tokens: Vec<StructuralToken>) -> Option<Span> {
-    let mut root = Span::new(SpanKind::Block);
+    let root = Span::new(SpanKind::Block);
     // Stack of spans - top is current scope
     let mut stack = vec![root];
 

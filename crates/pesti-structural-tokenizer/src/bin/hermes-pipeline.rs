@@ -31,11 +31,10 @@ fn process_directory(dir: &PathBuf) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "rs" && path.file_name().is_some() {
+            if let Some(ext) = path.extension()
+                && ext == "rs" && path.file_name().is_some() {
                     process_file(path.to_str().unwrap());
                 }
-            }
         }
     }
 }
