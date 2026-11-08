@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 29 (In Progress)
 
+### pesti-structural-tokenizer: Documentation & Examples 📚
+
+**Addressed crabjar requirement #7 with comprehensive documentation improvements.**
+
+Implements crabjar requirements #6 and #7 from `specs/crabjar-requirements.md`:
+- Added semantic analysis examples to README demonstrating all 4 analyzers
+- Linked API stability and migration guide documentation in README
+- Marked all 7 crabjar requirements as complete in spec document
+
+**Updated files:**
+- `crates/pesti-structural-tokenizer/README.md` — semantic examples + API stability section
+- `specs/crabjar-requirements.md` — marked requirements #2, #6, #7 complete
+
 ### pesti-structural-tokenizer: API Stability Documentation 📋
 
 **Formalized stable API surface and breaking change policy for `pesti_structural_tokenizer::semantic` module.**

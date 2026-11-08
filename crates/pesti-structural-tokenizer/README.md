@@ -186,6 +186,58 @@ This crate is a dependency of [pesti-runner](https://github.com/CromboJambo/pest
 - **Emission**: Structural tokens emitted based on node kind; function bodies elided except for declaration signatures
 - **Folded Map**: Stack-based `{ }` folding transforms flat token streams into nested `Span` objects representing code structure
 
+## Semantic Analysis Examples
+
+The `semantic` module provides four analyzers for extracting semantic properties from Rust code:
+
+```rust
+use pesti_structural_tokenizer::semantic::{analyze_errors, analyze_ownership, analyze_mutability, analyze_complexity};
+
+let source = r#"
+fn process(data: Vec<u8>) -> Result<String, Error> {
+    let mut buf = String::new();
+    for byte in data {
+        buf.push(byte as char);
+    }
+    Ok(buf)
+}
+"#;
+
+// Analyze error handling patterns
+let errors = analyze_errors(source);
+for (pos, ann) in &errors {
+    println!("Error at {}: {:?}", pos, ann.handling);
+}
+
+// Analyze ownership modes
+let ownership = analyze_ownership(source);
+for (pos, ann) in &ownership {
+    println!("Ownership at {}: {:?}", pos, ann.mode);
+}
+
+// Analyze mutability
+let mutability = analyze_mutability(source);
+for (pos, ann) in &mutability {
+    println!("Mutability at {}: {:?}", pos, ann.kind);
+}
+
+// Analyze complexity
+let complexity = analyze_complexity(source);
+for (pos, ann) in &complexity {
+    println!("Complexity at {}: cyclomatic={}", pos, ann.metrics.cyclomatic);
+}
+```
+
+## API Stability & Migration
+
+This crate follows a formal breaking change policy. See [docs/api-stability.md](docs/api-stability.md) for:
+- Stable API surface documentation
+- Breaking change policy (semver-based)
+- Migration guide between major versions
+- Crabjar integration notes
+
+Current stable version: v0.1.x — all semantic analyzers and projection functions are part of the stable API.
+
 ## License
 
 AGPL-3.0-or-later
