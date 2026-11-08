@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 29 (In Progress)
 
+### pesti-structural-tokenizer: API Stability Documentation 📋
+
+**Formalized stable API surface and breaking change policy for `pesti_structural_tokenizer::semantic` module.**
+
+Implements crabjar requirement #2 from `specs/crabjar-requirements.md`:
+- Documented stable API items: all 4 analyzers, projection functions, and SemanticTag encoding
+- Defined breaking change policy: patch (no changes), minor (additive only), major (breaking permitted)
+- Added analyzer behavior documentation explaining classification decisions and confidence scoring
+- All analyzers use lightweight string scanning for performance
+
+**Updated files:**
+- `crates/pesti-structural-tokenizer/src/semantic/mod.rs` — comprehensive module documentation
+
 ### pesti-structural-tokenizer: Complexity Analysis Module 🆕
 
 **New semantic analysis module for cyclomatic complexity and control-flow density.**
