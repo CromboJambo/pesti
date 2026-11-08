@@ -17,7 +17,7 @@ keeps only the three always-current files: [`README.md`](../README.md),
 ## By topic
 
 - **[concepts/](concepts/)** — Architecture strategy, the Computational Inertia concept, Slow-Friend Substrate (bounded memory / scoped MoE / drift-gated compaction)
-- **[specs/](specs/)** — Self-contained implementation specs for fresh coding sessions (e.g. Slow-Friend G1)
+- **[specs/](specs/)** — Self-contained implementation specs for fresh coding sessions (e.g. Slow-Friend G1, Weight-Space Programming)
 - **[gpu/](gpu/)** — GPU attention kernels, WGMMA/tcgen05, flash attention, CUDA integration, RoPE caching
 - **[cpu/](cpu/)** — CPU forward pass, SIMD, optimization, CPU↔GPU mapping
 - **[conformance/](conformance/)** — Numerical conformance vs. llama.cpp, regression-testing strategy

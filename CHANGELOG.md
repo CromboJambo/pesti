@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - Week 29 (In Progress)
+## [Unreleased] - Week 30 (In Progress)
+
+### Weight-Space Programming Specification 🆕📋
+**Status**: ✅ Spec'd — ready for implementation
+
+**Decision**: Add runtime weight-space programming capabilities to PESTI via new `pesti-weightspace` crate. Enables surgical model adaptation at inference time without training loops, based on arXiv:2611.05341v1 findings showing LLMs can design targeted weight patches (median 3 parameter changes vs ~430 for fine-tuning).
+
+**API surface**: `WeightSpaceSession` with atomic edit application (`apply_edits`), snapshot/rollback, weight statistics computation (ColumnNorm, SwitchOnPoint), and GGUF save/load. Complements existing PEFT/LoRA infrastructure by providing direct parameter access.
+
+**Key design decisions**:
+- Raw tensor access with shape validation (not layer abstraction)
+- Atomic patch application — all edits succeed or all fail
+- Dequantize → edit → requantize workflow for quantized models
+- JSON I/O for external LLM integration (pesti executes patches proposed by LLM)
+- 16-bit overflow risk mitigation via weight range validation
+
+**Files created**: `docs/specs/WEIGHTSPACE_SPEC.md` — full implementation spec with architecture, acceptance criteria, and TDD order.
+
+---
 
 ### pesti-structural-tokenizer: Documentation & Examples 📚
 

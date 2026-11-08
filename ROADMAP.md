@@ -2,13 +2,13 @@
 
 **Goal:** Portable execution substrate for transformer inference — stable Rust, GPU-first via CUDA dispatch, validated against llama.cpp reference outputs.
 
-## Current State (Week 29)
+## Current State (Week 30)
 
 Working GPU inference path for Qwen2.5-0.5B-Instruct with production profiling complete. Llama.cpp replacement track delivered (CLI, studio, server).
 
 **Throughput:** pesti-runner: ~307 tok/s vs llama.cpp: 504.04 tok/s (Qwen2.5-0.5B-Instruct-Q4_K_M, RTX 3070 Ti) — Phase 1 target of 100 tok/s exceeded. Remaining gap is optimization target.
 
-**Week 29 focus:** Optimization path decision — GEMM compute at practical optimum via plain cuBLAS; evaluating KV cache quantization, speculative decoding, or custom non-GEMM kernels.
+**Week 30 focus:** Optimization path decision — GEMM compute at practical optimum via plain cuBLAS; evaluating KV cache quantization, speculative decoding, or custom non-GEMM kernels.
 
 ## Roadmap Hierarchy
 
@@ -21,6 +21,7 @@ This document is the top-level project roadmap. Detailed implementation plans li
 | [docs/REFACTOR_SPEC.md](docs/REFACTOR_SPEC.md) | Architecture refactor plan (fused attention, GEMM integration, KV cache quantization) |
 | [docs/spec-gpu-optimization-phases.md](docs/spec-gpu-optimization-phases.md) | GPU optimization phase specifications |
 | [docs/SPEC_LLM_RUNNER_TRAINING.md](docs/SPEC_LLM_RUNNER_TRAINING.md) | LLM runner, tuning, and safetensors track |
+| [docs/specs/WEIGHTSPACE_SPEC.md](docs/specs/WEIGHTSPACE_SPEC.md) | Weight-space programming: runtime weight editing API |
 
 ## Completed Work (Summary)
 
@@ -44,11 +45,24 @@ This document is the top-level project roadmap. Detailed implementation plans li
 
 ## Upcoming Work
 
-### Optimization Path Decision (Week 29)
+### Optimization Path Decision (Week 30)
 Based on Week 28 findings, GEMM compute is at practical optimum. Remaining throughput gap likely stems from other factors. Candidate optimization paths:
 1. KV cache quantization — reduce memory bandwidth pressure
 2. Speculative decoding — increase effective tokens/sec
 3. Custom CUDA kernels for non-GEMM ops — attention, RMSNorm, RoPE optimization headroom
+
+### Weight-Space Programming (Spec'd)
+Runtime weight editing API for surgical model adaptation without training loops. Based on arXiv:2611.05341v1 findings showing LLMs can design targeted weight patches (median 3 parameter changes vs ~430 for fine-tuning).
+
+**API surface:** `pesti-weightspace` crate with WeightSpaceSession for atomic edit application, snapshot/rollback, and weight statistics computation. Complements existing PEFT/LoRA infrastructure by providing direct parameter access.
+
+**Key design decisions:**
+- Raw tensor access with shape validation (not layer abstraction)
+- Atomic patch application (all edits succeed or all fail)
+- Dequantize → edit → requantize workflow for quantized models
+- JSON I/O for external LLM integration (pesti executes patches proposed by LLM)
+
+See [docs/specs/WEIGHTSPACE_SPEC.md](docs/specs/WEIGHTSPACE_SPEC.md) for full spec.
 
 ### LLM Runner, Tuning & Safetensors Track (Planned)
 - QLoRA fine-tuning pipeline with hardware-aware configuration

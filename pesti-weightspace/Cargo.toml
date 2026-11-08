@@ -1,0 +1,18 @@
+[package]
+name = "pesti-weightspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Weight-space programming API for PESTI — read, analyze, and surgically edit model weights at inference time"
+
+[dependencies]
+pesti-runner = { path = "../pesti-runner", default-features = false }
+pesti-safetensors = { path = "../pesti-safetensors" }
+pesti-gguf.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -12,6 +12,7 @@ members = [
     "pesti-studio",
     "pesti-durable-objects",
     "pesti-training",
+    "pesti-weightspace",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance", "pesti-embeddings"]
 resolver = "2"
@@ -35,7 +36,7 @@ description = "Portable Execution Substrate for Transformer Inference"
 
 [workspace.dependencies]
 # GGUF parser
-pesti-gguf = "0.2.4"
+pesti-gguf = { path = "crates/pesti-gguf-standalone" }
 pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
 # Plugin system (llm-plug-in package)
 pesti-plug-in = { path = "llm-plug-in" }
