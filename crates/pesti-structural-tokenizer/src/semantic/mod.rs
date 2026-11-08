@@ -5,11 +5,13 @@
 //! These annotations can be projected onto the token stream as parallel channels
 //! or inline tags to provide richer context for LLM processing.
 
+mod complexity;
 mod errors;
 mod mutability;
 mod ownership;
 mod projection;
 
+pub use complexity::{analyze_complexity, ComplexityAnnotation, ComplexityMetrics};
 pub use errors::{analyze_errors, ErrorAnnotation, ErrorHandling};
 pub use mutability::{analyze_mutability, MutKind, MutabilityAnnotation};
 pub use ownership::{analyze_ownership, OwnershipAnnotation, OwnershipMode};

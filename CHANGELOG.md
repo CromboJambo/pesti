@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 29 (In Progress)
 
+### pesti-structural-tokenizer: Complexity Analysis Module 🆕
+
+**New semantic analysis module for cyclomatic complexity and control-flow density.**
+
+Implements crabjar requirement #3 from `specs/crabjar-requirements.md`:
+- Per-function complexity metrics with confidence scoring
+- Cyclomatic complexity, max nesting depth, control flow statement count
+- Lightweight scanning approach (no full AST required)
+- Integrated into existing semantic analysis infrastructure (`analyze_all`)
+
+**API:**
+```rust
+use pesti_structural_tokenizer::semantic::{
+    analyze_complexity, ComplexityAnnotation, ComplexityMetrics
+};
+
+let annotations = analyze_complexity(source);
+for (node_id, annotation) in annotations {
+    println!("Node {}: cyclomatic={}, depth={}, control_flow={}",
+        node_id,
+        annotation.metrics.cyclomatic,
+        annotation.metrics.max_depth,
+        annotation.metrics.control_flow_count);
+}
+```
+
+**Use case**: Complexity-based risk assessment for code review prioritization. Functions with high cyclomatic complexity are flagged as higher-risk changes that warrant more careful review.
+
+**Files created:**
+- `crates/pesti-structural-tokenizer/src/semantic/complexity.rs` — complexity analysis implementation (244 lines)
+- Updated `crates/pesti-structural-tokenizer/src/semantic/mod.rs` — module exports
+
+**Tests**: All 5 complexity tests passing, full crate test suite passing (18 lib + 6 integration + 15 semantic = 39 total).
+
 ### pesti-durable-objects: New Durable Objects Crate 🆕
 
 **New crate providing durable object persistence for fleet coordination.**
