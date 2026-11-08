@@ -8,6 +8,12 @@ use syn::{Item, parse_file};
 mod folder;
 pub use folder::{Span, SpanItem, SpanKind, fold};
 
+pub mod errors;
+pub use errors::{
+    legacy_to_structured, structured_to_legacy, AnalysisResult, ErrorContext, ErrorKind,
+    LegacyTokenizeError, RecoveryConfig, Severity, TokenizerError, TokenizerResult,
+};
+
 pub mod semantic;
 pub use semantic::*;
 

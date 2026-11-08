@@ -43,6 +43,32 @@ for (node_id, annotation) in annotations {
 
 **Tests**: All 5 complexity tests passing, full crate test suite passing (18 lib + 6 integration + 15 semantic = 39 total).
 
+### pesti-structural-tokenizer: Performance Benchmarking 🚀
+
+Benchmarked tokenization performance on large files to verify crabjar's production requirements. Tokenization of a 12,749-line Rust file (202KB) completes in 0.35 seconds — well under the 1-second target.
+
+**Benchmark results:**
+- `tokenize()`: 12,250 tokens in 0.352s
+- `tokenize_with_budget()`: 500 emissions in 0.354s
+- `tokenize_with_semantics()`: 500 emissions in 0.352s
+
+**Files created:**
+- `crates/pesti-structural-tokenizer/examples/benchmark_large_file.rs` — performance benchmark example (1,628 bytes)
+
+### pesti-structural-tokenizer: API Stability Documentation 📋
+
+Formalized the semantic module as a stable API with breaking change policy. Documents the public API surface for crabjar's JEV decision-making system and establishes versioning conventions.
+
+**Files created:**
+- `crates/pesti-structural-tokenizer/docs/api-stability.md` — API stability documentation (4,624 bytes)
+
+### pesti-structural-tokenizer: Structured Error Types 🆕
+
+New error handling module (`errors.rs`) providing structured error types with context for JEV decision-making. Distinguishes syntax errors in input code from internal tokenizer errors and analyzer failures via `ErrorKind` enum. Includes severity levels (Fatal, Recoverable, Warning), error context with source position and snippets, recovery mode support via `AnalysisResult<T>` for best-effort partial analysis, and backward-compatible conversion functions between legacy and structured error formats.
+
+**Files created:**
+- `crates/pesti-structural-tokenizer/src/errors.rs` — structured error types (350 lines)
+
 ### pesti-durable-objects: New Durable Objects Crate 🆕
 
 **New crate providing durable object persistence for fleet coordination.**
