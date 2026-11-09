@@ -141,6 +141,9 @@ pub struct DispatchContext {
     /// Direct CUDA cuBLAS bridge for true F16 inference (Phase 1 of F16 spec).
     #[cfg(feature = "cuda")]
     cuda_bridge: Option<CudaBridge>,
+    /// Memoized kernel selector — centralizes all "which kernel?" decisions.
+    /// Adding a new kernel = one registry entry, not N dispatch method edits.
+    kernel_selector: crate::kernel::selector::KernelSelector,
 }
 
 impl DispatchContext {
@@ -179,6 +182,12 @@ impl DispatchContext {
             None
         };
 
+        // Build the kernel selector with detected capabilities.
+        // The SM version drives which CUDA kernels are registered.
+        let cuda_sm = Self::detect_cuda_sm(&engine);
+        let registry = crate::kernel::selector::KernelRegistry::detect(cuda_sm);
+        let kernel_selector = crate::kernel::selector::KernelSelector::new(registry);
+
         Self {
             engine,
             memory,
@@ -188,6 +197,24 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            kernel_selector,
+        }
+    }
+
+    /// Detect the CUDA compute capability (SM version) if a GPU is available.
+    /// Returns `None` for CPU-only builds or when detection fails.
+    fn detect_cuda_sm(engine: &InferenceEngine) -> Option<u16> {
+        #[cfg(feature = "cuda")]
+        {
+            if let Some(info) = engine.cuda_device_info() {
+                let (major, minor) = info.compute_capability;
+                return Some(((major * 10 + minor) as u16));
+            }
+            None
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            None
         }
     }
 
@@ -258,6 +285,9 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            kernel_selector: crate::kernel::selector::KernelSelector::new(
+                crate::kernel::selector::KernelRegistry::detect(None),
+            ),
         }
     }
 
@@ -282,6 +312,12 @@ impl DispatchContext {
             None
         };
 
+        // Detect capabilities before moving engine into the struct.
+        let cuda_sm = Self::detect_cuda_sm(&engine);
+        let kernel_selector = crate::kernel::selector::KernelSelector::new(
+            crate::kernel::selector::KernelRegistry::detect(cuda_sm),
+        );
+
         Self {
             engine,
             memory,
@@ -291,6 +327,7 @@ impl DispatchContext {
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
             cuda_bridge,
+            kernel_selector,
         }
     }
 

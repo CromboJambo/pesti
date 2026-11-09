@@ -106,6 +106,7 @@ pub mod mistralrs_backend;
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
 pub mod q4k_quantize; // Q4_K quantization (inverse of dequantization)
 pub mod rope;
+pub mod selector;
 pub mod slow_friend;
 pub mod softmax;
 #[cfg(feature = "cuda")]
