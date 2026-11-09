@@ -91,20 +91,20 @@ rustc --edition 2021 /tmp/tma_verify.rs \
     --extern cuda_core=target/debug/deps/libcuda_core-*.rlib \
     -o /tmp/tma_verify 2>&1 || {
     echo "Note: rustc compilation failed (expected in workspace context)"
-    echo "The bridge code exists at pesti-runner/src/kernel/tma_bridge.rs"
+    echo "The bridge code exists at crates/pesti-runner/src/kernel/tma_bridge.rs"
     echo "It uses cuTensorMapEncodeTiled correctly."
 }
 
 echo ""
 echo "3. Checking tma_bridge.rs exists and has correct API..."
-if [ -f "pesti-runner/src/kernel/tma_bridge.rs" ]; then
-    if grep -q "cuTensorMapEncodeTiled" pesti-runner/src/kernel/tma_bridge.rs; then
+if [ -f "crates/pesti-runner/src/kernel/tma_bridge.rs" ]; then
+    if grep -q "cuTensorMapEncodeTiled" crates/pesti-runner/src/kernel/tma_bridge.rs; then
         echo "✅ tma_bridge.rs contains cuTensorMapEncodeTiled calls"
     else
         echo "❌ tma_bridge.rs missing cuTensorMapEncodeTiled"
     fi
     
-    if grep -q "create_f16_swizzled" pesti-runner/src/kernel/tma_bridge.rs; then
+    if grep -q "create_f16_swizzled" crates/pesti-runner/src/kernel/tma_bridge.rs; then
         echo "✅ tma_bridge.rs has SWIZZLE_128B variant for tcgen05"
     else
         echo "❌ tma_bridge.rs missing SWIZZLE_128B variant"
@@ -115,7 +115,7 @@ fi
 
 echo ""
 echo "4. Comparing speculative vs real descriptor..."
-if grep -q "SPECULATIVE" pesti-runner/src/kernel/tma_descriptor.rs; then
+if grep -q "SPECULATIVE" crates/pesti-runner/src/kernel/tma_descriptor.rs; then
     echo "⚠️  tma_descriptor.rs still uses speculative bit layout (marked as such)"
     echo "   → Use HostTmaDescriptor from tma_bridge.rs for production"
 else

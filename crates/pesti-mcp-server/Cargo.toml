@@ -10,7 +10,7 @@ name = "pesti-mcp"
 path = "src/main.rs"
 
 [dependencies]
-pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer", version = "0.1.2" }
+pesti-structural-tokenizer = { path = "../pesti-structural-tokenizer", version = "0.1.2" }
 rmcp = { version = "3.5", features = ["server"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -36,7 +36,7 @@ if [ -n "$PTX_FILES" ]; then
     echo "$BEST_PTX ($(ls -lh $BEST_PTX | awk '{print $5}'))"
     echo ""
     echo "Copy command:"
-    echo "cp $BEST_PTX /home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
+    echo "cp $BEST_PTX /home/crombo/projects/pesti/crates/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
 else
     echo "❌ No PTX files found!"
     echo "Build may have completed without generating PTX."

@@ -8,7 +8,7 @@ description = "QLoRA fine-tuning pipeline for crabjar decision engine training d
 
 [dependencies]
 pesti-runner = { path = "../pesti-runner" }
-qwen2-bpe = { path = "../crates/qwen2-bpe" }
+qwen2-bpe = { path = "../qwen2-bpe" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror.workspace = true

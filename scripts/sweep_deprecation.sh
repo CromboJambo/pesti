@@ -14,12 +14,12 @@ echo "   Found $DEPRECATED_COUNT deprecated items (intentional API deprecations)
 
 echo ""
 echo "2. Checking for TODO/FIXME comments in source..."
-TODO_COUNT=$(grep -rnE 'TODO|FIXME|XXX' --include='*.rs' pesti-runner/src/ 2>/dev/null | wc -l)
+TODO_COUNT=$(grep -rnE 'TODO|FIXME|XXX' --include='*.rs' crates/pesti-runner/src/ 2>/dev/null | wc -l)
 echo "   Found $TODO_COUNT TODO/FIXME items (mostly future feature placeholders)"
 
 echo ""
 echo "3. Checking for unwrap() in production code..."
-UNWRAP_COUNT=$(grep -rn '\.unwrap()' --include='*.rs' pesti-runner/src/ 2>/dev/null | wc -l)
+UNWRAP_COUNT=$(grep -rn '\.unwrap()' --include='*.rs' crates/pesti-runner/src/ 2>/dev/null | wc -l)
 echo "   Found $UNWRAP_COUNT unwrap() calls (acceptable in error handling)"
 
 echo ""

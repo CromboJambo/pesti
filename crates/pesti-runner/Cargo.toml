@@ -8,14 +8,14 @@ edition = "2024"
 pesti-gguf.workspace = true
 pesti-plug-in.workspace = true
 pesti-safetensors.workspace = true
-pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
+pesti-structural-tokenizer = { path = "../pesti-structural-tokenizer" }
 
 # Tokenizers - using tokenizers crate with ByteLevel BPE config
 tokenizers = { workspace = true, features = ["fancy-regex"] }
 tiktoken-rs.workspace = true
 
 # Pure Rust Qwen2 BPE tokenizer (optional)
-qwen2-bpe = { path = "../crates/qwen2-bpe", optional = true }
+qwen2-bpe = { path = "../qwen2-bpe", optional = true }
 
 # Tracing and error handling
 tracing.workspace = true

@@ -1,21 +1,21 @@
 [workspace]
 members = [
-    "pesti-runner",
-    "llm-plug-in",
-    "pesti-safetensors",
-    "pesti-gguf-cli",
     "crates/qwen2-bpe",
     "crates/pesti-structural-tokenizer",
-    "pesti-mcp-server",
-    "pesti-server",
-    "pesti-cli",
-    "pesti-studio",
-    "pesti-durable-objects",
-    "pesti-training",
-    "pesti-weightspace",
-    "pesti-state",
+    "crates/pesti-runner",
+    "crates/llm-plug-in",
+    "crates/pesti-safetensors",
+    "crates/pesti-gguf-cli",
+    "crates/pesti-mcp-server",
+    "crates/pesti-server",
+    "crates/pesti-cli",
+    "crates/pesti-studio",
+    "crates/pesti-durable-objects",
+    "crates/pesti-training",
+    "crates/pesti-weightspace",
+    "crates/pesti-state",
 ]
-exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance", "pesti-embeddings"]
+exclude = ["test_ggml_quants", "cuda-oxide", "crates/pesti-conformance", "crates/pesti-embeddings"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -38,11 +38,11 @@ description = "Portable Execution Substrate for Transformer Inference"
 [workspace.dependencies]
 # GGUF parser
 pesti-gguf = { path = "crates/pesti-gguf-standalone" }
-pesti-structural-tokenizer = { path = "../crates/pesti-structural-tokenizer" }
+pesti-structural-tokenizer = { path = "crates/pesti-structural-tokenizer" }
 # Plugin system (llm-plug-in package)
-pesti-plug-in = { path = "llm-plug-in" }
+pesti-plug-in = { path = "crates/llm-plug-in" }
 # Safetensors support
-pesti-safetensors = { path = "pesti-safetensors" }
+pesti-safetensors = { path = "crates/pesti-safetensors" }
 
 # LLM inference (FFI path)
 llama-cpp-2 = "0.1.146"

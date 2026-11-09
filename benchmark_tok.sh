@@ -18,7 +18,7 @@ echo "Hardware: NVIDIA RTX 4070 Ti SUPER, CUDA 12.x"
 echo ""
 
 # Write benchmark test file
-cat > pesti-runner/tests/benchmark_tok.rs << 'EOF'
+cat > crates/pesti-runner/tests/benchmark_tok.rs << 'EOF'
 //! Tok/s benchmark for pesti-runner using real model generation.
 
 use std::path::Path;
@@ -119,7 +119,7 @@ cargo test --package pesti-runner --features cuda,mistralrs \
     -- --nocapture 2>&1 | grep -E "tok/s|Generated|Decode speed|Model loaded|Warmup|Benchmark Complete|Output:" || true
 
 # Cleanup temp test file
-rm -f pesti-runner/tests/benchmark_tok.rs
+rm -f crates/pesti-runner/tests/benchmark_tok.rs
 
 echo ""
 echo "=== Benchmark Complete ==="

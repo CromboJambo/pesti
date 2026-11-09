@@ -22,11 +22,11 @@ nvcc \
     -O3 \
     -std=c++17 \
     flash_fwd_hdim${HDIM}_${PRECISION}${CAUSAL}_sm80.cu \
-    -o /home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx
+    -o /home/crombo/projects/pesti/crates/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx
 
 echo ""
 echo "✅ PTX compiled successfully!"
-echo "Output: /home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
+echo "Output: /home/crombo/projects/pesti/crates/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
 echo ""
 echo "Next steps:"
 echo "1. Verify the new PTX loads correctly"

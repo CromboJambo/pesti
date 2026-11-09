@@ -19,8 +19,8 @@ echo ""
 # 2. Check PTX files exist
 echo "📁 Step 2: PTX Kernel Files"
 for ptx in attention_wgmma.ptx attention_tcgen05.ptx gemm_wgmma.ptx gemm_tcgen05.ptx; do
-    if [ -f "pesti-runner/src/kernel/ptx/$ptx" ]; then
-        size=$(stat -c%s "pesti-runner/src/kernel/ptx/$ptx")
+    if [ -f "crates/pesti-runner/src/kernel/ptx/$ptx" ]; then
+        size=$(stat -c%s "crates/pesti-runner/src/kernel/ptx/$ptx")
         echo "   ✅ $ptx ($size bytes)"
     else
         echo "   ❌ $ptx (missing)"
@@ -30,13 +30,13 @@ echo ""
 
 # 3. Check kernel builder exists
 echo "🔧 Step 3: Rust Kernel Infrastructure"
-if grep -q "CudaAttentionKernelBuilder" pesti-runner/src/kernel/attention.rs; then
+if grep -q "CudaAttentionKernelBuilder" crates/pesti-runner/src/kernel/attention.rs; then
     echo "   ✅ CudaAttentionKernelBuilder found"
 else
     echo "   ❌ CudaAttentionKernelBuilder missing"
 fi
 
-if grep -q "load_module_from_ptx_src" pesti-runner/src/kernel/attention.rs; then
+if grep -q "load_module_from_ptx_src" crates/pesti-runner/src/kernel/attention.rs; then
     echo "   ✅ PTX loading implemented"
 else
     echo "   ❌ PTX loading missing"
@@ -50,7 +50,7 @@ echo ""
 
 # 5. Check dispatch integration
 echo "⚡ Step 5: Dispatch Layer Integration"
-if grep -q "CudaAttentionKernelBuilder::new" pesti-runner/src/inference_engine.rs; then
+if grep -q "CudaAttentionKernelBuilder::new" crates/pesti-runner/src/inference_engine.rs; then
     echo "   ✅ GPU path wired in InferenceEngine"
 else
     echo "   ❌ GPU path not wired"

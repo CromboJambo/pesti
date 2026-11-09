@@ -48,7 +48,7 @@ if [ -n "$SO_FILES" ]; then
         echo "Lines: $(wc -l < $LARGEST_PTX)"
         echo ""
         echo "Copy command:"
-        echo "cp $LARGEST_PTX /home/crombo/projects/pesti/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
+        echo "cp $LARGEST_PTX /home/crombo/projects/pesti/crates/pesti-runner/src/kernel/ptx/flash_attention_kernel.ptx"
     else
         echo "⚠️  No usable PTX found in .so files"
         echo "The flash-attn package may use Triton JIT compilation instead of pre-compiled PTX"

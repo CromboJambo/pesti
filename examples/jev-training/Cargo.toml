@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pesti-jev-training = { path = "../../pesti-jev-training" }
+pesti-jev-training = { path = "../../crates/pesti-jev-training" }
