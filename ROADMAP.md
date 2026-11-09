@@ -22,6 +22,8 @@ This document is the top-level project roadmap. Detailed implementation plans li
 | [docs/spec-gpu-optimization-phases.md](docs/spec-gpu-optimization-phases.md) | GPU optimization phase specifications |
 | [docs/SPEC_LLM_RUNNER_TRAINING.md](docs/SPEC_LLM_RUNNER_TRAINING.md) | LLM runner, tuning, and safetensors track |
 | [docs/specs/WEIGHTSPACE_SPEC.md](docs/specs/WEIGHTSPACE_SPEC.md) | Weight-space programming: runtime weight editing API |
+| [specs/PESTI_STATE_SPEC.md](specs/PESTI_STATE_SPEC.md) | Persistence and provenance for weight-space operations |
+| [specs/PESTI_COMPLEXITY_ARCHITECTURE_SPEC.md](specs/PESTI_COMPLEXITY_ARCHITECTURE_SPEC.md) | Kernel selection & device abstraction (rustc-inspired complexity patterns) |
 
 ## Completed Work (Summary)
 
@@ -63,6 +65,17 @@ Runtime weight editing API for surgical model adaptation without training loops.
 - JSON I/O for external LLM integration (pesti executes patches proposed by LLM)
 
 See [docs/specs/WEIGHTSPACE_SPEC.md](docs/specs/WEIGHTSPACE_SPEC.md) for full spec.
+
+### Complexity Architecture: Kernel Selection & Device Abstraction (Spec'd)
+
+Apply rustc's complexity-management patterns to pesti-runner's kernel dispatch. The 5-dimensional decision space (hardware × dtype × seq_len × batch × kernel availability) is currently handled with duplicated procedural branching across dispatch methods. Restructure into a memoized `KernelSelector` with a static kernel registry — adding a kernel becomes a data change, not a code change.
+
+**Three phases:**
+1. **KernelSelector** (immediate): Extract kernel selection from dispatch methods into a memoized lookup. ~200 lines of duplicated branching removed.
+2. **ExecutionMode unification** (immediate): Resolve GPU/CPU decision once at init instead of per-call.
+3. **Device-agnostic model graph** (deferred): Separate "what to compute" from "where to compute it." Only when a third backend is needed or dispatch.rs grows past ~1500 lines again.
+
+See [specs/PESTI_COMPLEXITY_ARCHITECTURE_SPEC.md](specs/PESTI_COMPLEXITY_ARCHITECTURE_SPEC.md) for full spec.
 
 ### LLM Runner, Tuning & Safetensors Track (Planned)
 - QLoRA fine-tuning pipeline with hardware-aware configuration
