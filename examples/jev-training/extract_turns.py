@@ -51,7 +51,7 @@ def main():
     print(f"Total turns extracted: {len(all_turns)}")
 
     # Write to file
-    output_file = "/home/crombo/projects/active/pesti/examples/jav-training/hermes_turns.jsonl"
+    output_file = "/home/crombo/projects/active/pesti/examples/jev-training/hermes_turns.jsonl"
     with open(output_file, "w") as f:
         for turn in all_turns:
             f.write(json.dumps(turn) + "\n")

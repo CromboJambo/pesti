@@ -12,11 +12,11 @@ This is like finding the smallest subset of invoices that adds up to the reconci
 
 ```bash
 # Build the selection tool
-cargo build -p pesti-jav-training --release
+cargo build -p pesti-jev-training --release
 
 # Run JEV selection on training data
-./target/release/pesti-jav-training \
-    examples/jav-training/synthetic_examples.jsonl \
+./target/release/pesti-jev-training \
+    examples/jev-training/synthetic_examples.jsonl \
     --embedding-model /path/to/embedding-model.gguf \
     --threshold 0.5 \
     --output selected_subset.jsonl

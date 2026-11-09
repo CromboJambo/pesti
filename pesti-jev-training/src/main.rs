@@ -4,11 +4,11 @@
 
 use anyhow::Result;
 use clap::{Arg, Command};
-use pesti_jav_training::selection::{select_minimal_dataset, SelectionConfig};
-use pesti_jav_training::metrics::evaluate_selection;
+use pesti_jev_training::selection::{select_minimal_dataset, SelectionConfig};
+use pesti_jev_training::metrics::evaluate_selection;
 
 fn main() -> Result<()> {
-    let matches = Command::new("pesti-jav-training")
+    let matches = Command::new("pesti-jev-training")
         .version("0.1.0")
         .about("JEV training data selection via constraint propagation")
         .arg(
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
 }
 
 /// Load training examples from JSON lines file.
-fn load_examples(path: &str) -> Result<Vec<pesti_jav_training::TrainingExample>> {
+fn load_examples(path: &str) -> Result<Vec<pesti_jev_training::TrainingExample>> {
     let content = std::fs::read_to_string(path)?;
     let mut examples = Vec::new();
 
@@ -93,7 +93,7 @@ fn load_examples(path: &str) -> Result<Vec<pesti_jav_training::TrainingExample>>
 
         let obj: serde_json::Value = serde_json::from_str(line)?;
 
-        examples.push(pesti_jav_training::TrainingExample {
+        examples.push(pesti_jev_training::TrainingExample {
             id: obj["id"].as_str().unwrap_or("unknown").to_string(),
             text: obj["text"].as_str().unwrap_or("").to_string(),
             labels: obj["labels"]
@@ -107,7 +107,7 @@ fn load_examples(path: &str) -> Result<Vec<pesti_jav_training::TrainingExample>>
 }
 
 /// Save training examples to JSON lines file.
-fn save_examples(path: &str, examples: &[pesti_jav_training::TrainingExample]) -> Result<()> {
+fn save_examples(path: &str, examples: &[pesti_jev_training::TrainingExample]) -> Result<()> {
     let mut content = String::new();
 
     for example in examples {

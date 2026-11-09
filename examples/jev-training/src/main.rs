@@ -3,8 +3,8 @@
 //! Demonstrates how JEV identifies redundant vs novel constraint contributions
 //! in a training dataset using PESTI embeddings.
 
-use pesti_jav_training::selection::{select_minimal_dataset, SelectionConfig, TrainingExample};
-use pesti_jav_training::metrics::evaluate_selection;
+use pesti_jev_training::selection::{select_minimal_dataset, SelectionConfig, TrainingExample};
+use pesti_jev_training::metrics::evaluate_selection;
 
 fn main() {
     // Create synthetic coding examples with intentional redundancy
@@ -81,7 +81,7 @@ fn main() {
         Err(e) => {
             println!("Error running JEV selection: {}", e);
             println!("\nNote: Requires embedding model at specified path.");
-            println!("Usage: cargo run --example jav_training_data_selection -- <embedding-model-path>");
+            println!("Usage: cargo run --example jev_training_data_selection -- <embedding-model-path>");
         }
     }
 }
