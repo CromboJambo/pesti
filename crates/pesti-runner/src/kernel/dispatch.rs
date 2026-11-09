@@ -579,6 +579,11 @@ impl DispatchContext {
     /// When GPU is available, uses `candle_bridge::gemm` for GPU-accelerated
     /// matrix multiplication via candle-core's CUDA backend.
     #[cfg(feature = "cuda")]
+    /// Dispatch linear layer using the kernel selector.
+    ///
+    /// Selection logic: query the kernel registry for the best GEMM kernel
+    /// matching (arch, dtype) constraints, then execute that path.
+    #[cfg(feature = "cuda")]
     pub fn dispatch_linear(
         &self,
         x: &[f32],
@@ -589,6 +594,8 @@ impl DispatchContext {
         batch_size: usize,
         #[cfg(feature = "cuda")] weight_t_gpu: Option<&Tensor>,
     ) -> Result<Vec<f32>, DispatchError> {
+        use crate::kernel::selector::{ComputeArch, KernelDType, KernelId, KernelRequest};
+
         let m = batch_size;
         let k = in_features;
         let n = out_features;
@@ -607,66 +614,109 @@ impl DispatchContext {
         // Convert input to f16 for GPU
         let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
 
-        // Try direct CUDA cuBLAS bridge first (true F16 inference, Phase 1)
-        #[cfg(feature = "cuda")]
-        let mut result = if self.cuda_bridge_available() {
-            debug!(m, n, k, "Linear: using direct CUDA cuBLAS bridge (F16)");
-            // Pass original weights; cublas handles transpose via OP_T flags
-            self.cuda_bridge()
-                .unwrap()
-                .gemm_f16(&x_f16, weights, m, n, k)
-                .map(|r| r.to_vec())
-                .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16f32: {e}")))
-        } else if self.prefer_gpu
-            && self.gpu_available()
-            && crate::kernel::candle_bridge::bridge_is_cuda()
-        {
-            // Keep input as F16 to match cached weight tensor dtype. Converting
-            // back to F32 here caused a dtype mismatch in matmul (lhs F32, rhs F16).
-            let a_t = Tensor::from_vec(
-                x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(),
-                (m, k),
-                crate::kernel::candle_bridge::bridge_device(),
-            )
-            .map_err(|e| DispatchError::Kernel(format!("x tensor: {e}")))?;
-            // Cached transposed weight tensor (built once at model
-            // construction) — skips the per-call host transpose + weight
-            // re-upload.
-            if let Some(b_t) = weight_t_gpu {
-                candle_bridge::gemm_with_tensors(&a_t, b_t, None, m, k, n, 1.0, 0.0).map_err(|e| {
-                    DispatchError::Kernel(format!("candle_bridge::gemm_with_tensors: {e}"))
-                })
-            } else {
-                // Transpose weights: W is [out, in], need [in, out] for GEMM
-                // W^T[i,j] = W[j,i]
-                let w_t: Vec<f16> = {
-                    let mut out = Vec::with_capacity(k * n);
-                    for i in 0..k {
-                        for j in 0..n {
-                            out.push(weights[j * k + i]);
-                        }
-                    }
-                    out
-                };
-                candle_bridge::gemm(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
-                    .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
-            }
+        // Determine target architecture
+        let arch = if self.prefer_gpu && self.gpu_available() {
+            ComputeArch::Cuda { sm: self.cuda_sm() }
         } else {
-            debug!(m, n, k, "Linear: using CPU GEMM");
-            // Transpose weights: W is [out, in], need [in, out] for GEMM
-            let w_t: Vec<f16> = {
-                let mut out = Vec::with_capacity(k * n);
-                for i in 0..k {
-                    for j in 0..n {
-                        out.push(weights[j * k + i]);
-                    }
+            ComputeArch::Cpu
+        };
+
+        // Query the kernel selector for the best GEMM kernel
+        let req = KernelRequest::linear(arch, KernelDType::F16, m, k, n);
+        let selected = self.kernel_selector.select_ref(&req);
+        debug!(m, n, k, selected = %selected, "Linear: kernel selected");
+
+        // Execute the selected kernel path
+        let mut result = match selected {
+            KernelId::CudaDirectHgemm => {
+                if let Some(bridge) = self.cuda_bridge() {
+                    bridge.gemm_f16(&x_f16, weights, m, n, k)
+                        .map(|r| r.to_vec())
+                        .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))
+                } else {
+                    // Bridge unavailable at runtime — fall through to next best
+                    self.dispatch_linear_fallback(&x_f16, weights, m, n, k, weight_t_gpu)?;
+                    return Ok(self.add_bias(result, bias, batch_size, out_features));
                 }
-                out
-            };
-            Ok(self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?)
+            }
+            KernelId::CudaCublasHgemm => {
+                self.dispatch_linear_candle_bridge(&x_f16, weights, m, n, k, weight_t_gpu)?;
+                return Ok(self.add_bias(result, bias, batch_size, out_features));
+            }
+            _ => {
+                // CPU baseline (or fallback from failed GPU selection)
+                self.dispatch_linear_cpu_path(&x_f16, weights, m, n, k)?;
+                return Ok(self.add_bias(result, bias, batch_size, out_features));
+            }
         }?;
 
-        // Add bias if present
+        Ok(self.add_bias(result, bias, batch_size, out_features))
+    }
+
+    /// CPU fallback path for linear (shared between CUDA and non-CUDA builds).
+    fn dispatch_linear_cpu_path(
+        &self,
+        x_f16: &[f16],
+        weights: &[f16],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<Vec<f32>, DispatchError> {
+        debug!(m, n, k, "Linear: using CPU GEMM");
+        let w_t = Self::transpose_weights(weights, k, n);
+        Ok(self.dispatch_gemm_cpu(x_f16, &w_t, None, m, n, k, 1.0, 0.0)?)
+    }
+
+    /// Candle bridge GPU path for linear.
+    #[cfg(feature = "cuda")]
+    fn dispatch_linear_candle_bridge(
+        &self,
+        x_f16: &[f16],
+        weights: &[f16],
+        m: usize,
+        n: usize,
+        k: usize,
+        weight_t_gpu: Option<&Tensor>,
+    ) -> Result<Vec<f32>, DispatchError> {
+        debug!(m, n, k, "Linear: using candle_bridge::gemm (GPU)");
+        let a_t = Tensor::from_vec(
+            x_f16.iter().map(|&v| v.to_f32()).collect::<Vec<_>>(),
+            (m, k),
+            crate::kernel::candle_bridge::bridge_device(),
+        )
+        .map_err(|e| DispatchError::Kernel(format!("x tensor: {e}")))?;
+
+        if let Some(b_t) = weight_t_gpu {
+            candle_bridge::gemm_with_tensors(&a_t, b_t, None, m, k, n, 1.0, 0.0).map_err(|e| {
+                DispatchError::Kernel(format!("candle_bridge::gemm_with_tensors: {e}"))
+            })
+        } else {
+            let w_t = Self::transpose_weights(weights, k, n);
+            candle_bridge::gemm(x_f16, &w_t, None, m, k, n, 1.0, 0.0)
+                .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
+        }
+    }
+
+    /// Fallback when the selected GPU kernel is unavailable at runtime.
+    #[cfg(feature = "cuda")]
+    fn dispatch_linear_fallback(
+        &self,
+        x_f16: &[f16],
+        weights: &[f16],
+        m: usize,
+        n: usize,
+        k: usize,
+        weight_t_gpu: Option<&Tensor>,
+    ) -> Result<Vec<f32>, DispatchError> {
+        if self.prefer_gpu && self.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
+            self.dispatch_linear_candle_bridge(x_f16, weights, m, n, k, weight_t_gpu)
+        } else {
+            self.dispatch_linear_cpu_path(x_f16, weights, m, n, k)
+        }
+    }
+
+    /// Add bias to result in-place. Returns the modified vector.
+    fn add_bias(&self, mut result: Vec<f32>, bias: Option<&[f32]>, batch_size: usize, out_features: usize) -> Vec<f32> {
         if let Some(b) = bias {
             for b_idx in 0..batch_size {
                 for o in 0..out_features {
@@ -674,8 +724,35 @@ impl DispatchContext {
                 }
             }
         }
+        result
+    }
 
-        Ok(result)
+    /// Transpose weights from [out, in] layout to [in, out] for GEMM.
+    fn transpose_weights(weights: &[f16], k: usize, n: usize) -> Vec<f16> {
+        let mut out = Vec::with_capacity(k * n);
+        for i in 0..k {
+            for j in 0..n {
+                out.push(weights[j * k + i]);
+            }
+        }
+        out
+    }
+
+    /// Get the detected CUDA SM version (defaults to 86 if unknown).
+    fn cuda_sm(&self) -> u16 {
+        #[cfg(feature = "cuda")]
+        {
+            self.engine.cuda_device_info()
+                .map(|info| {
+                    let (major, minor) = info.compute_capability;
+                    major * 10 + minor as u16
+                })
+                .unwrap_or(86)
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            0
+        }
     }
 
     #[cfg(not(feature = "cuda"))]
