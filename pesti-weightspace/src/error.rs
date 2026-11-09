@@ -55,6 +55,10 @@ pub enum WeightSpaceError {
     /// Unsupported operation.
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+
+    /// State persistence operation failed.
+    #[error("state error: {0}")]
+    State(String),
 }
 
 impl From<pesti_runner::error::RunnerError> for WeightSpaceError {

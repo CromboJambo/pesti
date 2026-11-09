@@ -10,9 +10,12 @@ description = "Weight-space programming API for PESTI — read, analyze, and sur
 pesti-runner = { path = "../pesti-runner", default-features = false }
 pesti-safetensors = { path = "../pesti-safetensors" }
 pesti-gguf.workspace = true
+pesti-state = { path = "../pesti-state" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

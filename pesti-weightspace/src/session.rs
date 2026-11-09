@@ -7,8 +7,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use pesti_gguf::types::GgufHeader;
-use pesti_runner::gguf_weight_loader::{load_gguf_weights, GgufWeights};
+use pesti_gguf::types::{GgufHeader, GgufKvValue};
+use pesti_runner::gguf_weight_loader::{GgufWeights, load_gguf_weights};
+use pesti_state::model::ModelRecord;
+use pesti_state::operation::{OperationDetails, OperationLog, OperationType};
+use pesti_state::{PestiState, gguf_header_hash};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, WeightSpaceError};
@@ -76,6 +79,20 @@ pub struct WeightSpaceSession {
     weights: GgufWeights,
     /// Snapshot stack for rollback.
     snapshots: VecDeque<Snapshot>,
+
+    // ── Tracking fields (None when opened without pesti-state) ──
+    /// UUID for this session (logged to operation audit trail).
+    session_id: Option<String>,
+    /// Content hash of the model (SHA-256 of GGUF header bytes).
+    model_id: Option<String>,
+    /// Shared state handle for persistence and provenance.
+    state: Option<PestiState>,
+    /// When the session was opened (for duration tracking on close).
+    opened_at: std::time::Instant,
+    /// Total number of edits applied in this session.
+    total_edits: usize,
+    /// Total number of rollbacks performed in this session.
+    rollbacks_performed: usize,
 }
 
 impl WeightSpaceSession {
@@ -101,7 +118,166 @@ impl WeightSpaceSession {
             model_path: path.to_path_buf(),
             weights,
             snapshots: VecDeque::new(),
+            session_id: None,
+            model_id: None,
+            state: None,
+            opened_at: std::time::Instant::now(),
+            total_edits: 0,
+            rollbacks_performed: 0,
         })
+    }
+
+    /// Open a weight-space session with pesti-state tracking.
+    ///
+    /// Registers the model in the state database (by GGUF header hash),
+    /// creates a new session ID, and logs an `open` operation. All subsequent
+    /// operations (edits, snapshots, rollbacks, saves) are automatically
+    /// logged to the audit trail.
+    pub fn open_tracked(model_path: impl AsRef<Path>, state: PestiState) -> Result<Self> {
+        let path = model_path.as_ref();
+        if !path.exists() {
+            return Err(WeightSpaceError::ModelFile {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "model file does not exist",
+                ),
+            });
+        }
+
+        let weights = load_gguf_weights(path)?;
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // Compute model ID from GGUF header
+        let model_id = gguf_header_hash(&weights.header);
+
+        // Register model in state database
+        let arch = weights
+            .header
+            .kv_pairs
+            .iter()
+            .find(|kv| kv.key == "general.architecture")
+            .and_then(|kv| {
+                if let GgufKvValue::String(s) = &kv.value {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let quant = weights
+            .header
+            .kv_pairs
+            .iter()
+            .find(|kv| kv.key == "general.quantization_version")
+            .and_then(|kv| {
+                if let GgufKvValue::Uint32(v) = &kv.value {
+                    Some(format!("v{v}"))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let param_count: Option<u64> = weights
+            .header
+            .kv_pairs
+            .iter()
+            .find(|kv| kv.key == "general.parameter_count")
+            .and_then(|kv| {
+                if let GgufKvValue::Uint64(v) = &kv.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            });
+
+        let model_record = ModelRecord {
+            id: model_id.clone(),
+            path: path.to_string_lossy().to_string(),
+            architecture: arch,
+            quantization: quant,
+            param_count,
+            tensor_count: weights.header.tensors.len(),
+            first_seen: None,
+            last_verified: None,
+        };
+
+        state
+            .register_model(&model_record)
+            .map_err(|e| WeightSpaceError::State(e.to_string()))?;
+
+        let session = Self {
+            model_path: path.to_path_buf(),
+            weights,
+            snapshots: VecDeque::new(),
+            session_id: Some(session_id),
+            model_id: Some(model_id),
+            state: Some(state),
+            opened_at: std::time::Instant::now(),
+            total_edits: 0,
+            rollbacks_performed: 0,
+        };
+
+        // Log the open operation
+        session._log_operation(OperationDetails::Open {
+            session_id: session.session_id.clone().unwrap(),
+            model_path: session.model_path.to_string_lossy().to_string(),
+            tensor_count: session.weights.header.tensors.len(),
+        })?;
+
+        Ok(session)
+    }
+
+    // ── Tracking accessors ────────────────────────────────────────
+
+    /// Get the session ID (if tracking is enabled).
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Get the model content hash (if tracking is enabled).
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
+
+    /// Check if this session has state tracking enabled.
+    pub fn is_tracked(&self) -> bool {
+        self.state.is_some()
+    }
+
+    // ── Operation logging ─────────────────────────────────────────
+
+    /// Log an operation to the audit trail (no-op if not tracked).
+    fn _log_operation(&self, details: OperationDetails) -> Result<()> {
+        if let (Some(state), Some(session_id), Some(model_id)) =
+            (&self.state, &self.session_id, &self.model_id)
+        {
+            let op_type = match &details {
+                OperationDetails::Open { .. } => OperationType::Open,
+                OperationDetails::Edit { .. } => OperationType::Edit,
+                OperationDetails::Snapshot { .. } => OperationType::Snapshot,
+                OperationDetails::Rollback { .. } => OperationType::Rollback,
+                OperationDetails::Save { .. } => OperationType::Save,
+                OperationDetails::Close { .. } => OperationType::Close,
+            };
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let op = OperationLog {
+                id: None,
+                model_id: Some(model_id.clone()),
+                session_id: session_id.clone(),
+                op_type,
+                details,
+                timestamp: now,
+            };
+
+            state
+                .log_operation(&op)
+                .map_err(|e| WeightSpaceError::State(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Get the original model path.
@@ -203,6 +379,7 @@ impl WeightSpaceSession {
         }
 
         // Phase 2: Apply all edits (validation passed, this can't fail)
+        let tensors_modified: Vec<String> = edits.iter().map(|e| e.param.clone()).collect();
         for edit in &edits {
             let data = self
                 .weights
@@ -218,6 +395,15 @@ impl WeightSpaceSession {
             data[byte_start..byte_start + 4].copy_from_slice(&edit.value.to_le_bytes());
         }
 
+        self.total_edits += edits.len();
+
+        // Log the edit operation with actual data
+        let _ = self._log_operation(OperationDetails::Edit {
+            edit_count: edits.len(),
+            tensors_modified,
+            snapshot_taken: false,
+        });
+
         Ok(())
     }
 
@@ -225,15 +411,22 @@ impl WeightSpaceSession {
     pub fn snapshot(&mut self) {
         let snap = Snapshot::new(&self.weights);
         self.snapshots.push_back(snap);
+        // Best-effort logging (snapshot is infallible, so ignore errors)
+        let _ = self._log_operation(OperationDetails::Snapshot {
+            snapshot_index: self.snapshots.len(),
+        });
     }
 
     /// Rollback to the most recent snapshot.
     pub fn rollback(&mut self) -> Result<()> {
+        let from_snapshot = self.snapshots.len();
         let snap = self
             .snapshots
             .pop_back()
             .ok_or(WeightSpaceError::NoSnapshot)?;
         snap.apply_to(&mut self.weights);
+        self.rollbacks_performed += 1;
+        self._log_operation(OperationDetails::Rollback { from_snapshot })?;
         Ok(())
     }
 
@@ -267,7 +460,63 @@ impl WeightSpaceSession {
         writer
             .write(path)
             .map_err(|e| WeightSpaceError::Gguf(format!("failed to write safetensors: {}", e)))?;
+
+        // Log the save operation with actual path
+        let _ = self._log_operation(OperationDetails::Save {
+            output_path: path.to_string_lossy().to_string(),
+            format: "safetensors".to_string(),
+            adapter_id: None,
+        });
+
         Ok(())
+    }
+
+    /// Save current weights as a named adapter with provenance metadata.
+    ///
+    /// Creates an `AdapterRecord` in the state database linking this session's
+    /// edits to the base model. The adapter starts in `Active` state — it can
+    /// be revalidated or deprecated later as assumptions change.
+    pub fn save_as_adapter(
+        &self,
+        name: &str,
+        description: &str,
+        output_path: impl AsRef<Path>,
+    ) -> Result<String> {
+        let (state, model_id) = match (&self.state, &self.model_id) {
+            (Some(s), Some(m)) => (s.clone(), m.clone()),
+            _ => {
+                return Err(WeightSpaceError::State(
+                    "save_as_adapter requires a tracked session (open_tracked)".to_string(),
+                ));
+            }
+        };
+
+        // Save the weights first
+        self.save_edited_model(&output_path)?;
+
+        // Create adapter record with full provenance
+        let output_str = output_path.as_ref().to_string_lossy().to_string();
+        let mut record = pesti_state::AdapterRecord::new(
+            model_id,
+            output_str.clone(),
+            Some(format!("{name}: {description}")),
+            None, // assumptions — TODO: capture from session context
+        );
+        record.state = pesti_state::AdapterState::Active;
+
+        let adapter_id = state
+            .register_adapter(record)
+            .map_err(|e| WeightSpaceError::State(e.to_string()))?;
+
+        // Log a Save operation capturing the adapter ID in its details,
+        // so the session audit trail links the file write to the registered adapter.
+        let _ = self._log_operation(OperationDetails::Save {
+            output_path: output_str,
+            format: "safetensors".to_string(),
+            adapter_id: Some(adapter_id.clone()),
+        });
+
+        Ok(adapter_id)
     }
 
     /// Compute a statistic over all elements of a tensor.
@@ -289,22 +538,25 @@ impl WeightSpaceSession {
             }
             StatType::StdDev => {
                 let mean: f64 = values.iter().map(|&v| v as f64).sum::<f64>() / count as f64;
-                let variance: f64 =
-                    values.iter().map(|&v| {
+                let variance: f64 = values
+                    .iter()
+                    .map(|&v| {
                         let d = v as f64 - mean;
                         d * d
-                    }).sum::<f64>() / count as f64;
+                    })
+                    .sum::<f64>()
+                    / count as f64;
                 variance.sqrt()
             }
-            StatType::Min => {
-                values.iter().map(|&v| v as f64).fold(f64::INFINITY, f64::min)
-            }
-            StatType::Max => {
-                values.iter().map(|&v| v as f64).fold(f64::NEG_INFINITY, f64::max)
-            }
-            StatType::NonZeroCount => {
-                values.iter().filter(|&&v| v != 0.0).count() as f64
-            }
+            StatType::Min => values
+                .iter()
+                .map(|&v| v as f64)
+                .fold(f64::INFINITY, f64::min),
+            StatType::Max => values
+                .iter()
+                .map(|&v| v as f64)
+                .fold(f64::NEG_INFINITY, f64::max),
+            StatType::NonZeroCount => values.iter().filter(|&&v| v != 0.0).count() as f64,
             StatType::L2Norm => {
                 let sum_sq: f64 = values.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>();
                 sum_sq.sqrt()
@@ -334,8 +586,24 @@ impl WeightSpaceSession {
     }
 }
 
+impl Drop for WeightSpaceSession {
+    fn drop(&mut self) {
+        // Log session close (best-effort, ignore errors during drop)
+        let _ = self._log_operation(OperationDetails::Close {
+            total_edits: self.total_edits,
+            snapshots_created: self.snapshots.len(),
+            rollbacks_performed: self.rollbacks_performed,
+            duration_secs: self.opened_at.elapsed().as_secs_f64(),
+        });
+    }
+}
+
 /// Compute the flat (row-major) index from a multi-dimensional index and shape.
-pub(crate) fn multi_to_flat_index(index: &[usize], shape: &[usize], tensor_name: &str) -> Result<usize> {
+pub(crate) fn multi_to_flat_index(
+    index: &[usize],
+    shape: &[usize],
+    tensor_name: &str,
+) -> Result<usize> {
     if index.len() != shape.len() {
         return Err(WeightSpaceError::IndexOutOfBounds {
             tensor: tensor_name.to_string(),
@@ -653,7 +921,9 @@ mod tests {
             param: target.to_string(),
             stat_type: crate::stats::StatType::L2Norm,
         };
-        let result = session.compute_stat(&op).expect("Failed to compute L2 norm");
+        let result = session
+            .compute_stat(&op)
+            .expect("Failed to compute L2 norm");
 
         assert!(result.value >= 0.0);
         assert!(result.value.is_finite());
