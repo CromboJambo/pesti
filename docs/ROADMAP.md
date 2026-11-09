@@ -123,6 +123,28 @@ This replaces the week-by-week itemization. Each phase has explicit deliverables
 | pesti-safetensors: 4 failing tests (Q4_K/Q5_K/Q6_K dequant + config) | Open | Can't fully validate quantized model loading |
 | Examples don't compile after API changes | Recurring | Developer experience, not runtime |
 
+## Complexity Architecture (rustc-inspired query system)
+
+**Spec:** `specs/PESTI_COMPLEXITY_ARCHITECTURE_SPEC.md` (committed `b93b6b2`)
+**Inspiration:** rustc's query system — memoized, constraint-based decision making instead of scattered procedural branching.
+
+**Phase 1 — KernelSelector module (Complete, `c207562`):**
+- New `kernel/selector.rs`: structured kernel selection via `KernelRequest` → `KernelId`
+- `KernelRegistry`: static registry built from runtime detection (SM version, feature flags)
+- Constraint system: `ArchConstraint`, `DTypeConstraint`, `ShapeConstraint`
+- `PerfClass` ranking for deterministic best-kernel choice
+- Guaranteed CPU fallback — selection never fails
+- 9 unit tests covering selection, memoization, constraints, and fallback
+
+**Phase 2 — Dispatch integration (In progress):**
+- ✅ `dispatch_linear`: three-way branching replaced with selector query (`ca18a9e`)
+- Extracted shared helpers: `transpose_weights()`, `add_bias()`, `cuda_sm()`
+- Eliminated duplicated weight-transpose code (was in 3 branches, now 1 function)
+- ⬜ `dispatch_attention`: complex CUDA path selection → selector query
+- ⬜ `dispatch_gemm`: simple arch-based selection → selector query
+
+**Impact:** Adding a new kernel backend = one registry entry + one match arm, not modifying every dispatch method. The combinatorial explosion of (arch × dtype × shape) branches is now a data-driven lookup.
+
 **Failure Modes (Reference)**
 
 When heading toward these patterns, expect trouble:
