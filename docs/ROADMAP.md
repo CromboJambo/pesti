@@ -93,9 +93,11 @@ Both are significant engineering efforts. Estimated impact: 2-5x faster GEMM com
 
 **Conclusion:** CUTLASS integration complete; no further GEMM compute optimization expected from this path. Next optimization targets: KV cache quantization, speculative decoding, or custom CUDA kernels for non-GEMM operations.
 
-## Week 30: [TBD - Next Optimization Path]
+## Week 30: State Persistence + Optimization Path
 
-Based on Week 29 findings, persistent weight caching + GQA optimization delivered major improvement (4.5x). Remaining throughput gap (~73 vs 504 tok/s) stems from non-GEMM operations and memory bandwidth. Candidate optimization paths:
+**Completed:** PESTI State persistence layer (`pesti-state` crate) — SQLite-backed tracking of models, adapters, and operation audit logs. Content-addressed model registry enables revalidation triggers when base models change. Tracked weight-space sessions with full provenance. CLI query interface (`pesti-state list-models|list-adapters|show-adapter|session-log`). See `specs/PESTI_STATE_SPEC.md`.
+
+**Optimization (ongoing):** Based on Week 29 findings, persistent weight caching + GQA optimization delivered major improvement (4.5x). Remaining throughput gap (~73 vs 504 tok/s) stems from non-GEMM operations and memory bandwidth. Candidate optimization paths:
 1. **KV cache quantization** — reduce KV cache memory bandwidth pressure (highest potential impact)
 2. **Speculative decoding** — increase effective tokens/sec without reducing per-token latency
 3. **Custom CUDA kernels for non-GEMM ops** — attention, RMSNorm, RoPE may have optimization headroom

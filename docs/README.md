@@ -32,3 +32,7 @@ keeps only the three always-current files: [`README.md`](../README.md),
 - **Historical** week-by-week logs live in `history/` and are not updated after the fact.
 - Performance claims must cite a measured baseline (see `benchmarks/`).
 - Phase status uses: ✅ Complete · ⚠️ Partial · ❌ Blocked · 🔄 In Progress.
+
+## Runtime State
+
+PESTI persists model provenance, adapter lifecycle, and operation audit logs in a SQLite database at **`~/.pesti/state.db`** (WAL mode). This file is created automatically on first tracked session (`WeightSpaceSession::open_tracked()`). Query it with the `pesti-state` CLI binary. Back up this file to preserve provenance across reinstalls; deleting it only loses tracking metadata, not model files.

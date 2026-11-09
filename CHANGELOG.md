@@ -27,6 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+### pesti-state: Persistence Layer 🆕🗄️
+**Status**: ✅ Implemented
+
+**Decision**: Add SQLite-backed state persistence via new `pesti-state` crate for tracking model provenance, adapter lifecycle, and operation audit trails across weight-space sessions. Chose SQLite over JSON files for relational queries (adapter→model→operations), concurrent read safety (WAL mode), and zero-copy integration with pesti-weightspace's existing session model.
+
+**Schema**: Three-table design — `models` (content-addressed by SHA-256 of GGUF header), `adapters` (provenance-tracked edited models with lifecycle states: unverified → validated → active → needs_revalidation → deprecated), `operations` (append-only audit log per session).
+
+**Key design decisions**:
+- Content-addressed model IDs trigger automatic adapter revalidation when base models change
+- Opt-in tracking via `open_tracked()` — existing `open()` path has zero overhead
+- Operation details stored as JSON blobs (flexible, no schema migrations for new op types)
+- Default state file at `~/.pesti/state.db`, overridable per-session or via CLI flag
+
+**Files created**: `pesti-state/` crate (state.rs, model.rs, adapter.rs, operation.rs, error.rs), CLI binary (`pesti-state/src/main.rs`), integration with `pesti-weightspace` session tracking.
+
+---
+
 ### pesti-structural-tokenizer: Documentation & Examples 📚
 
 **Addressed crabjar requirement #7 with comprehensive documentation improvements.**

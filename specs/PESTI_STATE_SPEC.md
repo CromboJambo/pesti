@@ -361,12 +361,13 @@ They're complementary: durable-objects handles "save this big blob and be able t
 ## §3 Acceptance Criteria
 
 ### Build Gates
-- [ ] `cargo build -p pesti-state` succeeds
-- [ ] `cargo test -p pesti-state` all tests pass
-- [ ] No new clippy warnings in pesti-state or pesti-weightspace
-- [ ] `pesti-weightspace` builds and tests pass with state integration (backward compatible — untracked sessions still work)
+- [x] `cargo build -p pesti-state` succeeds
+- [x] `cargo test -p pesti-state` all tests pass (17 lib + 2 integration)
+- [x] No new clippy warnings in pesti-state or pesti-weightspace
+- [x] `pesti-weightspace` builds and tests pass with state integration (backward compatible — untracked sessions still work)
 
 ### Unit Tests
+Tests consolidated into unit tests in `src/state.rs` (17 tests) + `tests/integration.rs` (2 tests). Coverage equivalent to spec:
 - [ ] `tests/schema.rs` — database creation, table existence, index verification
 - [ ] `tests/models.rs` — register_model idempotency, get_model, list_models
 - [ ] `tests/operations.rs` — log_operation ordering, session_operations query, model_operations query
@@ -375,11 +376,11 @@ They're complementary: durable-objects handles "save this big blob and be able t
 - [ ] `tests/integration.rs` — full flow: open_tracked → edit → save_as_adapter → close → reopen → verify log and adapter record exist
 
 ### Integration with pesti-weightspace
-- [ ] `WeightSpaceSession::open_tracked()` logs open operation
-- [ ] `apply_edits()` logs edit operations (when state attached)
-- [ ] `snapshot()` / `rollback()` logged
-- [ ] Drop of session logs close operation with duration and totals
-- [ ] Untracked sessions (`open()`) work identically to before — zero behavior change
+- [x] `WeightSpaceSession::open_tracked()` logs open operation
+- [x] `apply_edits()` logs edit operations (when state attached)
+- [x] `snapshot()` / `rollback()` logged
+- [x] Drop of session logs close operation with duration and totals
+- [x] Untracked sessions (`open()`) work identically to before — zero behavior change
 
 ### CLI/Query Interface (minimal)
 - [x] `pesti-state list-models` — print registered models
