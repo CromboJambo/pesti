@@ -13,6 +13,7 @@ members = [
     "pesti-durable-objects",
     "pesti-training",
     "pesti-weightspace",
+    "pesti-state",
 ]
 exclude = ["test_ggml_quants", "cuda-oxide", "pesti-conformance", "pesti-embeddings"]
 resolver = "2"
