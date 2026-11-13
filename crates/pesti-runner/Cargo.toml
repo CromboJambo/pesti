@@ -78,6 +78,10 @@ encoding_rs.workspace = true
 
 [features]
 default = []
-cuda = ["cudarc", "llama-cpp-2/cuda"]
+# Enables pesti-runner's native CUDA kernel paths (cudarc). Does NOT pull in
+# llama.cpp's CUDA backend — use `llama-cpp-cuda` for that separately.
+cuda = ["cudarc"]
+# Enables llama.cpp's CUDA backend (requires working CUDA toolkit build).
+llama-cpp-cuda = ["llama-cpp-2/cuda"]
 llama_cpp_2_v156 = []
 rust-tokenizer = ["qwen2-bpe"]

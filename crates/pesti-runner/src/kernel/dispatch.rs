@@ -627,29 +627,26 @@ impl DispatchContext {
         debug!(m, n, k, selected = %selected, "Linear: kernel selected");
 
         // Execute the selected kernel path
-        let mut result = match selected {
+        let result = match selected {
             KernelId::CudaDirectHgemm => {
                 if let Some(bridge) = self.cuda_bridge() {
                     bridge
                         .gemm_f16(&x_f16, weights, m, n, k)
                         .map(|r| r.to_vec())
-                        .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))
+                        .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))?
                 } else {
-                    // Bridge unavailable at runtime — fall through to next best
-                    self.dispatch_linear_fallback(&x_f16, weights, m, n, k, weight_t_gpu)?;
-                    return Ok(self.add_bias(result, bias, batch_size, out_features));
+                    // Bridge unavailable at runtime — fall back to CPU path
+                    self.dispatch_linear_cpu_path(&x_f16, weights, m, n, k)?
                 }
             }
             KernelId::CudaCublasHgemm => {
-                self.dispatch_linear_candle_bridge(&x_f16, weights, m, n, k, weight_t_gpu)?;
-                return Ok(self.add_bias(result, bias, batch_size, out_features));
+                self.dispatch_linear_candle_bridge(&x_f16, weights, m, n, k, weight_t_gpu)?
             }
             _ => {
                 // CPU baseline (or fallback from failed GPU selection)
-                self.dispatch_linear_cpu_path(&x_f16, weights, m, n, k)?;
-                return Ok(self.add_bias(result, bias, batch_size, out_features));
+                self.dispatch_linear_cpu_path(&x_f16, weights, m, n, k)?
             }
-        }?;
+        };
 
         Ok(self.add_bias(result, bias, batch_size, out_features))
     }
@@ -754,7 +751,7 @@ impl DispatchContext {
                 .cuda_device_info()
                 .map(|info| {
                     let (major, minor) = info.compute_capability;
-                    major * 10 + minor as u16
+                    (major as u16) * 10 + (minor as u16)
                 })
                 .unwrap_or(86)
         }

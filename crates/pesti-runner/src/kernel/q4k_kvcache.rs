@@ -162,7 +162,8 @@ impl Q4KVCache {
 
     /// Calculate memory savings vs FP16 cache.
     pub fn memory_savings_percentage(&self) -> f32 {
-        let fp16_bytes = self.num_kv_heads * self.head_dim * self.max_seq * 2; // K + V in FP16
+        // FP16: K and V each use num_kv_heads * head_dim * max_seq * 2 bytes
+        let fp16_bytes = self.num_kv_heads * self.head_dim * self.max_seq * 2 * 2;
         let q4k_bytes = self.k_buffer.len() + self.v_buffer.len();
         ((fp16_bytes as f32 - q4k_bytes as f32) / fp16_bytes as f32) * 100.0
     }
