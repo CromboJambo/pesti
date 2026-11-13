@@ -145,6 +145,30 @@ This replaces the week-by-week itemization. Each phase has explicit deliverables
 
 **Impact:** Adding a new kernel backend = one registry entry + one match arm, not modifying every dispatch method. The combinatorial explosion of (arch × dtype × shape) branches is now a data-driven lookup.
 
+## Type-Safe Masking & Tensor Layer Separation (November 2026)
+
+**Specs:** `specs/SOFTMASK_TYPE_SPEC.md`, `specs/TENSOR_LAYER_SEPARATION_SPEC.md`
+
+### Softmask: Type-Safe Attention Masking (Complete)
+
+Replaced ad-hoc boolean masking with a type-safe `Softmask` abstraction that unifies causal, sliding-window, and custom eligibility patterns across all three CPU attention implementations.
+
+- **Phase 1** (`63920d2`): New `softmask.rs` module — `Softmask` trait with `is_eligible()`, `CausalMask`, `SlidingWindowMask`, `CompositeMask` implementations; empty-segment policy (debug panic / release zeros)
+- **Phase 2** (`f67cb31`): Migrated `cpu_optimized` attention path to `Softmask`; cross-implementation parity tests locking masking semantics
+- **Phase 3**: Migrated remaining CPU paths; 6 masking parity tests; ~13–16% release-mode overhead documented as acceptable trade-off for type safety
+
+**Key principle:** "Don't change the measurements to force the system into alignment. Preserve the measurements and represent the constraints separately." Softmask is now the authority on eligibility — future attention implementations must not recreate causal-mask logic independently.
+
+### Tensor Layer Separation (Phase 2 Complete)
+
+Layered weight storage architecture separating tensor bytes (Layer 0), structure/metadata (Layer 1), and system factors (Layer 2).
+
+- **Phase 1** (`d183c0a`): `weight_store.rs` foundation — `CoreTensor`, `TensorInfo`, `TensorStructure`, `SafetensorsFile`, `WeightStore`; memmap2 integration; zero-copy tensor access
+- **Phase 2** (this commit): Layer-2 `SystemFactors` — RoPE config, normalization stats, attention pattern, quantization scheme; `InferenceReader` trait extending `TensorReader`; dual-source config parsing (HuggingFace `config.json` + safetensors `__metadata__`); computed structure fields (`num_layers`, `hidden_size`)
+- **Phase 3** (planned): Migrate `LlamaModel::load_safetensors()` to use `WeightStore::load_inference()`; eliminate redundant config parsing in model construction
+
+**Design:** Strictly additive — `LlamaModel::load_safetensors()` unchanged. `WeightStore::load_minimal()` preserves Phase 1 behavior (Layers 0+1 only); `load_inference()` adds Layer-2 system factors for full inference readiness.
+
 **Failure Modes (Reference)**
 
 When heading toward these patterns, expect trouble:
@@ -160,7 +184,7 @@ When heading toward these patterns, expect trouble:
 **GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
 
 ---
-*Updated: October 14, 2026 — Week 29 complete; architecture simplification + persistent weight caching optimization delivered 4.5x speedup*
+*Updated: November 12, 2026 — Softmask complete (Phases 1-3), Tensor Layer Separation Phase 2 complete*
 
 ## Llama.cpp Replacement Track (Parallel)
 

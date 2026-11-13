@@ -1,11 +1,12 @@
-//! Weight storage layering — Layer 0 (CoreTensor) and Layer 1 (TensorStructure).
+//! Weight storage layering — Layers 0, 1, and 2.
 //!
-//! This module implements Phase 1 of TENSOR_LAYER_SEPARATION_SPEC:
-//! - `CoreTensor`: name + raw bytes + shape + dtype (no layout interpretation)
-//! - `TensorInfo`: per-tensor metadata (shape, dtype, byte offsets)
+//! This module implements Phases 1-2 of TENSOR_LAYER_SEPARATION_SPEC:
+//! - `CoreTensor`: name + raw bytes + shape + dtype (no layout interpretation) [Layer 0]
+//! - `TensorInfo`: per-tensor metadata (shape, dtype, byte offsets) [Layer 1]
 //! - `TensorStructure`: Layer 1 — the model's tensor graph as a lookup table
 //! - `SafetensorsFile`: mmap wrapper with zero-copy tensor access
-//! - `WeightStore`: minimal weight storage that loads Layers 0+1 only
+//! - `SystemFactors`: Layer 2 — inference-critical config (rope, norms, attention pattern)
+//! - `WeightStore`: weight storage that loads Layers 0+1 (minimal) or 0+1+2 (inference)
 //!
 //! Design principles:
 //! - Zero-copy: tensor data is a slice into the mmap'd file, not a copy
@@ -21,6 +22,7 @@ use memmap2::Mmap;
 use tracing::debug;
 
 use crate::error::{Result, RunnerError};
+use crate::transformer::rope::RopeConfig;
 
 /// Data type of a tensor element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,11 +41,9 @@ impl Dtype {
     /// Size of one element in bytes.
     pub fn size(&self) -> usize {
         match self {
-            Dtype::F32 => 4,
-            Dtype::F16 | Dtype::BF16 => 2,
+            Dtype::F32 | Dtype::I32 => 4,
+            Dtype::F16 | Dtype::BF16 | Dtype::I16 => 2,
             Dtype::U8 | Dtype::I8 => 1,
-            Dtype::I16 | Dtype::F16 => 2,
-            Dtype::I32 => 4,
             Dtype::I64 => 8,
         }
     }
@@ -114,6 +114,10 @@ pub struct TensorStructure {
     pub arch: String,
     /// Total number of parameters (sum of all element counts).
     pub total_parameters: usize,
+    /// Number of transformer layers detected from tensor names.
+    pub num_layers: usize,
+    /// Hidden size (embedding dimension), inferred from embedding weight shape.
+    pub hidden_size: Option<usize>,
 }
 
 impl TensorStructure {
@@ -144,8 +148,144 @@ impl TensorStructure {
 
     /// Find all tensors matching a name prefix.
     pub fn with_prefix(&self, prefix: &str) -> Vec<&TensorInfo> {
-        self.tensors.values().filter(|t| t.name.starts_with(prefix)).collect()
+        self.tensors
+            .values()
+            .filter(|t| t.name.starts_with(prefix))
+            .collect()
     }
+
+    /// Get the number of transformer layers detected in this structure.
+    pub fn num_layers(&self) -> usize {
+        self.num_layers
+    }
+
+    /// Get the hidden size (embedding dimension).
+    pub fn hidden_size(&self) -> Option<usize> {
+        self.hidden_size
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Layer 2: System Factors
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Attention masking pattern for the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionPattern {
+    /// Standard causal mask (lower triangular) — decoder-only models.
+    Causal,
+    /// No masking — encoder-style bidirectional attention.
+    Bidirectional,
+    /// Sliding window attention with the given window size in tokens.
+    SlidingWindow(usize),
+}
+
+/// Normalization statistics for a layer.
+#[derive(Debug, Clone)]
+pub struct NormStats {
+    /// Epsilon for RMS/Layer norm (typically 1e-5 or 1e-6).
+    pub eps: f32,
+    /// Optional per-channel weight (for learned norms like RMSNorm).
+    pub weight: Option<Arc<[f32]>>,
+}
+
+/// Quantization scheme used by the model weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantScheme {
+    /// No quantization (F32).
+    None,
+    /// 16-bit floating point.
+    F16,
+    /// Brain floating point.
+    BF16,
+    /// Q4_K quants (GGUF style).
+    Q4K,
+    /// Q5_K quants (GGUF style).
+    Q5K,
+    /// Q8_0 quants (GGUF style).
+    Q8_0,
+}
+
+impl QuantScheme {
+    /// Infer the quantization scheme from a safetensors dtype string.
+    pub fn from_dtype(dtype: &str) -> Self {
+        match dtype {
+            "F16" | "FLOAT_16" => QuantScheme::F16,
+            "BF16" | "BFLOAT_16" => QuantScheme::BF16,
+            _ => QuantScheme::None,
+        }
+    }
+}
+
+/// Per-layer system factors.
+#[derive(Debug, Clone)]
+pub struct LayerSystemFactors {
+    /// Normalization statistics for this layer.
+    pub norm: NormStats,
+    /// Optional attention bias (for models that use it).
+    pub attention_bias: Option<Arc<[f32]>>,
+}
+
+/// Layer 2: System factors required for correct inference.
+///
+/// These are the model parameters that determine *how* tensors are used,
+/// not *what* they contain. Without these, the same tensor bytes could be
+/// interpreted incorrectly (wrong RoPE base, wrong norm epsilon, etc.).
+#[derive(Debug, Clone)]
+pub struct SystemFactors {
+    /// RoPE configuration (base, dimension, scaling).
+    pub rope: RopeConfig,
+    /// Global normalization epsilon (used when per-layer stats aren't available).
+    pub norm_eps: f32,
+    /// Attention masking pattern.
+    pub attention_pattern: AttentionPattern,
+    /// Quantization scheme of the weights.
+    pub quantization: QuantScheme,
+    /// Per-layer system factors (norms, biases).
+    pub per_layer: Vec<LayerSystemFactors>,
+}
+
+impl SystemFactors {
+    /// Create default system factors for a standard causal LLM.
+    pub fn new(head_dim: usize, rope_base: f32, max_position_embeddings: usize) -> Self {
+        let rope = RopeConfig::new(head_dim, rope_base, max_position_embeddings);
+        Self {
+            rope,
+            norm_eps: 1e-5,
+            attention_pattern: AttentionPattern::Causal,
+            quantization: QuantScheme::None,
+            per_layer: Vec::new(),
+        }
+    }
+
+    /// Get norm stats for a specific layer, falling back to global epsilon.
+    pub fn norm_for_layer(&self, layer: usize) -> NormStats {
+        self.per_layer
+            .get(layer)
+            .map(|lf| lf.norm.clone())
+            .unwrap_or(NormStats {
+                eps: self.norm_eps,
+                weight: None,
+            })
+    }
+}
+
+/// Minimal interface for inference (Layer 0 + 1 + 2).
+///
+/// Types implementing this trait provide access to both tensor data
+/// and the system factors needed to use them correctly.
+pub trait InferenceReader: TensorReader {
+    /// Get system factors (rope, norms, attention pattern).
+    fn system_factors(&self) -> Option<&SystemFactors>;
+
+    /// Get norm stats for a specific layer.
+    fn norm_stats(&self, layer: usize) -> Option<NormStats>;
+
+    /// Get RoPE configuration.
+    fn rope_config(&self) -> Option<&RopeConfig>;
+
+    /// Get the attention pattern.
+    fn attention_pattern(&self) -> Option<AttentionPattern>;
 }
 
 /// Layer 0: A core tensor — name + raw bytes + shape + dtype.
@@ -227,6 +367,8 @@ pub struct SafetensorsFile {
     mmap: Mmap,
     /// Layer 1: tensor structure parsed from the header.
     pub structure: TensorStructure,
+    /// Metadata from the safetensors header (`__metadata__` field).
+    metadata: HashMap<String, String>,
 }
 
 impl SafetensorsFile {
@@ -267,7 +409,8 @@ impl SafetensorsFile {
             RunnerError::ModelLoad(format!("Failed to parse safetensors header: {e}"))
         })?;
 
-        // Extract metadata (architecture info).
+        // Extract metadata (architecture info and other key-value pairs).
+        let mut metadata = HashMap::new();
         let arch = header
             .get("__metadata__")
             .and_then(|m| m.get("format"))
@@ -275,9 +418,20 @@ impl SafetensorsFile {
             .unwrap_or("unknown")
             .to_string();
 
+        // Store all metadata string values for later use.
+        if let Some(meta_obj) = header.get("__metadata__").and_then(|m| m.as_object()) {
+            for (k, v) in meta_obj {
+                if let Some(s) = v.as_str() {
+                    metadata.insert(k.clone(), s.to_string());
+                }
+            }
+        }
+
         // Build TensorStructure.
         let mut tensors = HashMap::new();
         let mut total_parameters = 0usize;
+        let mut max_layer_idx = 0usize;
+        let mut hidden_size = None;
 
         for (name, value) in header.as_object().ok_or_else(|| {
             RunnerError::ModelLoad("Safetensors header is not an object".to_string())
@@ -324,6 +478,18 @@ impl SafetensorsFile {
             let size_bytes = end - start;
             let element_count: usize = shape.iter().product();
 
+            // Detect layer index from tensor names like "model.layers.37.self_attn.q_proj.weight"
+            if let Some(layer_idx) = extract_layer_index(name) {
+                max_layer_idx = max_layer_idx.max(layer_idx + 1);
+            }
+
+            // Infer hidden size from the embedding weight (first dimension of [hidden, vocab] or [vocab, hidden])
+            if name.contains("embed") && shape.len() == 2 && hidden_size.is_none() {
+                // Embedding is typically [vocab_size, hidden_size] or [hidden_size, vocab_size]
+                // The smaller dimension is usually hidden_size for large vocab models
+                hidden_size = Some(shape[1].min(shape[0]));
+            }
+
             tensors.insert(
                 name.clone(),
                 TensorInfo {
@@ -341,6 +507,8 @@ impl SafetensorsFile {
             tensors,
             arch,
             total_parameters,
+            num_layers: max_layer_idx,
+            hidden_size,
         };
 
         debug!(
@@ -354,6 +522,7 @@ impl SafetensorsFile {
             path: path.to_path_buf(),
             mmap,
             structure,
+            metadata,
         })
     }
 
@@ -373,6 +542,11 @@ impl SafetensorsFile {
             shape: info.shape,
             dtype: info.dtype,
         })
+    }
+
+    /// Get the metadata from the safetensors header.
+    pub fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
     }
 
     /// Total file size in bytes.
@@ -399,15 +573,16 @@ impl TensorReader for SafetensorsFile {
     }
 }
 
-/// Minimal weight store — loads Layers 0+1 only (no architecture interpretation).
+/// Weight store — loads Layers 0+1 (minimal) or 0+1+2 (inference).
 ///
-/// This is the entry point for Phase 1. Consumers can use this to:
-/// - Inspect tensor shapes/dtypes without loading the full model
-/// - Access raw tensor bytes via zero-copy mmap
-/// - Verify tensor structure before committing to a full load
+/// This is the main public API for weight access. Use:
+/// - `load_minimal()` for Phase 1: tensor data + structure only
+/// - `load_inference()` for Phase 2: adds system factors (rope, norms, attention pattern)
 pub struct WeightStore {
     /// The underlying safetensors file (mmap'd).
     pub file: SafetensorsFile,
+    /// Layer 2: System factors required for inference (None in minimal mode).
+    system: Option<SystemFactors>,
 }
 
 impl WeightStore {
@@ -417,7 +592,39 @@ impl WeightStore {
     /// until accessed via `tensor_data()` or `core_tensor()`.
     pub fn load_minimal(path: &Path) -> Result<Self> {
         let file = SafetensorsFile::open(path)?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            system: None,
+        })
+    }
+
+    /// Load weight store with full inference support (Layers 0+1+2).
+    ///
+    /// Parses system factors (rope config, norm stats, attention pattern) from
+    /// either a HuggingFace config.json or safetensors metadata.
+    pub fn load_inference(path: &Path, config_path: Option<&Path>) -> Result<Self> {
+        let file = SafetensorsFile::open(path)?;
+
+        // Parse system factors from config.json or safetensors metadata
+        let system = if let Some(cp) = config_path {
+            parse_system_factors_from_config_json(cp, &file.structure)?
+        } else {
+            parse_system_factors_from_metadata(file.metadata(), &file.structure)?
+        };
+
+        debug!(
+            path = %path.display(),
+            tensor_count = file.structure.len(),
+            num_layers = file.structure.num_layers,
+            rope_base = system.rope.base,
+            norm_eps = system.norm_eps,
+            "Loaded inference weight store (Layers 0+1+2)"
+        );
+
+        Ok(Self {
+            file,
+            system: Some(system),
+        })
     }
 
     /// Get zero-copy tensor data by name.
@@ -440,6 +647,11 @@ impl WeightStore {
         &self.file.structure
     }
 
+    /// Get system factors (Layer 2), if loaded in inference mode.
+    pub fn system_factors(&self) -> Option<&SystemFactors> {
+        self.system.as_ref()
+    }
+
     /// Verify all tensors in the structure are consistent.
     pub fn verify_structure(&self) -> Vec<String> {
         let mut errors = Vec::new();
@@ -457,6 +669,202 @@ impl WeightStore {
         }
         errors
     }
+}
+
+impl TensorReader for WeightStore {
+    fn get_tensor(&self, name: &str) -> Option<CoreTensor> {
+        self.core_tensor(name)
+    }
+
+    fn tensor_info(&self, name: &str) -> Option<&TensorInfo> {
+        self.file.tensor_info(name)
+    }
+
+    fn tensor_names(&self) -> Vec<String> {
+        self.file.structure.names().cloned().collect()
+    }
+
+    fn structure(&self) -> &TensorStructure {
+        &self.file.structure
+    }
+}
+
+impl InferenceReader for WeightStore {
+    fn system_factors(&self) -> Option<&SystemFactors> {
+        self.system.as_ref()
+    }
+
+    fn norm_stats(&self, layer: usize) -> Option<NormStats> {
+        self.system.as_ref().map(|s| s.norm_for_layer(layer))
+    }
+
+    fn rope_config(&self) -> Option<&RopeConfig> {
+        self.system.as_ref().map(|s| &s.rope)
+    }
+
+    fn attention_pattern(&self) -> Option<AttentionPattern> {
+        self.system.as_ref().map(|s| s.attention_pattern)
+    }
+}
+
+/// Extract the layer index from a tensor name like "model.layers.37.self_attn.q_proj.weight".
+/// Returns None if the name doesn't match the expected pattern.
+fn extract_layer_index(name: &str) -> Option<usize> {
+    // Pattern: ...layers.{N}...
+    let parts: Vec<&str> = name.split('.').collect();
+    for i in 0..parts.len() {
+        if parts[i] == "layers" && i + 1 < parts.len() {
+            return parts[i + 1].parse::<usize>().ok();
+        }
+    }
+    None
+}
+
+/// Parse system factors from a HuggingFace config.json file.
+fn parse_system_factors_from_config_json(
+    path: &Path,
+    structure: &TensorStructure,
+) -> Result<SystemFactors> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| RunnerError::ModelLoad(format!("Failed to read config.json: {e}")))?;
+
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| RunnerError::ModelLoad(format!("Failed to parse config.json: {e}")))?;
+
+    // Extract rope_theta (default 10000.0)
+    let rope_base = config
+        .get("rope_theta")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(10000.0) as f32;
+
+    // Extract max_position_embeddings (default 4096)
+    let max_pos = config
+        .get("max_position_embeddings")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4096) as usize;
+
+    // Extract rms_norm_eps (default 1e-5)
+    let norm_eps = config
+        .get("rms_norm_eps")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1e-5) as f32;
+
+    // Determine head dimension from structure
+    let hidden_size = structure.hidden_size.unwrap_or(4096);
+    let num_heads = config
+        .get("num_attention_heads")
+        .and_then(|v| v.as_u64())
+        .unwrap_or((hidden_size as u64) / 128) as usize;
+    let head_dim = hidden_size / num_heads;
+
+    // Determine attention pattern
+    let attention_pattern = if config
+        .get("model_type")
+        .and_then(|v| v.as_str())
+        .map(|m| m.contains("encoder"))
+        .unwrap_or(false)
+    {
+        AttentionPattern::Bidirectional
+    } else {
+        AttentionPattern::Causal
+    };
+
+    // Determine quantization from torch_dtype
+    let torch_dtype = config
+        .get("torch_dtype")
+        .and_then(|v| v.as_str())
+        .unwrap_or("float32");
+    let quantization = match torch_dtype {
+        "float16" | "fp16" => QuantScheme::F16,
+        "bfloat16" | "bf16" => QuantScheme::BF16,
+        _ => QuantScheme::None,
+    };
+
+    // Build per-layer factors (norms with default epsilon)
+    let per_layer = (0..structure.num_layers)
+        .map(|_| LayerSystemFactors {
+            norm: NormStats {
+                eps: norm_eps,
+                weight: None,
+            },
+            attention_bias: None,
+        })
+        .collect();
+
+    let rope = RopeConfig::new(head_dim, rope_base, max_pos);
+
+    debug!(
+        path = %path.display(),
+        rope_base,
+        max_pos,
+        norm_eps,
+        head_dim,
+        num_layers = structure.num_layers,
+        "Parsed system factors from config.json"
+    );
+
+    Ok(SystemFactors {
+        rope,
+        norm_eps,
+        attention_pattern,
+        quantization,
+        per_layer,
+    })
+}
+
+/// Parse system factors from safetensors metadata (fallback when no config.json).
+fn parse_system_factors_from_metadata(
+    metadata: &HashMap<String, String>,
+    structure: &TensorStructure,
+) -> Result<SystemFactors> {
+    let rope_base = metadata
+        .get("rope_theta")
+        .and_then(|v| v.parse::<f32>().ok())
+        .or_else(|| metadata.get("rope_base").and_then(|v| v.parse::<f32>().ok()))
+        .unwrap_or(10000.0);
+
+    let max_pos = metadata
+        .get("max_position_embeddings")
+        .and_then(|v| v.parse::<usize>().ok())
+        .or_else(|| metadata.get("context_length").and_then(|v| v.parse::<usize>().ok()))
+        .unwrap_or(4096);
+
+    let norm_eps = metadata
+        .get("rms_norm_eps")
+        .and_then(|v| v.parse::<f32>().ok())
+        .or_else(|| metadata.get("norm_eps").and_then(|v| v.parse::<f32>().ok()))
+        .unwrap_or(1e-5);
+
+    let head_dim = 128; // Default head dimension
+
+    let per_layer = (0..structure.num_layers)
+        .map(|_| LayerSystemFactors {
+            norm: NormStats {
+                eps: norm_eps,
+                weight: None,
+            },
+            attention_bias: None,
+        })
+        .collect();
+
+    let rope = RopeConfig::new(head_dim, rope_base, max_pos);
+
+    debug!(
+        rope_base,
+        max_pos,
+        norm_eps,
+        head_dim,
+        num_layers = structure.num_layers,
+        "Parsed system factors from safetensors metadata"
+    );
+
+    Ok(SystemFactors {
+        rope,
+        norm_eps,
+        attention_pattern: AttentionPattern::Causal,
+        quantization: QuantScheme::None,
+        per_layer,
+    })
 }
 
 #[cfg(test)]
@@ -576,6 +984,8 @@ mod tests {
             tensors,
             arch: "test".to_string(),
             total_parameters: 64,
+            num_layers: 2,
+            hidden_size: Some(8),
         };
 
         assert!(structure.contains("model.layers.0.weight"));
@@ -644,6 +1054,215 @@ mod tests {
 
         // Cleanup.
         std::fs::remove_file(&tmp_path).unwrap();
+    }
+
+    #[test]
+    fn test_extract_layer_index() {
+        assert_eq!(extract_layer_index("model.layers.0.self_attn.q_proj.weight"), Some(0));
+        assert_eq!(extract_layer_index("model.layers.37.mlp.gate_proj.weight"), Some(37));
+        assert_eq!(extract_layer_index("model.embed_tokens.weight"), None);
+        assert_eq!(extract_layer_index("lm_head.weight"), None);
+        assert_eq!(extract_layer_index("layers.5.attn.v_proj.weight"), Some(5));
+    }
+
+    #[test]
+    fn test_system_factors_default() {
+        let factors = SystemFactors::new(128, 10000.0, 4096);
+        assert_eq!(factors.rope.head_dim, 128);
+        assert_eq!(factors.rope.base, 10000.0);
+        assert_eq!(factors.rope.max_position_embeddings, 4096);
+        assert!((factors.norm_eps - 1e-5).abs() < f32::EPSILON);
+        assert_eq!(factors.attention_pattern, AttentionPattern::Causal);
+        assert_eq!(factors.quantization, QuantScheme::None);
+        assert!(factors.per_layer.is_empty());
+    }
+
+    #[test]
+    fn test_system_factors_norm_fallback() {
+        let mut factors = SystemFactors::new(128, 10000.0, 4096);
+        factors.norm_eps = 1e-6;
+        factors.per_layer.push(LayerSystemFactors {
+            norm: NormStats {
+                eps: 1e-4,
+                weight: None,
+            },
+            attention_bias: None,
+        });
+
+        // Layer 0 has explicit stats.
+        assert!((factors.norm_for_layer(0).eps - 1e-4).abs() < f32::EPSILON);
+        // Layer 1 falls back to global epsilon.
+        assert!((factors.norm_for_layer(1).eps - 1e-6).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_system_factors_from_config_json() {
+        let tmp_dir = std::env::temp_dir();
+        let config_path = tmp_dir.join("pesti_test_config.json");
+
+        // Write a mock HuggingFace config.json.
+        let config = serde_json::json!({
+            "model_type": "llama",
+            "rope_theta": 1000000.0,
+            "max_position_embeddings": 8192,
+            "rms_norm_eps": 1e-5,
+            "num_attention_heads": 32,
+            "torch_dtype": "float16"
+        });
+        std::fs::write(&config_path, config.to_string()).unwrap();
+
+        // Create a mock structure with known properties.
+        let mut tensors = HashMap::new();
+        for i in 0..2 {
+            tensors.insert(
+                format!("model.layers.{i}.self_attn.q_proj.weight"),
+                TensorInfo {
+                    name: format!("model.layers.{i}.self_attn.q_proj.weight"),
+                    shape: vec![4096, 4096],
+                    dtype: Dtype::F16,
+                    byte_offset: i * 32 * 1024 * 1024,
+                    size_bytes: 32 * 1024 * 1024,
+                },
+            );
+        }
+        let structure = TensorStructure {
+            tensors,
+            arch: "llama".to_string(),
+            total_parameters: 2 * 4096 * 4096,
+            num_layers: 2,
+            hidden_size: Some(4096),
+        };
+
+        let factors = parse_system_factors_from_config_json(&config_path, &structure).unwrap();
+
+        assert!((factors.rope.base - 1000000.0).abs() < f32::EPSILON);
+        assert_eq!(factors.rope.max_position_embeddings, 8192);
+        assert!((factors.norm_eps - 1e-5).abs() < f32::EPSILON);
+        assert_eq!(factors.attention_pattern, AttentionPattern::Causal);
+        assert_eq!(factors.quantization, QuantScheme::F16);
+        assert_eq!(factors.per_layer.len(), 2);
+
+        std::fs::remove_file(&config_path).unwrap();
+    }
+
+    #[test]
+    fn test_parse_system_factors_from_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert("rope_theta".to_string(), "500000.0".to_string());
+        metadata.insert("max_position_embeddings".to_string(), "2048".to_string());
+        metadata.insert("rms_norm_eps".to_string(), "1e-6".to_string());
+
+        let structure = TensorStructure {
+            tensors: HashMap::new(),
+            arch: "test".to_string(),
+            total_parameters: 0,
+            num_layers: 3,
+            hidden_size: Some(2048),
+        };
+
+        let factors = parse_system_factors_from_metadata(&metadata, &structure).unwrap();
+
+        assert!((factors.rope.base - 500000.0).abs() < f32::EPSILON);
+        assert_eq!(factors.rope.max_position_embeddings, 2048);
+        assert!((factors.norm_eps - 1e-6).abs() < f32::EPSILON);
+        assert_eq!(factors.attention_pattern, AttentionPattern::Causal);
+        assert_eq!(factors.per_layer.len(), 3);
+    }
+
+    #[test]
+    fn test_weight_store_inference_mode() {
+        // Create a minimal valid safetensors file with model-like tensor names.
+        let values = vec![1.0f32];
+        let tensor_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let header_json = serde_json::json!({
+            "__metadata__": {
+                "format": "pt",
+                "rope_theta": "10000.0",
+                "max_position_embeddings": "4096",
+                "rms_norm_eps": "1e-5"
+            },
+            "model.layers.0.self_attn.q_proj.weight": {
+                "dtype": "F32",
+                "shape": [1],
+                "data_offsets": [0, 4]
+            }
+        })
+        .to_string();
+
+        let header_size = header_json.len() as u64;
+        let mut file_bytes = Vec::new();
+        file_bytes.extend_from_slice(&header_size.to_le_bytes());
+        file_bytes.extend_from_slice(header_json.as_bytes());
+        file_bytes.extend_from_slice(&tensor_bytes);
+
+        let tmp_dir = std::env::temp_dir();
+        let wt_path = tmp_dir.join("pesti_test_inference_weights.bin");
+        std::fs::write(&wt_path, &file_bytes).unwrap();
+
+        // Load in inference mode (no config.json → uses metadata).
+        let store = WeightStore::load_inference(&wt_path, None).unwrap();
+
+        // Verify structure.
+        assert_eq!(store.structure().num_layers(), 1);
+        assert!(store.structure().contains("model.layers.0.self_attn.q_proj.weight"));
+
+        // Verify system factors are present.
+        let system = store.system_factors().unwrap();
+        assert!((system.rope.base - 10000.0).abs() < f32::EPSILON);
+        assert_eq!(system.rope.max_position_embeddings, 4096);
+        assert_eq!(system.attention_pattern, AttentionPattern::Causal);
+
+        // Verify InferenceReader trait methods.
+        let norm = store.norm_stats(0).unwrap();
+        assert!((norm.eps - 1e-5).abs() < f32::EPSILON);
+
+        let rope = store.rope_config().unwrap();
+        assert_eq!(rope.base, system.rope.base);
+
+        let pattern = store.attention_pattern().unwrap();
+        assert_eq!(pattern, AttentionPattern::Causal);
+
+        // Verify TensorReader trait still works.
+        assert!(store.get_tensor("model.layers.0.self_attn.q_proj.weight").is_some());
+        assert_eq!(store.tensor_names().len(), 1);
+
+        std::fs::remove_file(&wt_path).unwrap();
+    }
+
+    #[test]
+    fn test_weight_store_minimal_has_no_system() {
+        // Create a minimal valid safetensors file.
+        let values = vec![1.0f32];
+        let tensor_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let header_json = serde_json::json!({
+            "test_tensor": {
+                "dtype": "F32",
+                "shape": [1],
+                "data_offsets": [0, 4]
+            }
+        })
+        .to_string();
+
+        let header_size = header_json.len() as u64;
+        let mut file_bytes = Vec::new();
+        file_bytes.extend_from_slice(&header_size.to_le_bytes());
+        file_bytes.extend_from_slice(header_json.as_bytes());
+        file_bytes.extend_from_slice(&tensor_bytes);
+
+        let tmp_dir = std::env::temp_dir();
+        let wt_path = tmp_dir.join("pesti_test_minimal_weights.bin");
+        std::fs::write(&wt_path, &file_bytes).unwrap();
+
+        // Load in minimal mode.
+        let store = WeightStore::load_minimal(&wt_path).unwrap();
+
+        // System factors should be None in minimal mode.
+        assert!(store.system_factors().is_none());
+        assert!(store.norm_stats(0).is_none());
+        assert!(store.rope_config().is_none());
+        assert!(store.attention_pattern().is_none());
+
+        std::fs::remove_file(&wt_path).unwrap();
     }
 
     #[test]
