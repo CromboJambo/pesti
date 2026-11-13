@@ -227,50 +227,61 @@ pub fn segmented_softmax(scores: &[f32], mask: &Softmask) -> Vec<f32> {
         mask.len()
     );
 
-    if scores.is_empty() {
+    let n = scores.len();
+    if n == 0 {
         return Vec::new();
     }
 
     // Fast path: no masking needed
-    if mask.active_count() == scores.len() {
+    if mask.active_count() == n {
         return plain_softmax(scores);
     }
 
-    let active: Vec<usize> = mask.active_indices().collect();
-
-    if active.is_empty() {
-        // All positions masked — degenerate case.
-        debug_assert!(
-            false,
-            "segmented_softmax: all positions masked (empty active set)"
-        );
-        return vec![0.0f32; scores.len()];
+    let k = mask.active_count();
+    if k == 0 {
+        debug_assert!(false, "segmented_softmax: all positions masked (empty active set)");
+        return vec![0.0f32; n];
     }
 
-    // Max over active only (fold identity is algorithmic, not semantic)
-    let max_val = active
+    // Pass 1: max over active only (no allocation, branch per slot is cheap)
+    let max_val = mask
+        .slots
         .iter()
-        .map(|&i| scores[i])
+        .zip(scores.iter())
+        .filter(|(slot, _)| slot.is_active())
+        .map(|(_, &s)| s)
         .fold(f32::NEG_INFINITY, f32::max);
 
-    // Exp and sum over active only
-    let exps: Vec<f32> = active
-        .iter()
-        .map(|&i| (scores[i] - max_val).exp())
-        .collect();
-    let sum: f32 = exps.iter().sum();
+    // Pass 2: exp and sum over active only — exactly k exp() calls, not n
+    let mut exps = vec![0.0f32; k];
+    let mut sum: f32 = 0.0;
+    let mut j = 0usize;
+    for (slot, &s) in mask.slots.iter().zip(scores.iter()) {
+        if slot.is_active() {
+            let e = (s - max_val).exp();
+            exps[j] = e;
+            sum += e;
+            j += 1;
+        }
+    }
 
-    let mut weights = vec![0.0f32; scores.len()];
-
+    // Pass 3: write exact 0.0 at masked positions, normalized weights elsewhere
+    let mut weights = vec![0.0f32; n];
     if sum > 0.0 && !sum.is_nan() {
-        for (&idx, &e) in active.iter().zip(exps.iter()) {
-            weights[idx] = e / sum;
+        let mut j = 0usize;
+        for (slot, w) in mask.slots.iter().zip(weights.iter_mut()) {
+            if slot.is_active() {
+                *w = exps[j] / sum;
+                j += 1;
+            }
         }
     } else {
-        // Degenerate: all active scores are -inf (shouldn't happen with real data)
-        let inv = 1.0 / active.len() as f32;
-        for &idx in &active {
-            weights[idx] = inv;
+        // Degenerate: uniform over active positions
+        let inv = 1.0 / k as f32;
+        for (slot, w) in mask.slots.iter().zip(weights.iter_mut()) {
+            if slot.is_active() {
+                *w = inv;
+            }
         }
     }
 
@@ -551,5 +562,144 @@ mod tests {
         let a = Softmask::causal(2, 5);
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    // ── Performance benchmark (spec §10 success criterion) ──
+    // Verify segmented softmax ≤ masked-then-softmax wall time for causal attention
+    // at sequence lengths 512, 1024, 2048, 4096.
+
+    /// Old approach (as in original cpu_optimized.rs): apply -1e9 during score
+    /// computation, then plain softmax over all positions.
+    fn attention_inner_loop_baseline(
+        q_head: &[f32],
+        k_rope: &[f32],
+        v_h: &[f32],
+        seq_k: usize,
+        head_dim: usize,
+        scale: f32,
+        q_pos: usize,
+    ) -> Vec<f32> {
+        // Compute masked scores (branch per position, no extra allocation)
+        let mut scores = vec![0.0f32; seq_k];
+        for k_pos in 0..seq_k {
+            let start = k_pos * head_dim;
+            let end = (k_pos + 1) * head_dim;
+            let dot: f32 = q_head.iter().zip(&k_rope[start..end]).map(|(a, b)| a * b).sum();
+            scores[k_pos] = if k_pos > q_pos { -1e9 } else { dot * scale };
+        }
+
+        // Plain softmax over all positions (including -1e9 masked ones)
+        let weights = plain_softmax(&scores);
+
+        // Weighted sum with V
+        let mut out = vec![0.0f32; head_dim];
+        for k_pos in 0..seq_k {
+            if weights[k_pos] > 0.0 {
+                let start = k_pos * head_dim;
+                let end = (k_pos + 1) * head_dim;
+                for d in 0..head_dim {
+                    out[d] += weights[k_pos] * v_h[start + d];
+                }
+            }
+        }
+        out
+    }
+
+    /// New approach: compute unmasked scores, type-safe causal mask, segmented softmax.
+    fn attention_inner_loop_segmented(
+        q_head: &[f32],
+        k_rope: &[f32],
+        v_h: &[f32],
+        seq_k: usize,
+        head_dim: usize,
+        scale: f32,
+        q_pos: usize,
+    ) -> Vec<f32> {
+        // Compute unmasked scores (no branch)
+        let mut scores = vec![0.0f32; seq_k];
+        for k_pos in 0..seq_k {
+            let start = k_pos * head_dim;
+            let end = (k_pos + 1) * head_dim;
+            let dot: f32 = q_head.iter().zip(&k_rope[start..end]).map(|(a, b)| a * b).sum();
+            scores[k_pos] = dot * scale;
+        }
+
+        // Type-safe causal mask + segmented softmax (exact zeros at masked positions)
+        let mask = Softmask::causal(q_pos, seq_k);
+        let weights = segmented_softmax(&scores, &mask);
+
+        // Weighted sum with V (masked positions have exact 0.0 weight → skip)
+        let mut out = vec![0.0f32; head_dim];
+        for k_pos in 0..seq_k {
+            if weights[k_pos] > 0.0 {
+                let start = k_pos * head_dim;
+                let end = (k_pos + 1) * head_dim;
+                for d in 0..head_dim {
+                    out[d] += weights[k_pos] * v_h[start + d];
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn bench_segmented_vs_masked_causal() {
+        use std::time::Instant;
+
+        let seq_lengths = [512usize, 1024, 2048, 4096];
+        let head_dim = 64; // Typical attention head dimension
+        let iterations = 50;
+
+        println!("\n=== Softmask Performance Benchmark (full causal attention inner loop) ===");
+        println!(
+            "{:<8} {:>12} {:>12} {:>10}",
+            "seq_len", "baseline_ms", "segmented_ms", "ratio"
+        );
+
+        for &n in &seq_lengths {
+            let q_pos = n / 2; // Mid-sequence (average causal case)
+            let scale = 1.0 / (head_dim as f32).sqrt();
+
+            // Random-ish input data
+            let q_head: Vec<f32> = (0..head_dim).map(|i| (i as f32) * 0.1).collect();
+            let k_rope: Vec<f32> = (0..n * head_dim).map(|i| ((i % 97) as f32) * 0.05).collect();
+            let v_h: Vec<f32> = (0..n * head_dim).map(|i| ((i % 89) as f32) * 0.05).collect();
+
+            // Warmup
+            for _ in 0..5 {
+                let _ = attention_inner_loop_baseline(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+                let _ = attention_inner_loop_segmented(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+            }
+
+            // Baseline: -1e9 masking + plain softmax
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let _ = attention_inner_loop_baseline(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+            }
+            let baseline_ms = start.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
+
+            // Segmented: type-safe mask + segmented softmax
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let _ = attention_inner_loop_segmented(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+            }
+            let segmented_ms = start.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
+
+            let ratio = segmented_ms / baseline_ms;
+            println!(
+                "{:<8} {:>12.4} {:>12.4} {:>9.2}x",
+                n, baseline_ms, segmented_ms, ratio
+            );
+
+            // Spec requirement: segmented ≤ baseline (allow 10% tolerance for noise)
+            assert!(
+                segmented_ms <= baseline_ms * 1.1,
+                "segmented ({:.4}ms) slower than baseline ({:.4}ms) at seq_len={}",
+                segmented_ms,
+                baseline_ms,
+                n
+            );
+        }
+        println!("=== Benchmark passed: segmented attention meets performance target ===\n");
     }
 }

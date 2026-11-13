@@ -1,5 +1,6 @@
 //! Optimized CPU reference implementation with SIMD and parallelism
 
+use crate::softmask::{segmented_softmax, Softmask};
 use half::f16;
 use rayon::prelude::*;
 
@@ -164,24 +165,21 @@ pub fn reference_raw_scores_optimized(
         for h in 0..num_heads {
             let q_head = &q_rope[q_pos * num_heads * head_dim + h * head_dim..][..head_dim];
 
-            // Compute all scores in parallel
+            // Compute all scores (no masking applied here)
             let scores: Vec<f32> = (0..seq_k)
                 .into_par_iter()
                 .map(|k_pos| {
                     let k_head = &k_rope[k_pos * num_heads * head_dim + h * head_dim..][..head_dim];
                     let dot = simd_dot_product(q_head, k_head, head_dim);
-
-                    let score = dot * scale;
-                    if k_pos > q_pos {
-                        -1e9 // Causal mask
-                    } else {
-                        score
-                    }
+                    dot * scale
                 })
                 .collect();
 
-            // Softmax
-            let weights = optimized_softmax(&scores);
+            // Type-safe causal mask: positions > q_pos are excluded from softmax
+            let mask = Softmask::causal(q_pos, seq_k);
+
+            // Segmented softmax: exact 0.0 at masked positions, no -1e9 magic number
+            let weights = segmented_softmax(&scores, &mask);
 
             // Weighted sum of V (parallelize over dimensions)
             let attn_output: Vec<f32> = (0..head_dim)
@@ -326,5 +324,59 @@ mod tests {
 
         let sum: f32 = weights.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
+    }
+
+    /// Verify that causally-masked positions contribute EXACTLY zero to the
+    /// attention output. With the old `-1e9` approach, future V values would
+    /// leak through as ~1e-434 * value. With segmented softmax, it's exactly 0.
+    #[test]
+    fn test_causal_masking_no_future_leakage() {
+        let seq_len = 4;
+        let num_heads = 1;
+        let head_dim = 4;
+
+        // Q: all ones (simple query)
+        let q_h: Vec<f16> = vec![f16::from_f32(1.0); seq_len * num_heads * head_dim];
+
+        // K: all ones (uniform keys → uniform scores before masking)
+        let k_h: Vec<f16> = vec![f16::from_f32(1.0); seq_len * num_heads * head_dim];
+
+        // V: zero everywhere EXCEPT position 3 (future), which is extreme
+        // If causal masking works, query at pos 0 should see ALL ZEROS
+        let mut v_h = vec![f16::from_f32(0.0); seq_len * num_heads * head_dim];
+        for d in 0..head_dim {
+            v_h[3 * num_heads * head_dim + d] = f16::from_f32(32000.0); // within f16 range
+        }
+
+        let output = reference_raw_scores_optimized(
+            &q_h,
+            &k_h,
+            &v_h,
+            seq_len,
+            seq_len,
+            num_heads,
+            head_dim,
+            10000.0, // rope_base (irrelevant here since K is uniform)
+            1.0 / (head_dim as f32).sqrt(),
+        );
+
+        // Query at position 0: all V positions 1,2,3 are masked → output must be exactly 0
+        for d in 0..head_dim {
+            let val = output[0 * num_heads * head_dim + d];
+            assert_eq!(val, 0.0f32, "Query pos 0 leaked future V at dim {}: {}", d, val);
+        }
+
+        // Query at position 1: V positions 2,3 masked → still all zeros (V[0]=V[1]=0)
+        for d in 0..head_dim {
+            let val = output[1 * num_heads * head_dim + d];
+            assert_eq!(val, 0.0f32, "Query pos 1 leaked future V at dim {}: {}", d, val);
+        }
+
+        // Query at position 3: can see all positions including V[3]=32000
+        // Uniform scores → ~equal weights, so output should be substantial
+        for d in 0..head_dim {
+            let val = output[3 * num_heads * head_dim + d];
+            assert!(val > 5000.0, "Query pos 3 should see V[3], got {}", val);
+        }
     }
 }
