@@ -592,10 +592,7 @@ impl WeightStore {
     /// until accessed via `tensor_data()` or `core_tensor()`.
     pub fn load_minimal(path: &Path) -> Result<Self> {
         let file = SafetensorsFile::open(path)?;
-        Ok(Self {
-            file,
-            system: None,
-        })
+        Ok(Self { file, system: None })
     }
 
     /// Load weight store with full inference support (Layers 0+1+2).
@@ -820,13 +817,21 @@ fn parse_system_factors_from_metadata(
     let rope_base = metadata
         .get("rope_theta")
         .and_then(|v| v.parse::<f32>().ok())
-        .or_else(|| metadata.get("rope_base").and_then(|v| v.parse::<f32>().ok()))
+        .or_else(|| {
+            metadata
+                .get("rope_base")
+                .and_then(|v| v.parse::<f32>().ok())
+        })
         .unwrap_or(10000.0);
 
     let max_pos = metadata
         .get("max_position_embeddings")
         .and_then(|v| v.parse::<usize>().ok())
-        .or_else(|| metadata.get("context_length").and_then(|v| v.parse::<usize>().ok()))
+        .or_else(|| {
+            metadata
+                .get("context_length")
+                .and_then(|v| v.parse::<usize>().ok())
+        })
         .unwrap_or(4096);
 
     let norm_eps = metadata
@@ -925,10 +930,7 @@ mod tests {
     #[test]
     fn test_core_tensor_as_f32() {
         let values = vec![1.0f32, 2.0, 3.0, 4.0];
-        let bytes: Vec<u8> = values
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
         let data = Arc::from(bytes);
         let tensor = CoreTensor {
             name: "test".to_string(),
@@ -1058,8 +1060,14 @@ mod tests {
 
     #[test]
     fn test_extract_layer_index() {
-        assert_eq!(extract_layer_index("model.layers.0.self_attn.q_proj.weight"), Some(0));
-        assert_eq!(extract_layer_index("model.layers.37.mlp.gate_proj.weight"), Some(37));
+        assert_eq!(
+            extract_layer_index("model.layers.0.self_attn.q_proj.weight"),
+            Some(0)
+        );
+        assert_eq!(
+            extract_layer_index("model.layers.37.mlp.gate_proj.weight"),
+            Some(37)
+        );
         assert_eq!(extract_layer_index("model.embed_tokens.weight"), None);
         assert_eq!(extract_layer_index("lm_head.weight"), None);
         assert_eq!(extract_layer_index("layers.5.attn.v_proj.weight"), Some(5));
@@ -1204,7 +1212,11 @@ mod tests {
 
         // Verify structure.
         assert_eq!(store.structure().num_layers(), 1);
-        assert!(store.structure().contains("model.layers.0.self_attn.q_proj.weight"));
+        assert!(
+            store
+                .structure()
+                .contains("model.layers.0.self_attn.q_proj.weight")
+        );
 
         // Verify system factors are present.
         let system = store.system_factors().unwrap();
@@ -1223,7 +1235,11 @@ mod tests {
         assert_eq!(pattern, AttentionPattern::Causal);
 
         // Verify TensorReader trait still works.
-        assert!(store.get_tensor("model.layers.0.self_attn.q_proj.weight").is_some());
+        assert!(
+            store
+                .get_tensor("model.layers.0.self_attn.q_proj.weight")
+                .is_some()
+        );
         assert_eq!(store.tensor_names().len(), 1);
 
         std::fs::remove_file(&wt_path).unwrap();

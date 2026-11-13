@@ -3,10 +3,12 @@
 //! Uses proper GPU kernel attachment via dispatch layers.
 
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
-use pesti_runner::transformer::{LlamaModel, SamplingConfig};
+use pesti_runner::kernel::fused_attention_conformant::{
+    FusedAttentionArch, build_fused_attention_kernel_conformant,
+};
 use pesti_runner::profiler;
 use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
-use pesti_runner::kernel::fused_attention_conformant::{build_fused_attention_kernel_conformant, FusedAttentionArch};
+use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,7 +39,7 @@ fn main() {
     println!("Attaching fused attention kernels...");
     let ctx = runtime.cuda_context();
     let stream = runtime.new_stream().expect("failed to create stream");
-    
+
     match build_fused_attention_kernel_conformant(
         FusedAttentionArch::MmaSync,
         Arc::new(ctx.clone()),
@@ -47,7 +49,10 @@ fn main() {
             for layer in &mut model.layers {
                 layer.attention.set_fused_kernel(Some(Arc::new(kernel)));
             }
-            println!("Fused attention kernel enabled on all {} layers", model.config.num_layers);
+            println!(
+                "Fused attention kernel enabled on all {} layers",
+                model.config.num_layers
+            );
         }
         Err(e) => {
             eprintln!("Failed to build fused kernel: {}", e);

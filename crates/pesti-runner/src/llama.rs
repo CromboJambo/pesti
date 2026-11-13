@@ -380,7 +380,10 @@ impl LlamaRunner {
         );
 
         // Create batch for prompt
-        eprintln!("DEBUG generate: creating LlamaBatch with n_tokens={}, n_seqs={}", prompt_len, 1);
+        eprintln!(
+            "DEBUG generate: creating LlamaBatch with n_tokens={}, n_seqs={}",
+            prompt_len, 1
+        );
         let mut batch = LlamaBatch::new(prompt_len, 1);
         eprintln!("DEBUG generate: LlamaBatch created");
         for (i, tok) in prompt_tokens.iter().enumerate() {
@@ -842,7 +845,9 @@ impl SessionManager {
 
     /// Save the current context state to a file.
     pub fn save(&self, path: &str) -> Result<(), String> {
-        self.context.lock().unwrap()
+        self.context
+            .lock()
+            .unwrap()
             .state_save_file(path, &[])
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -850,7 +855,9 @@ impl SessionManager {
 
     /// Load context state from a file.
     pub fn load(&self, path: &str) -> Result<(), String> {
-        self.context.lock().unwrap()
+        self.context
+            .lock()
+            .unwrap()
             .state_load_file(path, 0)
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -868,7 +875,9 @@ impl SessionManager {
         path: &str,
         tokens: &[LlamaToken],
     ) -> Result<(), String> {
-        self.context.lock().unwrap()
+        self.context
+            .lock()
+            .unwrap()
             .state_seq_save_file(path, seq_id, tokens)
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -881,7 +890,9 @@ impl SessionManager {
         path: &str,
         max_tokens: usize,
     ) -> Result<(), String> {
-        self.context.lock().unwrap()
+        self.context
+            .lock()
+            .unwrap()
             .state_seq_load_file(path, dest_seq_id, max_tokens)
             .map_err(|e| e.to_string())?;
         Ok(())

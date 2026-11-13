@@ -8,8 +8,8 @@ mod tests {
     #[test]
     fn test_attention_concentration_kernel() {
         // Initialize CUDA runtime and stream
-        let runtime = pesti_runner::cuda_runtime::CudaRuntime::new(0)
-            .expect("failed to init cuda runtime");
+        let runtime =
+            pesti_runner::cuda_runtime::CudaRuntime::new(0).expect("failed to init cuda runtime");
         let stream = runtime.new_stream().expect("failed to create stream");
 
         // Test config: batch=1, seq_len=4, heads=4
@@ -58,34 +58,49 @@ mod tests {
         pesti_runner::cuda_runtime::copy_host_to_device(weights_buf, &weights).expect("h2d failed");
 
         // Build and launch kernel
-        let kernel = pesti_runner::kernel::attention_concentration::build_attention_concentration_kernel(
-            Arc::clone(runtime.context()),
-            Arc::clone(&stream),
-        )
-        .expect("failed to build attention concentration kernel");
+        let kernel =
+            pesti_runner::kernel::attention_concentration::build_attention_concentration_kernel(
+                Arc::clone(runtime.context()),
+                Arc::clone(&stream),
+            )
+            .expect("failed to build attention concentration kernel");
 
-        kernel.forward(
-            weights_buf,
-            concentrations_buf,
-            seq_len,
-            num_heads,
-            batch_size,
-        )
-        .expect("kernel launch failed");
+        kernel
+            .forward(
+                weights_buf,
+                concentrations_buf,
+                seq_len,
+                num_heads,
+                batch_size,
+            )
+            .expect("kernel launch failed");
 
         // Read back results
         let mut concentrations = vec![0.0f32; num_heads];
-        pesti_runner::cuda_runtime::copy_device_to_host(
-            &mut concentrations,
-            concentrations_buf,
-        )
-        .expect("d2h failed");
+        pesti_runner::cuda_runtime::copy_device_to_host(&mut concentrations, concentrations_buf)
+            .expect("d2h failed");
 
         // Verify concentration scores
-        assert!(concentrations[0] > 0.9, "Head 0 should be highly concentrated (>0.9), got {}", concentrations[0]);
-        assert!(concentrations[1] < 0.3, "Head 1 should be diffuse (<0.3), got {}", concentrations[1]);
-        assert!(concentrations[2] > 0.4 && concentrations[2] < 0.7, "Head 2 should be medium concentration (0.4-0.7), got {}", concentrations[2]);
-        assert!(concentrations[3] > 0.99, "Head 3 should be max concentrated (>0.99), got {}", concentrations[3]);
+        assert!(
+            concentrations[0] > 0.9,
+            "Head 0 should be highly concentrated (>0.9), got {}",
+            concentrations[0]
+        );
+        assert!(
+            concentrations[1] < 0.3,
+            "Head 1 should be diffuse (<0.3), got {}",
+            concentrations[1]
+        );
+        assert!(
+            concentrations[2] > 0.4 && concentrations[2] < 0.7,
+            "Head 2 should be medium concentration (0.4-0.7), got {}",
+            concentrations[2]
+        );
+        assert!(
+            concentrations[3] > 0.99,
+            "Head 3 should be max concentrated (>0.99), got {}",
+            concentrations[3]
+        );
 
         println!("✅ Attention concentration kernel test passed!");
         println!("  Head 0 (concentrated): {:.4}", concentrations[0]);
@@ -95,6 +110,7 @@ mod tests {
 
         // Cleanup
         pesti_runner::cuda_runtime::free_device_memory(weights_buf).expect("free weights failed");
-        pesti_runner::cuda_runtime::free_device_memory(concentrations_buf).expect("free concentrations failed");
+        pesti_runner::cuda_runtime::free_device_memory(concentrations_buf)
+            .expect("free concentrations failed");
     }
 }

@@ -184,11 +184,25 @@ pub struct KernelRequest {
 impl KernelRequest {
     /// Create a GEMM request.
     pub fn gemm(arch: ComputeArch, dtype: KernelDType, m: usize, n: usize, k: usize) -> Self {
-        Self { op: OpKind::GEMM, arch, dtype, m, n, k, cache_len: 0 }
+        Self {
+            op: OpKind::GEMM,
+            arch,
+            dtype,
+            m,
+            n,
+            k,
+            cache_len: 0,
+        }
     }
 
     /// Create a linear layer request.
-    pub fn linear(arch: ComputeArch, dtype: KernelDType, batch: usize, in_features: usize, out_features: usize) -> Self {
+    pub fn linear(
+        arch: ComputeArch,
+        dtype: KernelDType,
+        batch: usize,
+        in_features: usize,
+        out_features: usize,
+    ) -> Self {
         Self {
             op: OpKind::LinearWithBias,
             arch,
@@ -201,8 +215,21 @@ impl KernelRequest {
     }
 
     /// Create an attention request.
-    pub fn attention(arch: ComputeArch, dtype: KernelDType, seq_len: usize, cache_len: usize) -> Self {
-        Self { op: OpKind::Attention, arch, dtype, m: seq_len, n: 0, k: 0, cache_len }
+    pub fn attention(
+        arch: ComputeArch,
+        dtype: KernelDType,
+        seq_len: usize,
+        cache_len: usize,
+    ) -> Self {
+        Self {
+            op: OpKind::Attention,
+            arch,
+            dtype,
+            m: seq_len,
+            n: 0,
+            k: 0,
+            cache_len,
+        }
     }
 }
 
@@ -458,7 +485,8 @@ impl KernelRegistry {
     /// Returns the highest-performing kernel that matches. If no GPU kernel
     /// matches, falls back to the CPU baseline (which always exists).
     pub fn best_for(&self, req: &KernelRequest) -> KernelId {
-        self.kernels.iter()
+        self.kernels
+            .iter()
             .filter(|k| k.satisfies(req))
             .max_by_key(|k| k.perf.rank())
             .map(|k| k.id)
@@ -501,7 +529,10 @@ pub struct KernelSelector {
 impl KernelSelector {
     /// Create a new selector with the given kernel registry.
     pub fn new(registry: KernelRegistry) -> Self {
-        Self { cache: HashMap::new(), registry }
+        Self {
+            cache: HashMap::new(),
+            registry,
+        }
     }
 
     /// Select the best kernel for the request.
@@ -568,7 +599,13 @@ mod tests {
         let mut selector = KernelSelector::new(registry);
 
         // GEMM on CUDA should select cuBLAS kernel
-        let req = KernelRequest::gemm(ComputeArch::Cuda { sm: 86 }, KernelDType::F16, 4096, 4096, 4096);
+        let req = KernelRequest::gemm(
+            ComputeArch::Cuda { sm: 86 },
+            KernelDType::F16,
+            4096,
+            4096,
+            4096,
+        );
         let kernel = selector.select(&req);
         assert_eq!(kernel, KernelId::CudaDirectHgemm);
 
@@ -602,7 +639,13 @@ mod tests {
         let registry = KernelRegistry::detect(Some(86));
         let mut selector = KernelSelector::new(registry);
 
-        let req = KernelRequest::gemm(ComputeArch::Cuda { sm: 86 }, KernelDType::F16, 4096, 4096, 4096);
+        let req = KernelRequest::gemm(
+            ComputeArch::Cuda { sm: 86 },
+            KernelDType::F16,
+            4096,
+            4096,
+            4096,
+        );
 
         // First call: computes and caches
         let k1 = selector.select(&req);
@@ -619,8 +662,20 @@ mod tests {
         let registry = KernelRegistry::detect(Some(86));
         let mut selector = KernelSelector::new(registry);
 
-        let req1 = KernelRequest::gemm(ComputeArch::Cuda { sm: 86 }, KernelDType::F16, 4096, 4096, 4096);
-        let req2 = KernelRequest::gemm(ComputeArch::Cuda { sm: 86 }, KernelDType::F16, 2048, 2048, 2048);
+        let req1 = KernelRequest::gemm(
+            ComputeArch::Cuda { sm: 86 },
+            KernelDType::F16,
+            4096,
+            4096,
+            4096,
+        );
+        let req2 = KernelRequest::gemm(
+            ComputeArch::Cuda { sm: 86 },
+            KernelDType::F16,
+            2048,
+            2048,
+            2048,
+        );
 
         selector.select(&req1);
         selector.select(&req2);
@@ -657,7 +712,13 @@ mod tests {
         let registry = KernelRegistry::detect(Some(86));
         let mut selector = KernelSelector::new(registry);
 
-        let req = KernelRequest::gemm(ComputeArch::Cuda { sm: 86 }, KernelDType::F16, 4096, 4096, 4096);
+        let req = KernelRequest::gemm(
+            ComputeArch::Cuda { sm: 86 },
+            KernelDType::F16,
+            4096,
+            4096,
+            4096,
+        );
         selector.select(&req);
         assert_eq!(selector.cache_size(), 1);
 

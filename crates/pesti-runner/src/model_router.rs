@@ -82,7 +82,10 @@ impl ModelRouter {
         );
 
         if !complexity_hints.is_empty() {
-            observation.push_str(&format!(" Complexity hints: {}", complexity_hints.join(", ")));
+            observation.push_str(&format!(
+                " Complexity hints: {}",
+                complexity_hints.join(", ")
+            ));
         }
 
         debug!(observation = %observation, "Routing inference request via JEV");
@@ -155,15 +158,24 @@ mod tests {
 
     #[test]
     fn router_construction() {
-        let router = ModelRouter::new("http://localhost:8091", "/opt/crabjar/criteria/model-selection.json");
+        let router = ModelRouter::new(
+            "http://localhost:8091",
+            "/opt/crabjar/criteria/model-selection.json",
+        );
         assert_eq!(router.conductor_url, "http://localhost:8091");
-        assert_eq!(router.criteria_file, "/opt/crabjar/criteria/model-selection.json");
+        assert_eq!(
+            router.criteria_file,
+            "/opt/crabjar/criteria/model-selection.json"
+        );
     }
 
     #[test]
     fn fallback_decision() {
-        let router = ModelRouter::new("http://localhost:8091", "/opt/crabjar/criteria/model-selection.json")
-            .with_fallback("Qwen2.5-7B-Instruct-Q4_K_M");
+        let router = ModelRouter::new(
+            "http://localhost:8091",
+            "/opt/crabjar/criteria/model-selection.json",
+        )
+        .with_fallback("Qwen2.5-7B-Instruct-Q4_K_M");
         let decision = router.fallback_decision();
         assert_eq!(decision.option_id, "fallback");
         assert_eq!(decision.model_name, "Qwen2.5-7B-Instruct-Q4_K_M");

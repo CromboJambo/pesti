@@ -67,10 +67,10 @@
 
 #[cfg(feature = "cuda")]
 pub mod attention;
+#[cfg(feature = "cuda")]
+pub mod attention_concentration; // Attention concentration validation for early-exit inference
 #[cfg(not(feature = "cuda"))]
 pub mod attention_stub;
-#[cfg(feature = "cuda")]
-pub mod fused_attention_conformant;
 #[cfg(feature = "cuda")]
 pub mod builder;
 #[cfg(not(feature = "cuda"))]
@@ -82,9 +82,9 @@ pub mod device_buf;
 pub mod device_tensor;
 pub mod dispatch;
 #[cfg(feature = "cuda")]
-pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
+pub mod fused_attention_conformant;
 #[cfg(feature = "cuda")]
-pub mod attention_concentration; // Attention concentration validation for early-exit inference
+pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
 pub mod gemm;
 #[cfg(not(feature = "cuda"))]
@@ -94,8 +94,6 @@ pub mod kvcache;
 #[cfg(not(feature = "cuda"))]
 pub mod kvcache_stub;
 pub mod linear;
-#[cfg(feature = "cuda")]
-pub mod weight_cache;
 #[cfg(feature = "cuda")]
 pub mod memory;
 #[cfg(not(feature = "cuda"))]
@@ -113,6 +111,8 @@ pub mod softmax;
 pub mod tma_bridge;
 #[cfg(feature = "cuda")]
 pub mod tma_descriptor;
+#[cfg(feature = "cuda")]
+pub mod weight_cache;
 
 #[cfg(feature = "cuda")]
 pub use attention::{

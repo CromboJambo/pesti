@@ -2,9 +2,9 @@
 //! Uses pesti-runner's own GGUF loader and transformer implementation.
 
 use pesti_runner::gguf_weight_loader::load_gguf_weights;
-use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use pesti_runner::profiler;
 use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
+use pesti_runner::transformer::{LlamaModel, SamplingConfig};
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
@@ -31,11 +31,9 @@ fn main() {
     let mut model = LlamaModel::from_gguf_weights(weights).expect("Failed to build model");
 
     // Load tokenizer from GGUF file
-    let (_tokenizer_config, tokenizer) = load_tokenizer_from_gguf(
-        Path::new(MODEL_PATH),
-        TokenizerBackend::MistralRs,
-    )
-    .expect("Failed to load tokenizer");
+    let (_tokenizer_config, tokenizer) =
+        load_tokenizer_from_gguf(Path::new(MODEL_PATH), TokenizerBackend::MistralRs)
+            .expect("Failed to load tokenizer");
     model.tokenizer = Some(tokenizer);
 
     // Reduce max_seq_len to fit in GPU memory

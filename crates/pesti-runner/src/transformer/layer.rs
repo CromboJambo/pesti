@@ -9,7 +9,7 @@
 
 #[cfg(feature = "cuda")]
 use crate::kernel::rope::RopeKernel;
-use crate::softmask::{segmented_softmax, Softmask};
+use crate::softmask::{Softmask, segmented_softmax};
 use crate::transformer::kv_cache::LayerKvCache;
 use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;
@@ -405,7 +405,7 @@ impl TransformerLayer {
 #[cfg(test)]
 mod masking_parity_tests {
     use super::*;
-    use crate::softmask::{segmented_softmax, Softmask};
+    use crate::softmask::{Softmask, segmented_softmax};
 
     /// Verify that segmented_softmax with a causal mask produces exactly zero
     /// weight for future positions. This is the core invariant that all three
@@ -428,17 +428,28 @@ mod masking_parity_tests {
 
         // Past + current positions must sum to 1.0
         let past_sum: f32 = weights[0..=2].iter().sum();
-        assert!((past_sum - 1.0).abs() < 1e-6, "eligible weights must sum to 1.0, got {}", past_sum);
+        assert!(
+            (past_sum - 1.0).abs() < 1e-6,
+            "eligible weights must sum to 1.0, got {}",
+            past_sum
+        );
 
         // Weights should be proportional to softmax of [1,2,3]
         let expected: Vec<f32> = {
             let max = 3.0f32;
-            let exps: Vec<f32> = [1.0f32, 2.0f32, 3.0f32].iter().map(|&s| (s - max).exp()).collect();
+            let exps: Vec<f32> = [1.0f32, 2.0f32, 3.0f32]
+                .iter()
+                .map(|&s| (s - max).exp())
+                .collect();
             let sum: f32 = exps.iter().sum();
             exps.into_iter().map(|e| e / sum).collect()
         };
         for i in 0..=2 {
-            assert!((weights[i] - expected[i]).abs() < 1e-6, "weight[{}] mismatch", i);
+            assert!(
+                (weights[i] - expected[i]).abs() < 1e-6,
+                "weight[{}] mismatch",
+                i
+            );
         }
     }
 
@@ -453,7 +464,13 @@ mod masking_parity_tests {
         let plain = crate::softmask::plain_softmax(&scores);
 
         for (i, (a, b)) in segmented.iter().zip(plain.iter()).enumerate() {
-            assert!((a - b).abs() < 1e-7, "weight[{}] mismatch: {} vs {}", i, a, b);
+            assert!(
+                (a - b).abs() < 1e-7,
+                "weight[{}] mismatch: {} vs {}",
+                i,
+                a,
+                b
+            );
         }
     }
 
@@ -476,14 +493,29 @@ mod masking_parity_tests {
         let seq_len = 4;
         for q_pos in 0..seq_len {
             let mask = Softmask::causal(q_pos, seq_len);
-            assert!(mask.is_active(q_pos), "position {} must be active at q_pos={}", q_pos, q_pos);
+            assert!(
+                mask.is_active(q_pos),
+                "position {} must be active at q_pos={}",
+                q_pos,
+                q_pos
+            );
             // All positions before q_pos are also active
             for j in 0..q_pos {
-                assert!(mask.is_active(j), "position {} must be active at q_pos={}", j, q_pos);
+                assert!(
+                    mask.is_active(j),
+                    "position {} must be active at q_pos={}",
+                    j,
+                    q_pos
+                );
             }
             // All positions after q_pos are masked
             for j in (q_pos + 1)..seq_len {
-                assert!(!mask.is_active(j), "position {} must be masked at q_pos={}", j, q_pos);
+                assert!(
+                    !mask.is_active(j),
+                    "position {} must be masked at q_pos={}",
+                    j,
+                    q_pos
+                );
             }
         }
     }
@@ -505,9 +537,16 @@ mod masking_parity_tests {
         assert_eq!(weights[3], 0.0);
         // Eligible weights sum to 1
         let sum: f32 = weights[0..=2].iter().sum();
-        assert!((sum - 1.0).abs() < 1e-6, "eligible weights must sum to 1.0, got {}", sum);
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "eligible weights must sum to 1.0, got {}",
+            sum
+        );
         // Position with highest score among eligible gets dominant weight
-        assert!(weights[1] > weights[0], "higher score should get higher weight");
+        assert!(
+            weights[1] > weights[0],
+            "higher score should get higher weight"
+        );
     }
 
     /// Cross-implementation invariant: the causal mask constructed by

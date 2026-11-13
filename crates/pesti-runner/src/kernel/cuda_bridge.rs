@@ -20,7 +20,8 @@ fn upload_weights(weights: &[half::f16]) -> Result<cudarc::driver::CudaSlice<hal
     let stream = get_stream();
     let mut w_dev = unsafe { stream.alloc(weights.len()) }
         .map_err(|e| format!("cudaMalloc W failed: {:?}", e))?;
-    stream.memcpy_htod(weights, &mut w_dev)
+    stream
+        .memcpy_htod(weights, &mut w_dev)
         .map_err(|e| format!("cudaMemcpy H2D W failed: {:?}", e))?;
     Ok(w_dev)
 }
@@ -146,15 +147,17 @@ impl CudaBridge {
             let stream = &self.stream;
 
             // Allocate device memory for input and output only (weights already on GPU)
-            let mut x_dev = unsafe { stream.alloc(x.len()) }
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc X failed: {:?}", e)))?;
-            let mut y_dev = unsafe { stream.alloc(m * n) }
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc Y failed: {:?}", e)))?;
+            let mut x_dev = unsafe { stream.alloc(x.len()) }.map_err(|e| {
+                crate::error::RunnerError::Kernel(format!("cudaMalloc X failed: {:?}", e))
+            })?;
+            let mut y_dev = unsafe { stream.alloc(m * n) }.map_err(|e| {
+                crate::error::RunnerError::Kernel(format!("cudaMalloc Y failed: {:?}", e))
+            })?;
 
             // Copy input to device
-            stream
-                .memcpy_htod(x, &mut x_dev)
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D X failed: {:?}", e)))?;
+            stream.memcpy_htod(x, &mut x_dev).map_err(|e| {
+                crate::error::RunnerError::Kernel(format!("cudaMemcpy H2D X failed: {:?}", e))
+            })?;
 
             // Compute C = X @ W^T where X is [m,k], W is [n,k] -> C is [m,n]
             let alpha = f16::from_f32(1.0);
@@ -182,9 +185,9 @@ impl CudaBridge {
 
             // Copy result back to host (no sync — caller will sync once at end of forward pass)
             let mut y_host = vec![f16::from_f32(0.0); m * n];
-            stream
-                .memcpy_dtoh(&y_dev, &mut y_host)
-                .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMemcpy D2H Y failed: {:?}", e)))?;
+            stream.memcpy_dtoh(&y_dev, &mut y_host).map_err(|e| {
+                crate::error::RunnerError::Kernel(format!("cudaMemcpy D2H Y failed: {:?}", e))
+            })?;
 
             // Free device memory
             drop(x_dev);
@@ -196,7 +199,9 @@ impl CudaBridge {
 
         #[cfg(not(feature = "cuda"))]
         {
-            Err(crate::error::RunnerError::Kernel("CUDA feature not enabled".to_string()))
+            Err(crate::error::RunnerError::Kernel(
+                "CUDA feature not enabled".to_string(),
+            ))
         }
     }
 }
@@ -260,8 +265,9 @@ pub fn gemm_f16_cublaslt(
     let bridge = get_bridge();
 
     // Create cublasLt handle per-call (not thread-safe across calls in cudarc's safe API)
-    let handle = result::create_handle()
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLt handle creation failed: {}", e)))?;
+    let handle = result::create_handle().map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLt handle creation failed: {}", e))
+    })?;
 
     // Allocate device memory for input and output
     let stream = &bridge.stream;
@@ -277,33 +283,69 @@ pub fn gemm_f16_cublaslt(
 
     // Create matrix layouts via cudarc's safe API (handles all attributes internally)
     let a_layout = result::create_matrix_layout(
-        sys::cudaDataType_t::CUDA_R_16F, n as u64, k as u64, n as i64,
-    ).map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate A failed: {}", e)))?;
+        sys::cudaDataType_t::CUDA_R_16F,
+        n as u64,
+        k as u64,
+        n as i64,
+    )
+    .map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate A failed: {}", e))
+    })?;
     let b_layout = result::create_matrix_layout(
-        sys::cudaDataType_t::CUDA_R_16F, k as u64, m as u64, k as i64,
-    ).map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate B failed: {}", e)))?;
+        sys::cudaDataType_t::CUDA_R_16F,
+        k as u64,
+        m as u64,
+        k as i64,
+    )
+    .map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate B failed: {}", e))
+    })?;
     let c_layout = result::create_matrix_layout(
-        sys::cudaDataType_t::CUDA_R_16F, n as u64, m as u64, n as i64,
-    ).map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate C failed: {}", e)))?;
+        sys::cudaDataType_t::CUDA_R_16F,
+        n as u64,
+        m as u64,
+        n as i64,
+    )
+    .map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatrixLayoutCreate C failed: {}", e))
+    })?;
 
     // Create matmul descriptor with F16 compute type
     let matmul_desc = result::create_matmul_desc(
-        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, sys::cudaDataType_t::CUDA_R_32F,
-    ).map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatmulDescCreate failed: {}", e)))?;
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+        sys::cudaDataType_t::CUDA_R_32F,
+    )
+    .map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatmulDescCreate failed: {}", e))
+    })?;
 
     // Set up preference with 4MB workspace limit
-    let pref = result::create_matmul_pref()
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatmulPreferenceCreate failed: {}", e)))?;
+    let pref = result::create_matmul_pref().map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatmulPreferenceCreate failed: {}", e))
+    })?;
     let workspace_size: usize = 4 * 1024 * 1024;
 
     // Get optimal algorithm for this shape via heuristic search (requires unsafe block)
-    let algo = unsafe { result::get_matmul_algo_heuristic(
-        handle, matmul_desc, a_layout, b_layout, c_layout, c_layout, pref,
-    ) }.map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatmulAlgoGetHeuristic failed: {}", e)))?;
+    let algo = unsafe {
+        result::get_matmul_algo_heuristic(
+            handle,
+            matmul_desc,
+            a_layout,
+            b_layout,
+            c_layout,
+            c_layout,
+            pref,
+        )
+    }
+    .map_err(|e| {
+        crate::error::RunnerError::Kernel(format!("cublasLtMatmulAlgoGetHeuristic failed: {}", e))
+    })?;
 
     // Allocate workspace for the chosen algorithm (as u8 slice)
     let mut ws_dev: cudarc::driver::CudaSlice<u8> = unsafe { stream.alloc(workspace_size) }
-        .map_err(|e| crate::error::RunnerError::Kernel(format!("cudaMalloc workspace failed: {:?}", e)))?;
+        .map_err(|e| {
+            crate::error::RunnerError::Kernel(format!("cudaMalloc workspace failed: {:?}", e))
+        })?;
 
     // Run cublasLtMatmul with the selected algorithm
     let alpha_f32: f32 = 1.0;
@@ -337,11 +379,13 @@ pub fn gemm_f16_cublaslt(
             ws_ptr as *mut _,
             workspace_size,
             stream.cu_stream() as *mut _,
-        ).map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatmul failed: {}", e)))?;
+        )
+        .map_err(|e| crate::error::RunnerError::Kernel(format!("cublasLtMatmul failed: {}", e)))?;
     }
 
     // Synchronize
-    stream.synchronize()
+    stream
+        .synchronize()
         .map_err(|e| crate::error::RunnerError::Kernel(format!("streamSync failed: {:?}", e)))?;
 
     // Copy result back to host

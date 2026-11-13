@@ -239,7 +239,10 @@ pub fn segmented_softmax(scores: &[f32], mask: &Softmask) -> Vec<f32> {
 
     let k = mask.active_count();
     if k == 0 {
-        debug_assert!(false, "segmented_softmax: all positions masked (empty active set)");
+        debug_assert!(
+            false,
+            "segmented_softmax: all positions masked (empty active set)"
+        );
         return vec![0.0f32; n];
     }
 
@@ -584,7 +587,11 @@ mod tests {
         for k_pos in 0..seq_k {
             let start = k_pos * head_dim;
             let end = (k_pos + 1) * head_dim;
-            let dot: f32 = q_head.iter().zip(&k_rope[start..end]).map(|(a, b)| a * b).sum();
+            let dot: f32 = q_head
+                .iter()
+                .zip(&k_rope[start..end])
+                .map(|(a, b)| a * b)
+                .sum();
             scores[k_pos] = if k_pos > q_pos { -1e9 } else { dot * scale };
         }
 
@@ -620,7 +627,11 @@ mod tests {
         for k_pos in 0..seq_k {
             let start = k_pos * head_dim;
             let end = (k_pos + 1) * head_dim;
-            let dot: f32 = q_head.iter().zip(&k_rope[start..end]).map(|(a, b)| a * b).sum();
+            let dot: f32 = q_head
+                .iter()
+                .zip(&k_rope[start..end])
+                .map(|(a, b)| a * b)
+                .sum();
             scores[k_pos] = dot * scale;
         }
 
@@ -662,26 +673,38 @@ mod tests {
 
             // Random-ish input data
             let q_head: Vec<f32> = (0..head_dim).map(|i| (i as f32) * 0.1).collect();
-            let k_rope: Vec<f32> = (0..n * head_dim).map(|i| ((i % 97) as f32) * 0.05).collect();
-            let v_h: Vec<f32> = (0..n * head_dim).map(|i| ((i % 89) as f32) * 0.05).collect();
+            let k_rope: Vec<f32> = (0..n * head_dim)
+                .map(|i| ((i % 97) as f32) * 0.05)
+                .collect();
+            let v_h: Vec<f32> = (0..n * head_dim)
+                .map(|i| ((i % 89) as f32) * 0.05)
+                .collect();
 
             // Warmup
             for _ in 0..5 {
-                let _ = attention_inner_loop_baseline(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
-                let _ = attention_inner_loop_segmented(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+                let _ = attention_inner_loop_baseline(
+                    &q_head, &k_rope, &v_h, n, head_dim, scale, q_pos,
+                );
+                let _ = attention_inner_loop_segmented(
+                    &q_head, &k_rope, &v_h, n, head_dim, scale, q_pos,
+                );
             }
 
             // Baseline: -1e9 masking + plain softmax
             let start = Instant::now();
             for _ in 0..iterations {
-                let _ = attention_inner_loop_baseline(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+                let _ = attention_inner_loop_baseline(
+                    &q_head, &k_rope, &v_h, n, head_dim, scale, q_pos,
+                );
             }
             let baseline_ms = start.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
 
             // Segmented: type-safe mask + segmented softmax
             let start = Instant::now();
             for _ in 0..iterations {
-                let _ = attention_inner_loop_segmented(&q_head, &k_rope, &v_h, n, head_dim, scale, q_pos);
+                let _ = attention_inner_loop_segmented(
+                    &q_head, &k_rope, &v_h, n, head_dim, scale, q_pos,
+                );
             }
             let segmented_ms = start.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
 
@@ -734,7 +757,9 @@ mod bench_segmented_vs_masked {
         let mut rng = 0x12345u64;
         let mut scores = Vec::with_capacity(seq_len);
         for _ in 0..seq_len {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let x = ((rng >> 33) as f32 / (u32::MAX as f32)) * 4.0 - 2.0; // [-2, 2]
             scores.push(x);
         }
@@ -761,13 +786,19 @@ mod bench_segmented_vs_masked {
         let iterations = 1000;
         eprintln!("\nSoftmask benchmark: segmented vs masked (-1e9) softmax");
         eprintln!("Iterations per length: {}", iterations);
-        eprintln!("{:>8} | {:>12} | {:>12} | {:>6}", "seq_len", "masked_ms", "segmented_ms", "ratio");
+        eprintln!(
+            "{:>8} | {:>12} | {:>12} | {:>6}",
+            "seq_len", "masked_ms", "segmented_ms", "ratio"
+        );
         eprintln!("---------|-------------|--------------|-------");
 
         for &seq_len in &[512usize, 1024, 2048, 4096] {
             let (masked_ms, segmented_ms) = bench_at_len(seq_len, iterations);
             let ratio = segmented_ms / masked_ms;
-            eprintln!("{:>8} | {:>12.3} | {:>12.3} | {:>5.2}x", seq_len, masked_ms, segmented_ms, ratio);
+            eprintln!(
+                "{:>8} | {:>12.3} | {:>12.3} | {:>5.2}x",
+                seq_len, masked_ms, segmented_ms, ratio
+            );
         }
 
         eprintln!();

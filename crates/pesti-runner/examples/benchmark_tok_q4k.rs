@@ -1,8 +1,8 @@
 //! Tok/s benchmark for pesti-runner with Q4_K KV cache.
 
+use pesti_runner::kernel::Q4KVCache;
 use pesti_runner::transformer::tokenizer::{TokenizerBackend, load_tokenizer_from_gguf};
 use pesti_runner::{LlamaModel, load_gguf_weights};
-use pesti_runner::kernel::Q4KVCache;
 use rand::SeedableRng;
 use std::path::Path;
 use std::time::Instant;
@@ -26,11 +26,9 @@ fn main() {
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
     // Load tokenizer from GGUF file
-    let (_config, tokenizer) = load_tokenizer_from_gguf(
-        Path::new(model_path),
-        TokenizerBackend::MistralRs,
-    )
-    .expect("Failed to load tokenizer");
+    let (_config, tokenizer) =
+        load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)
+            .expect("Failed to load tokenizer");
 
     // Enable Q4_K KV cache
     let q4k_cache = Q4KVCache::new(8, 64, 2048);
@@ -61,7 +59,9 @@ fn main() {
     // Warmup run (not measured)
     println!("Running warmup...");
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    model.generate(&prompt_tokens, 8, &sampling, &mut rng, &[]).expect("Warmup generation failed");
+    model
+        .generate(&prompt_tokens, 8, &sampling, &mut rng, &[])
+        .expect("Warmup generation failed");
 
     // Timed run
     println!("Running benchmark...");
@@ -87,9 +87,7 @@ fn main() {
     }
 
     // Decode output
-    let generated_text = tokenizer
-        .decode(&result_tokens)
-        .expect("Failed to decode");
+    let generated_text = tokenizer.decode(&result_tokens).expect("Failed to decode");
     println!();
     println!(
         "Output: {}",

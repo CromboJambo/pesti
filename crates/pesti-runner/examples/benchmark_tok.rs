@@ -25,11 +25,9 @@ fn main() {
     println!("Model loaded in {:.2}s", t_load.elapsed().as_secs_f64());
 
     // Load tokenizer from GGUF file
-    let (_config, tokenizer) = load_tokenizer_from_gguf(
-        Path::new(model_path),
-        TokenizerBackend::MistralRs,
-    )
-    .expect("Failed to load tokenizer");
+    let (_config, tokenizer) =
+        load_tokenizer_from_gguf(Path::new(model_path), TokenizerBackend::MistralRs)
+            .expect("Failed to load tokenizer");
 
     // Benchmark prompt
     let prompt = "Write a haiku about programming.";
@@ -55,7 +53,9 @@ fn main() {
     // Warmup run (not measured)
     println!("Running warmup...");
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    model.generate(&prompt_tokens, 8, &sampling, &mut rng, &[]).expect("Warmup generation failed");
+    model
+        .generate(&prompt_tokens, 8, &sampling, &mut rng, &[])
+        .expect("Warmup generation failed");
 
     // Timed run
     println!("Running benchmark...");

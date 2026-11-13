@@ -1,6 +1,6 @@
 //! Test with chat template applied (like pesti-server does)
-use pesti_runner::llama::{LlamaRunner, SamplingConfig};
 use llama_cpp_2::model::LlamaChatMessage;
+use pesti_runner::llama::{LlamaRunner, SamplingConfig};
 
 fn main() {
     let model_path = std::env::args()
@@ -17,21 +17,19 @@ fn main() {
 
     // Build chat messages like pesti-server does
     let prompt = "What is 2+2?";
-    let llama_messages: Vec<LlamaChatMessage> = vec![
-        ("system", "You are a helpful assistant."),
-        ("user", prompt),
-    ]
-    .iter()
-    .filter_map(|(role, content)| {
-        match LlamaChatMessage::new(role.to_string(), content.to_string()) {
-            Ok(msg) => Some(msg),
-            Err(e) => {
-                eprintln!("Failed to create chat message: {}", e);
-                None
-            }
-        }
-    })
-    .collect();
+    let llama_messages: Vec<LlamaChatMessage> =
+        vec![("system", "You are a helpful assistant."), ("user", prompt)]
+            .iter()
+            .filter_map(|(role, content)| {
+                match LlamaChatMessage::new(role.to_string(), content.to_string()) {
+                    Ok(msg) => Some(msg),
+                    Err(e) => {
+                        eprintln!("Failed to create chat message: {}", e);
+                        None
+                    }
+                }
+            })
+            .collect();
 
     println!("Built {} chat messages", llama_messages.len());
 

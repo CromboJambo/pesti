@@ -43,21 +43,29 @@ struct GroupParams {
 fn compute_group_params(group: &[f32], d: f32, dmin: f32) -> GroupParams {
     let (mut group_min, mut group_max) = (group[0], group[0]);
     for &x in group {
-        if x < group_min { group_min = x; }
-        if x > group_max { group_max = x; }
+        if x < group_min {
+            group_min = x;
+        }
+        if x > group_max {
+            group_max = x;
+        }
     }
 
-    let range = group_max - group_min;
-    let scale = if range > 0.0 {
-        (range / (d * 15.0f32)).round().clamp(1.0, 63.0) as u8
-    } else {
-        1u8
-    };
-
+    // Compute min offset first: m such that -dmin*m ≈ group_min (when group_min < 0)
     let min_offset = if group_min < 0.0 {
-        (-group_min / (dmin * scale as f32)).round().clamp(0.0, 63.0) as u8
+        (-group_min / dmin).round().clamp(0.0, 63.0) as u8
     } else {
         0u8
+    };
+
+    // Scale must ensure: d*sc*15 - dmin*m >= group_max (so q=15 covers the max value)
+    // Therefore: sc >= (group_max + dmin*m) / (d*15)
+    let effective_max = group_max + dmin * min_offset as f32;
+    let scale = if effective_max > 0.0 {
+        (effective_max / (d * 15.0f32)).ceil().clamp(1.0, 63.0) as u8
+    } else {
+        // All values are zero or negative and covered by offset
+        1u8
     };
 
     GroupParams { scale, min_offset }
@@ -71,21 +79,39 @@ fn compute_group_params(group: &[f32], d: f32, dmin: f32) -> GroupParams {
 /// Therefore, quantization is:
 /// q = round((x + dmin * m) / (d * sc))
 pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
-    assert_eq!(input.len(), Q4K_BLOCK_ELEMS, "Q4_K block requires exactly 256 elements");
-    assert!(output.len() >= Q4K_BLOCK_SIZE, "Output buffer too small for Q4_K block");
+    assert_eq!(
+        input.len(),
+        Q4K_BLOCK_ELEMS,
+        "Q4_K block requires exactly 256 elements"
+    );
+    assert!(
+        output.len() >= Q4K_BLOCK_SIZE,
+        "Output buffer too small for Q4_K block"
+    );
 
     // Step 1: Compute global scale (d) and min offset (dmin).
-    let max_abs = input.iter().fold(0.0f32, |max, &x| {
-        if x.abs() > max { x.abs() } else { max }
-    });
+    let max_abs = input
+        .iter()
+        .fold(0.0f32, |max, &x| if x.abs() > max { x.abs() } else { max });
 
+    let global_min = input
+        .iter()
+        .fold(0.0f32, |min, &x| if x < min { x } else { min });
+
+    // d must be large enough that sc = range/(15*d) ≤ 63 for any group range.
+    // Using max_abs/63 ensures sc ≤ 63/15 = 4.2 for the worst case.
     let d = if max_abs > 0.0 {
-        max_abs / (8.0f32 * 63.0f32)
+        max_abs / 63.0f32
     } else {
         1e-6f32
     };
 
-    let dmin = d;
+    // dmin must be large enough that m = -group_min/dmin ≤ 63 for the most negative group.
+    let dmin = if global_min < 0.0 {
+        -global_min / 63.0f32
+    } else {
+        d
+    };
 
     // Step 2: Compute per-group parameters and pack scales.
     let mut scales = [0u8; 12];
@@ -100,6 +126,10 @@ pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
     }
 
     // Step 3: Quantize each value using pre-computed group parameters.
+    // Nibble layout (matching dequantize_q4_k):
+    //   chunk c covers elements [c*64, c*64+64) from qs[c*32 .. c*32+32]
+    //     - lower nibbles: elements [c*64, c*64+32)  (even group g=2c)
+    //     - upper nibbles: elements [c*64+32, c*64+64) (odd group g=2c+1)
     let mut qs = [0u8; 128];
     for g in 0..Q4K_GROUPS {
         let start = g * 32;
@@ -107,17 +137,21 @@ pub fn quantize_q4k_block(input: &[f32], output: &mut [u8]) {
         let params = &group_params[g];
 
         let denom = d * params.scale as f32;
+        let qs_base = (g / 2) * 32;
+
         for (i, &x) in group.iter().enumerate() {
             let q = if denom > 0.0 {
-                ((x + dmin * params.min_offset as f32) / denom).round().clamp(0.0, 15.0) as u8
+                ((x + dmin * params.min_offset as f32) / denom)
+                    .round()
+                    .clamp(0.0, 15.0) as u8
             } else {
                 0u8
             };
 
-            if i < 32 {
-                qs[i] = q;
+            if g % 2 == 0 {
+                qs[qs_base + i] = q; // lower nibble
             } else {
-                qs[i - 32] |= q << 4;
+                qs[qs_base + i] |= q << 4; // upper nibble
             }
         }
     }
@@ -179,25 +213,30 @@ mod tests {
         let mut block = vec![0u8; Q4K_BLOCK_SIZE];
         quantize_q4k_block(&input, &mut block);
 
-        // Debug: print scale factors
-        let d_f16_bytes = [block[0], block[1]];
-        let d = f16::from_le_bytes(d_f16_bytes).to_f32();
-        let dmin_f16_bytes = [block[2], block[3]];
-        let dmin = f16::from_le_bytes(dmin_f16_bytes).to_f32();
-        eprintln!("d = {}, dmin = {}", d, dmin);
-
         // Dequantize using the existing pesti-runner dequantizer
         let dequantized = dequantize_q4_k(&block, Q4K_BLOCK_ELEMS).unwrap();
 
         // Verify round-trip error is reasonable (should be < 0.1 for this range)
         let mut max_error = 0.0f32;
+        let mut worst_idx = 0;
         for i in 0..Q4K_BLOCK_ELEMS {
             let error = (input[i] - dequantized[i]).abs();
-            if error > max_error { max_error = error; }
+            if error > max_error {
+                max_error = error;
+                worst_idx = i;
+            }
         }
 
-        eprintln!("max_error = {}", max_error);
-        assert!(max_error < 0.1, "Round-trip error too large: {}", max_error);
+        eprintln!(
+            "max_error = {} at index {} (in={}, out={})",
+            max_error, worst_idx, input[worst_idx], dequantized[worst_idx]
+        );
+        assert!(
+            max_error < 0.1,
+            "Q4_K roundtrip error too large: {} at index {}",
+            max_error,
+            worst_idx
+        );
     }
 
     #[test]
@@ -210,7 +249,10 @@ mod tests {
         // Should not panic and should produce valid block structure
         let d_f16_bytes = [block[0], block[1]];
         let d = f16::from_le_bytes(d_f16_bytes).to_f32();
-        assert!(d > 0.0, "Scale factor should be positive for constant input");
+        assert!(
+            d > 0.0,
+            "Scale factor should be positive for constant input"
+        );
     }
 
     #[test]
@@ -244,9 +286,7 @@ mod tests {
     #[test]
     fn test_quantize_multiple_blocks() {
         // Test quantization of more than one block
-        let input: Vec<f32> = (0..512)
-            .map(|i| (i as f32 - 256.0) * 0.01)
-            .collect();
+        let input: Vec<f32> = (0..512).map(|i| (i as f32 - 256.0) * 0.01).collect();
 
         let output = quantize_q4k(&input);
         assert_eq!(output.len(), 2 * Q4K_BLOCK_SIZE, "Should produce 2 blocks");
@@ -271,9 +311,15 @@ mod tests {
         let mut max_error = 0.0f32;
         for i in 0..Q4K_BLOCK_ELEMS {
             let error = (input[i] - dequantized[i]).abs();
-            if error > max_error { max_error = error; }
+            if error > max_error {
+                max_error = error;
+            }
         }
 
-        assert!(max_error < 0.01, "Round-trip error too large for realistic values: {}", max_error);
+        assert!(
+            max_error < 0.01,
+            "Round-trip error too large for realistic values: {}",
+            max_error
+        );
     }
 }

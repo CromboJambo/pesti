@@ -308,7 +308,7 @@ impl GemmKernel for KernelFromPtx {
         if self.gpu_available
             && let (Some(ctx), Some(_module), Some(func), Some(stream)) =
                 (&self.ctx, &self.module, &self.function, &self.stream)
-            {
+        {
             // Bind context to thread
             ctx.bind_to_thread()
                 .map_err(|e| GemmError::LaunchFailed(e.to_string()))?;

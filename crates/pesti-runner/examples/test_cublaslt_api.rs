@@ -17,16 +17,19 @@ fn main() {
 
     // Try to create a cublasLt handle (if exposed)
     // In cudarc 0.19.x, cublasLt is accessed via sys bindings
-    
+
     // Test basic GEMM shapes we care about for LLM inference
     let test_shapes = vec![
-        (1, 1536, 4096),   // typical attention head
-        (1, 3072, 4096),   // larger layer
-        (1, 128, 1536),    // small projection
+        (1, 1536, 4096), // typical attention head
+        (1, 3072, 4096), // larger layer
+        (1, 128, 1536),  // small projection
     ];
 
     for (m, n, k) in test_shapes {
-        println!("Shape m={} n={} k={}: would use cublasLtMatmul with heuristics", m, n, k);
+        println!(
+            "Shape m={} n={} k={}: would use cublasLtMatmul with heuristics",
+            m, n, k
+        );
     }
 
     println!("\nAPI exploration complete.");

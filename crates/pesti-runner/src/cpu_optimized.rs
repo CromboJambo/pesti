@@ -1,6 +1,6 @@
 //! Optimized CPU reference implementation with SIMD and parallelism
 
-use crate::softmask::{segmented_softmax, Softmask};
+use crate::softmask::{Softmask, segmented_softmax};
 use half::f16;
 use rayon::prelude::*;
 
@@ -363,13 +363,21 @@ mod tests {
         // Query at position 0: all V positions 1,2,3 are masked → output must be exactly 0
         for d in 0..head_dim {
             let val = output[0 * num_heads * head_dim + d];
-            assert_eq!(val, 0.0f32, "Query pos 0 leaked future V at dim {}: {}", d, val);
+            assert_eq!(
+                val, 0.0f32,
+                "Query pos 0 leaked future V at dim {}: {}",
+                d, val
+            );
         }
 
         // Query at position 1: V positions 2,3 masked → still all zeros (V[0]=V[1]=0)
         for d in 0..head_dim {
             let val = output[1 * num_heads * head_dim + d];
-            assert_eq!(val, 0.0f32, "Query pos 1 leaked future V at dim {}: {}", d, val);
+            assert_eq!(
+                val, 0.0f32,
+                "Query pos 1 leaked future V at dim {}: {}",
+                d, val
+            );
         }
 
         // Query at position 3: can see all positions including V[3]=32000

@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Fused attention kernel enabled on all {} layers",
                     model.config.num_layers
                 );
-                
+
                 // Set up rope kernel for optimized RoPE computation
                 if let Ok(rope_kernel) = pesti_runner::kernel::rope::CudaRopeKernel::new(&ctx) {
                     let rope_kernel = std::sync::Arc::new(rope_kernel);

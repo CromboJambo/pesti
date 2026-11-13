@@ -15,7 +15,6 @@ use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
-use crate::weight_store::WeightStore;
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
@@ -28,6 +27,7 @@ use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;
 use crate::transformer::rope::RopeConfig;
 use crate::transformer::tokenizer::{GgufTokenizerConfig, load_tokenizer_from_gguf};
+use crate::weight_store::WeightStore;
 
 /// Model architecture family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -842,12 +842,7 @@ impl LlamaModel {
                             }
                         })
                         .collect();
-                    Some(
-                        f32_vals
-                            .into_iter()
-                            .flat_map(|v| v.to_le_bytes())
-                            .collect(),
-                    )
+                    Some(f32_vals.into_iter().flat_map(|v| v.to_le_bytes()).collect())
                 }
                 Dtype::BF16 => {
                     // Convert BF16 → f32 bytes (simple bit extension)
@@ -858,12 +853,7 @@ impl LlamaModel {
                             f32::from_bits((bits as u32) << 16)
                         })
                         .collect();
-                    Some(
-                        f32_vals
-                            .into_iter()
-                            .flat_map(|v| v.to_le_bytes())
-                            .collect(),
-                    )
+                    Some(f32_vals.into_iter().flat_map(|v| v.to_le_bytes()).collect())
                 }
                 _ => None,
             }
@@ -871,7 +861,8 @@ impl LlamaModel {
 
         // Derive vocab_size from the embedding tensor shape in the store
         let embedding_name = config.embedding_name();
-        let (vocab_size, token_embeddings) = if let Some(info) = store.tensor_info(&embedding_name) {
+        let (vocab_size, token_embeddings) = if let Some(info) = store.tensor_info(&embedding_name)
+        {
             let data = read_tensor_f32_bytes(&embedding_name);
             match info.shape.len() {
                 2 => {
@@ -921,7 +912,8 @@ impl LlamaModel {
         // Build transformer layers by reading tensors from the store
         let mut layers = Vec::with_capacity(config.num_layers);
         for layer_idx in 0..config.num_layers {
-            let layer = Self::load_layer_from_store(&store, &read_tensor_f32_bytes, layer_idx, &config)?;
+            let layer =
+                Self::load_layer_from_store(&store, &read_tensor_f32_bytes, layer_idx, &config)?;
             layers.push(layer);
         }
 
@@ -995,7 +987,10 @@ impl LlamaModel {
 
         let attention_norm_data = read_tensor_f32_bytes(&attention_norm_name)
             .or_else(|| {
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
+                if matches!(
+                    config.arch,
+                    ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama
+                ) {
                     read_tensor_f32_bytes(&format!("{prefix}attn_norm.weight"))
                 } else {
                     None
@@ -1007,7 +1002,8 @@ impl LlamaModel {
                     attention_norm_name
                 ))
             })?;
-        let attention_norm = RmsNorm::new(bytes_to_f32_vec(&attention_norm_data), config.rms_norm_eps);
+        let attention_norm =
+            RmsNorm::new(bytes_to_f32_vec(&attention_norm_data), config.rms_norm_eps);
 
         let ffn_norm_name = match config.arch {
             ModelArch::Gemma => format!("{prefix}post_attention_layernorm.weight"),
@@ -1024,7 +1020,9 @@ impl LlamaModel {
         let suffix = config.attn_weight_suffix();
         let wq_data = match config.arch {
             ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}q_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing q_proj weight in store".to_string())),
+                .ok_or_else(|| {
+                    RunnerError::ModelLoad("missing q_proj weight in store".to_string())
+                }),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
                 read_tensor_f32_bytes(&format!("{prefix}attn_q.weight")).ok_or_else(|| {
                     RunnerError::ModelLoad("missing attn_q.weight in store".to_string())
@@ -1036,7 +1034,9 @@ impl LlamaModel {
         }?;
         let wk_data = match config.arch {
             ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}k_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing k_proj weight in store".to_string())),
+                .ok_or_else(|| {
+                    RunnerError::ModelLoad("missing k_proj weight in store".to_string())
+                }),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
                 read_tensor_f32_bytes(&format!("{prefix}attn_k.weight")).ok_or_else(|| {
                     RunnerError::ModelLoad("missing attn_k.weight in store".to_string())
@@ -1048,7 +1048,9 @@ impl LlamaModel {
         }?;
         let wv_data = match config.arch {
             ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}v_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing v_proj weight in store".to_string())),
+                .ok_or_else(|| {
+                    RunnerError::ModelLoad("missing v_proj weight in store".to_string())
+                }),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
                 read_tensor_f32_bytes(&format!("{prefix}attn_v.weight")).ok_or_else(|| {
                     RunnerError::ModelLoad("missing attn_v.weight in store".to_string())
@@ -1060,7 +1062,9 @@ impl LlamaModel {
         }?;
         let wo_data = match config.arch {
             ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}o_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing o_proj weight in store".to_string())),
+                .ok_or_else(|| {
+                    RunnerError::ModelLoad("missing o_proj weight in store".to_string())
+                }),
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
                 read_tensor_f32_bytes(&format!("{prefix}attn_output.weight")).ok_or_else(|| {
                     RunnerError::ModelLoad("missing attn_output.weight in store".to_string())
@@ -1098,18 +1102,42 @@ impl LlamaModel {
                 _ => format!("{prefix}attention.wo.weight"),
             };
             // tensor_info gives shape as [out, in] for 2D weight tensors
-            let (wq_out, wq_in) = store.tensor_info(&wq_name).map(|t| {
-                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-            }).unwrap_or((0, 0));
-            let (wk_out, wk_in) = store.tensor_info(&wk_name).map(|t| {
-                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-            }).unwrap_or((0, 0));
-            let (wv_out, wv_in) = store.tensor_info(&wv_name).map(|t| {
-                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-            }).unwrap_or((0, 0));
-            let (wo_out, wo_in) = store.tensor_info(&wo_name).map(|t| {
-                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-            }).unwrap_or((0, 0));
+            let (wq_out, wq_in) = store
+                .tensor_info(&wq_name)
+                .map(|t| {
+                    (
+                        t.shape.first().copied().unwrap_or(0),
+                        t.shape.get(1).copied().unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0));
+            let (wk_out, wk_in) = store
+                .tensor_info(&wk_name)
+                .map(|t| {
+                    (
+                        t.shape.first().copied().unwrap_or(0),
+                        t.shape.get(1).copied().unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0));
+            let (wv_out, wv_in) = store
+                .tensor_info(&wv_name)
+                .map(|t| {
+                    (
+                        t.shape.first().copied().unwrap_or(0),
+                        t.shape.get(1).copied().unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0));
+            let (wo_out, wo_in) = store
+                .tensor_info(&wo_name)
+                .map(|t| {
+                    (
+                        t.shape.first().copied().unwrap_or(0),
+                        t.shape.get(1).copied().unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0));
             (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
         };
 
@@ -1140,26 +1168,36 @@ impl LlamaModel {
         // FFN weights — architecture-dependent naming
         let (w1_data, w2_data, w3_data) = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
-                let w1 = read_tensor_f32_bytes(&format!("{prefix}ffn_gate.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_gate.weight in store".into()))?;
-                let w2 = read_tensor_f32_bytes(&format!("{prefix}ffn_down.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_down.weight in store".into()))?;
-                let w3 = read_tensor_f32_bytes(&format!("{prefix}ffn_up.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_up.weight in store".into()))?;
+                let w1 = read_tensor_f32_bytes(&format!("{prefix}ffn_gate.weight")).ok_or_else(
+                    || RunnerError::ModelLoad("missing ffn_gate.weight in store".into()),
+                )?;
+                let w2 = read_tensor_f32_bytes(&format!("{prefix}ffn_down.weight")).ok_or_else(
+                    || RunnerError::ModelLoad("missing ffn_down.weight in store".into()),
+                )?;
+                let w3 =
+                    read_tensor_f32_bytes(&format!("{prefix}ffn_up.weight")).ok_or_else(|| {
+                        RunnerError::ModelLoad("missing ffn_up.weight in store".into())
+                    })?;
                 (w1, w2, w3)
             }
             _ => {
                 let w1 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w1.weight"))
                     .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w1.weight in store"))
+                        RunnerError::ModelLoad(format!(
+                            "missing {prefix}feed_forward.w1.weight in store"
+                        ))
                     })?;
                 let w2 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w2.weight"))
                     .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w2.weight in store"))
+                        RunnerError::ModelLoad(format!(
+                            "missing {prefix}feed_forward.w2.weight in store"
+                        ))
                     })?;
                 let w3 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w3.weight"))
                     .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w3.weight in store"))
+                        RunnerError::ModelLoad(format!(
+                            "missing {prefix}feed_forward.w3.weight in store"
+                        ))
                     })?;
                 (w1, w2, w3)
             }
@@ -1170,20 +1208,45 @@ impl LlamaModel {
             if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
                 let hidden = config.embed_dim;
                 let intermediate = config.intermediate_dim;
-                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+                (
+                    hidden,
+                    intermediate,
+                    intermediate,
+                    hidden,
+                    hidden,
+                    intermediate,
+                )
             } else {
                 let w1_name = format!("{prefix}feed_forward.w1.weight");
                 let w2_name = format!("{prefix}feed_forward.w2.weight");
                 let w3_name = format!("{prefix}feed_forward.w3.weight");
-                let (w1_in, w1_out) = store.tensor_info(&w1_name).map(|t| {
-                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-                }).unwrap_or((0, 0));
-                let (w2_in, w2_out) = store.tensor_info(&w2_name).map(|t| {
-                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-                }).unwrap_or((0, 0));
-                let (w3_in, w3_out) = store.tensor_info(&w3_name).map(|t| {
-                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
-                }).unwrap_or((0, 0));
+                let (w1_in, w1_out) = store
+                    .tensor_info(&w1_name)
+                    .map(|t| {
+                        (
+                            t.shape.first().copied().unwrap_or(0),
+                            t.shape.get(1).copied().unwrap_or(0),
+                        )
+                    })
+                    .unwrap_or((0, 0));
+                let (w2_in, w2_out) = store
+                    .tensor_info(&w2_name)
+                    .map(|t| {
+                        (
+                            t.shape.first().copied().unwrap_or(0),
+                            t.shape.get(1).copied().unwrap_or(0),
+                        )
+                    })
+                    .unwrap_or((0, 0));
+                let (w3_in, w3_out) = store
+                    .tensor_info(&w3_name)
+                    .map(|t| {
+                        (
+                            t.shape.first().copied().unwrap_or(0),
+                            t.shape.get(1).copied().unwrap_or(0),
+                        )
+                    })
+                    .unwrap_or((0, 0));
                 (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out)
             };
 

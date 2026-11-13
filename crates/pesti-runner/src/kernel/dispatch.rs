@@ -52,13 +52,13 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
-#[cfg(feature = "cuda")]
-use crate::kernel::rope::CudaRopeKernel;
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::memory_stub::MemoryManager;
+#[cfg(feature = "cuda")]
+use crate::kernel::rope::CudaRopeKernel;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Tensor};
@@ -630,7 +630,8 @@ impl DispatchContext {
         let mut result = match selected {
             KernelId::CudaDirectHgemm => {
                 if let Some(bridge) = self.cuda_bridge() {
-                    bridge.gemm_f16(&x_f16, weights, m, n, k)
+                    bridge
+                        .gemm_f16(&x_f16, weights, m, n, k)
                         .map(|r| r.to_vec())
                         .map_err(|e| DispatchError::Kernel(format!("cuda_bridge::gemm_f16: {e}")))
                 } else {
@@ -708,7 +709,8 @@ impl DispatchContext {
         k: usize,
         weight_t_gpu: Option<&Tensor>,
     ) -> Result<Vec<f32>, DispatchError> {
-        if self.prefer_gpu && self.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
+        if self.prefer_gpu && self.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda()
+        {
             self.dispatch_linear_candle_bridge(x_f16, weights, m, n, k, weight_t_gpu)
         } else {
             self.dispatch_linear_cpu_path(x_f16, weights, m, n, k)
@@ -716,7 +718,13 @@ impl DispatchContext {
     }
 
     /// Add bias to result in-place. Returns the modified vector.
-    fn add_bias(&self, mut result: Vec<f32>, bias: Option<&[f32]>, batch_size: usize, out_features: usize) -> Vec<f32> {
+    fn add_bias(
+        &self,
+        mut result: Vec<f32>,
+        bias: Option<&[f32]>,
+        batch_size: usize,
+        out_features: usize,
+    ) -> Vec<f32> {
         if let Some(b) = bias {
             for b_idx in 0..batch_size {
                 for o in 0..out_features {
@@ -742,7 +750,8 @@ impl DispatchContext {
     fn cuda_sm(&self) -> u16 {
         #[cfg(feature = "cuda")]
         {
-            self.engine.cuda_device_info()
+            self.engine
+                .cuda_device_info()
                 .map(|info| {
                     let (major, minor) = info.compute_capability;
                     major * 10 + minor as u16
@@ -1391,7 +1400,7 @@ impl AttentionDispatch {
                 .map_err(|e| DispatchError::Kernel(format!("k tensor to f32: {e}")))?;
 
             // Use cached rope kernel if available, otherwise build it or fall back to CPU
-            use crate::kernel::rope::{CudaRopeKernelBuilder, CudaRopeKernel};
+            use crate::kernel::rope::{CudaRopeKernel, CudaRopeKernelBuilder};
             let rope_kernel = match &self.rope_kernel {
                 Some(k) => Arc::clone(k),
                 None => {
@@ -1412,7 +1421,9 @@ impl AttentionDispatch {
                         Ok(built) => Arc::new(built),
                         Err(e) => {
                             // GPU rope kernel failed to build — fall back to CPU RoPE via candle
-                            println!("[WARN] GPU rope kernel build failed ({e}), falling back to CPU RoPE");
+                            println!(
+                                "[WARN] GPU rope kernel build failed ({e}), falling back to CPU RoPE"
+                            );
                             return self.rope_tensors_cpu(q, k, seq_len, start_pos);
                         }
                     }
@@ -1426,15 +1437,17 @@ impl AttentionDispatch {
             let mut k_buf = DeviceBuffer::from_host(k_f32);
 
             // Apply RoPE kernel in-place on GPU
-            rope_kernel.apply_gpu(
-                &mut q_buf,
-                &mut k_buf,
-                self.num_heads,
-                seq_len,
-                start_pos,
-                head_dim,
-                self.rope_base,
-            ).map_err(|e| DispatchError::Kernel(format!("rope kernel apply: {e}")))?;
+            rope_kernel
+                .apply_gpu(
+                    &mut q_buf,
+                    &mut k_buf,
+                    self.num_heads,
+                    seq_len,
+                    start_pos,
+                    head_dim,
+                    self.rope_base,
+                )
+                .map_err(|e| DispatchError::Kernel(format!("rope kernel apply: {e}")))?;
 
             // Copy results back to host
             let q_out_f32 = q_buf.to_host();
@@ -1557,24 +1570,32 @@ impl AttentionDispatch {
                 .map_err(|e| DispatchError::Kernel(format!("sin expand k heads: {e}")))?;
 
             // Apply RoPE to Q: q_rot[i] = q[i]*cos - q'[i]*sin, q_rot[i'] = q'[i]*cos + q[i]*sin
-            let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
-            let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
-            let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
+            let q0r =
+                (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
+            let q1s =
+                (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
+            let qr0 =
+                (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
             let q1c =
                 (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
             let q0s =
                 (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
-            let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
+            let qr1 =
+                (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
 
             // Apply RoPE to K
-            let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
-            let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
-            let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
+            let k0r =
+                (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
+            let k1s =
+                (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
+            let kr0 =
+                (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
             let k1c =
                 (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
             let k0s =
                 (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
-            let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
+            let kr1 =
+                (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
 
             let last_dim = q.dims().len() - 1;
             let q_out = Tensor::cat(&[&qr0, &qr1], last_dim)
@@ -1597,10 +1618,18 @@ impl AttentionDispatch {
     ) -> Result<(Tensor, Tensor), DispatchError> {
         use candle_core::Device;
 
-        eprintln!("[DEBUG] rope_tensors_cpu called: q dims={:?}, dtype={:?}, device={:?}", 
-                  q.dims(), q.dtype(), q.device());
-        eprintln!("[DEBUG] rope_tensors_cpu called: k dims={:?}, dtype={:?}, device={:?}", 
-                  k.dims(), k.dtype(), k.device());
+        eprintln!(
+            "[DEBUG] rope_tensors_cpu called: q dims={:?}, dtype={:?}, device={:?}",
+            q.dims(),
+            q.dtype(),
+            q.device()
+        );
+        eprintln!(
+            "[DEBUG] rope_tensors_cpu called: k dims={:?}, dtype={:?}, device={:?}",
+            k.dims(),
+            k.dtype(),
+            k.device()
+        );
 
         let head_dim = self.head_dim;
         let num_heads_q = q.dims()[2];
@@ -1693,8 +1722,10 @@ impl AttentionDispatch {
         let q0r = (&q0 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0: {e}")))?;
         let q1s = (&q1 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1: {e}")))?;
         let qr0 = (&q0r - &q1s).map_err(|e| DispatchError::Kernel(format!("rope sub q: {e}")))?;
-        let q1c = (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
-        let q0s = (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
+        let q1c =
+            (&q1 * &cos_q).map_err(|e| DispatchError::Kernel(format!("rope mul q1c: {e}")))?;
+        let q0s =
+            (&q0 * &sin_q).map_err(|e| DispatchError::Kernel(format!("rope mul q0s: {e}")))?;
         let qr1 = (&q1c + &q0s).map_err(|e| DispatchError::Kernel(format!("rope add q: {e}")))?;
 
         // Apply RoPE to K on CPU
@@ -1708,8 +1739,10 @@ impl AttentionDispatch {
         let k0r = (&k0 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0: {e}")))?;
         let k1s = (&k1 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1: {e}")))?;
         let kr0 = (&k0r - &k1s).map_err(|e| DispatchError::Kernel(format!("rope sub k: {e}")))?;
-        let k1c = (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
-        let k0s = (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
+        let k1c =
+            (&k1 * &cos_k).map_err(|e| DispatchError::Kernel(format!("rope mul k1c: {e}")))?;
+        let k0s =
+            (&k0 * &sin_k).map_err(|e| DispatchError::Kernel(format!("rope mul k0s: {e}")))?;
         let kr1 = (&k1c + &k0s).map_err(|e| DispatchError::Kernel(format!("rope add k: {e}")))?;
 
         let last_dim = q.dims().len() - 1;
@@ -2253,7 +2286,7 @@ impl LayerDispatch {
 
         // Attention sub-layer: x + attn(RMSNorm(x))
         let normed = self.attention_norm.forward(x, batch_size)?;
-        
+
         let mut h = vec![0.0f32; batch_size * embed_dim];
         {
             let _timer = profiler::time(profiler::KernelCategory::Attention);
@@ -2275,11 +2308,11 @@ impl LayerDispatch {
 
         // FFN sub-layer: h + ffn(RMSNorm(h))
         let normed_ffn = self.ffn_norm.forward(&h, batch_size)?;
-        
+
         {
             let _timer = profiler::time(profiler::KernelCategory::Gemm);
             let ffn_out = self.feed_forward.forward(ctx, &normed_ffn, batch_size)?;
-            
+
             // Residual: h + ffn_out
             for i in 0..h.len() {
                 h[i] += ffn_out[i];

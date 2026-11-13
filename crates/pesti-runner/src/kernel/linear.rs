@@ -213,7 +213,11 @@ impl LinearLayer for GpuLinearLayer {
         let x_f16: Vec<half::f16> = x.iter().map(|&v| half::f16::from_f32(v)).collect();
 
         crate::kernel::cuda_bridge::gemm_f16_with_persistent_weights(
-            &x_f16, &w_dev, batch_size, self.out_features, self.in_features,
+            &x_f16,
+            &w_dev,
+            batch_size,
+            self.out_features,
+            self.in_features,
         )
     }
 
