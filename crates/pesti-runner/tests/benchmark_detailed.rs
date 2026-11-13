@@ -9,6 +9,14 @@ use std::time::Instant;
 
 #[test]
 fn benchmark_detailed() {
+    // Initialize tracing for debug logging
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "pesti_runner=debug".into()),
+        )
+        .try_init();
+
     // Use absolute path to avoid working directory issues
     let model_path =
         "/home/crombo/projects/active/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
@@ -115,9 +123,14 @@ fn benchmark_detailed() {
     // Decode and show output
     if let Some(tok) = model.tokenizer.as_ref() {
         let generated_text = tok.decode(&result_tokens).expect("Failed to decode");
+        let safe_len = generated_text
+            .char_indices()
+            .map(|(i, _)| i)
+            .find(|&i| i > 200)
+            .unwrap_or(generated_text.len());
         println!(
             "Output: {}",
-            &generated_text[..generated_text.len().min(200)]
+            &generated_text[..safe_len]
         );
     }
 
