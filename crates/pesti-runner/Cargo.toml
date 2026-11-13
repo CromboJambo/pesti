@@ -56,6 +56,9 @@ regex.workspace = true
 # Safetensors runtime
 safetensors.workspace = true
 
+# Memory-mapped file access (zero-copy weight loading)
+memmap2.workspace = true
+
 # Temp files for tokenizer config
 tempfile.workspace = true
 

@@ -52,6 +52,7 @@ pub mod trl; // TRL-like training orchestrator
 pub mod unsloth; // Unsloth-style efficient training optimizations
 pub mod unsloth_client; // Unsloth Studio SDK bridge (sync version)
 pub mod unsloth_client_async; // Unsloth Studio SDK bridge (async version with tokio) // CPU-only full forward pass implementation
+pub mod weight_store; // Layered weight storage: CoreTensor, TensorStructure, WeightStore
 
 // Re-export CPU transformer primitives for external use
 #[cfg(not(feature = "cuda"))]
