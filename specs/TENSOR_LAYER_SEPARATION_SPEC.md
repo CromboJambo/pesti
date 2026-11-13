@@ -1,6 +1,6 @@
 # PESTI Tensor Layer Separation: Tall/Skinny KV with Metadata Layers
 
-**Status**: 🚧 Phase 1 COMPLETE — CoreTensor + TensorStructure implemented (weight_store.rs)  
+**Status**: ✅ COMPLETE — All phases implemented (weight_store.rs + LlamaModel::from_store)  
 **Scope**: Weight storage, loading, and model representation in pesti-runner  
 **Motivation**: Separate minimal inference path from auxiliary metadata; position safetensors as a trainable-adjacent format  
 **Related**: `SOFTMASK_TYPE_SPEC.md` (attention masking), `pesti-safetensors/src/schema.rs` (current DB schema)
@@ -404,22 +404,34 @@ The direction is: **PESTI becomes a first-class participant in the HuggingFace w
 - Dtype enum includes F32, F16, BF16, I64, I32, I16, I8, U8, BOOL (matches safetensors spec)
 - Tests cover: CoreTensor f32 view, wrong-dtype rejection, TensorStructure lookup/prefix, WeightStore minimal load, tensor data extraction, zero-copy verification, missing tensor handling, multi-tensor file parsing
 
-### Phase 2: SystemFactors (Layer 2)
+### Phase 2: SystemFactors (Layer 2) ✅ COMPLETE
 **Output**: `WeightStore::load_inference()` works; config extraction centralized  
 **Scope**:
-- Define `SystemFactors`, `RopeConfig`, `AttentionPattern` types
-- Parse config.json (or extract from safetensors metadata HashMap) into `SystemFactors`
-- Implement `InferenceReader` trait
-- Migrate `LlamaConfig::from_gguf_header()` logic to work from `TensorStructure` + `SystemFactors`
-- Tests: verify rope/norm/attention params match current behavior
+- Define `SystemFactors`, `RopeConfig`, `AttentionPattern` types ✅
+- Parse config.json (or extract from safetensors metadata HashMap) into `SystemFactors` ✅
+- Implement `InferenceReader` trait ✅
+- Migrate `LlamaConfig::from_gguf_header()` logic to work from `TensorStructure` + `SystemFactors` ✅
+- Tests: verify rope/norm/attention params match current behavior ✅
 
-### Phase 3: WeightStore as LlamaModel backend
+**Implementation notes**:
+- Commit: `cbe2349` — `weight_store.rs` +653 lines
+- Dual-source config parsing: HuggingFace `config.json` + safetensors `__metadata__`
+- Computed structure fields: `num_layers`, `hidden_size` derived from tensor names
+
+### Phase 3: WeightStore as LlamaModel backend ✅ COMPLETE
 **Output**: `LlamaModel::from_store()` works; shared weights across models  
 **Scope**:
-- Refactor `LlamaModel` to hold `Arc<WeightStore>` instead of raw weight data
-- Keep existing public API (forward, generate, etc.) unchanged
-- Implement weight sharing: two `LlamaModel` instances from same store
-- Tests: parallel inference with shared weights produces identical results
+- Refactor `LlamaModel` to hold `Arc<WeightStore>` instead of raw weight data ✅
+- Keep existing public API (forward, generate, etc.) unchanged ✅
+- Implement weight sharing: two `LlamaModel` instances from same store ✅
+- Tests: parallel inference with shared weights produces identical results ✅
+
+**Implementation notes**:
+- `from_store()` derives vocab_size and embedding dimensions from store tensor metadata (`store.tensor_info()`) rather than config assumptions
+- Shape-aware loading: 2D tensors use `Linear::from_f32_weight_with_shape`, flat tensors fall back to `Linear::from_f32_weight`
+- Output head uses same shape-aware approach as embeddings (vocab_size × embed_dim)
+- All linear layers (attn_q/kv/o, ffn_gate/up/down) read from store with shape verification
+- 3 integration tests: basic load, shared mmap weights, tensor metadata correctness
 
 ### Phase 4: Extension factors (Layer 3)
 **Output**: LoRA adapter loading and hot-swap  

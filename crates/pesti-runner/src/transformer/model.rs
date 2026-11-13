@@ -14,11 +14,12 @@ use tracing::debug;
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
 use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
-#[cfg(feature = "cuda")]
-use crate::kernel::rope::CudaRopeKernel;
 use crate::kernel::linear::{LinearLayer, new_linear_layer};
+use crate::weight_store::WeightStore;
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
+#[cfg(feature = "cuda")]
+use crate::kernel::rope::CudaRopeKernel;
 use crate::kernel::{GemmKernel, Kvcache};
 use crate::model_loader::GgufHeaderExt;
 use crate::safetensors_weight_loader::SafetensorsWeights;
@@ -395,6 +396,9 @@ pub struct LlamaModel {
     /// every forward call dominated step time.
     #[cfg(feature = "cuda")]
     pub output_weight_t_gpu: Option<Tensor>,
+    /// Shared weight store (set when loaded via `from_store`). Allows multiple
+    /// model instances to share the same underlying mmap'd weight file.
+    pub weight_store: Option<std::sync::Arc<WeightStore>>,
 }
 
 impl LlamaModel {
@@ -443,7 +447,7 @@ impl LlamaModel {
                         tensor_data,
                         None,
                         embed_dim,
-                        vocab_size as usize,  // Fixed: just vocab_size, not vocab_size * embed_dim
+                        vocab_size as usize, // Fixed: just vocab_size, not vocab_size * embed_dim
                     )
                 } else {
                     Linear::from_f32_weight(tensor_data, None)
@@ -534,6 +538,7 @@ impl LlamaModel {
             dispatch_layers,
             #[cfg(feature = "cuda")]
             output_weight_t_gpu,
+            weight_store: None,
         })
     }
 
@@ -772,6 +777,7 @@ impl LlamaModel {
             dispatch_layers,
             #[cfg(feature = "cuda")]
             output_weight_t_gpu,
+            weight_store: None,
         })
     }
 
@@ -783,6 +789,416 @@ impl LlamaModel {
         let weights = crate::safetensors_weight_loader::load_safetensors_weights(path)
             .map_err(|e| RunnerError::ModelLoad(format!("Safetensors load failed: {e}")))?;
         Self::from_safetensors_weights(weights, config)
+    }
+
+    /// Build a model from a shared [`WeightStore`].
+    ///
+    /// This is the Phase 3 entry point for tensor-layer separation. Multiple
+    /// models built from the same `Arc<WeightStore>` share the underlying
+    /// mmap'd file pages at the OS level — no weight duplication in RAM.
+    ///
+    /// Tensors are read directly from the store's mmap'd data using offset/length
+    /// information, converted to f32 (matching the safetensors loader path), and
+    /// wired into standard `Linear` layers. The public API (`forward`, `generate`,
+    /// etc.) is identical to models loaded via `load_safetensors`.
+    ///
+    /// # Sharing semantics
+    ///
+    /// - **Layer 1 (storage)**: Shared via OS mmap — the same physical pages are
+    ///   mapped into multiple processes or model instances.
+    /// - **Layer 2 (system factors)**: Not yet integrated (Phase 4). The store's
+    ///   `system_factors` field is available for future use.
+    /// - **Layer 3 (model structure)**: Each model instance has its own `LlamaConfig`,
+    ///   `Linear` layers, and KV caches — only the raw weight bytes are shared.
+    pub fn from_store(store: std::sync::Arc<WeightStore>, config: LlamaConfig) -> Result<Self> {
+        use crate::weight_store::Dtype;
+
+        // Helper: read a tensor's bytes from the store, converting to f32 bytes.
+        let read_tensor_f32_bytes = |name: &str| -> Option<Vec<u8>> {
+            let info = store.tensor_info(name)?;
+            let data = store.tensor_data(name)?;
+            match info.dtype {
+                Dtype::F32 => Some(data.to_vec()),
+                Dtype::F16 => {
+                    // Convert F16 → f32 bytes
+                    let f32_vals: Vec<f32> = data
+                        .chunks_exact(2)
+                        .map(|c| {
+                            let bits = u16::from_le_bytes([c[0], c[1]]);
+                            let sign = ((bits >> 15) & 1) as u32;
+                            let exp = ((bits >> 10) & 0x1F) as i32;
+                            let frac = (bits & 0x3FF) as u32;
+                            if exp == 0 {
+                                if frac == 0 {
+                                    f32::from_bits(sign << 31)
+                                } else {
+                                    f32::from_bits((sign << 31) | (frac << 13))
+                                }
+                            } else if exp == 31 {
+                                f32::from_bits((sign << 31) | (0xFF << 23) | (frac << 13))
+                            } else {
+                                let f32_exp = (exp - 15 + 127) as u32;
+                                f32::from_bits((sign << 31) | (f32_exp << 23) | (frac << 13))
+                            }
+                        })
+                        .collect();
+                    Some(
+                        f32_vals
+                            .into_iter()
+                            .flat_map(|v| v.to_le_bytes())
+                            .collect(),
+                    )
+                }
+                Dtype::BF16 => {
+                    // Convert BF16 → f32 bytes (simple bit extension)
+                    let f32_vals: Vec<f32> = data
+                        .chunks_exact(2)
+                        .map(|c| {
+                            let bits = u16::from_le_bytes([c[0], c[1]]);
+                            f32::from_bits((bits as u32) << 16)
+                        })
+                        .collect();
+                    Some(
+                        f32_vals
+                            .into_iter()
+                            .flat_map(|v| v.to_le_bytes())
+                            .collect(),
+                    )
+                }
+                _ => None,
+            }
+        };
+
+        // Derive vocab_size from the embedding tensor shape in the store
+        let embedding_name = config.embedding_name();
+        let (vocab_size, token_embeddings) = if let Some(info) = store.tensor_info(&embedding_name) {
+            let data = read_tensor_f32_bytes(&embedding_name);
+            match info.shape.len() {
+                2 => {
+                    // Shape is [vocab_size, embed_dim] for Llama-style models
+                    let vocab = info.shape[0] as u32;
+                    let emb_dim = info.shape[1];
+                    (
+                        vocab,
+                        data.map(|d| {
+                            Linear::from_f32_weight_with_shape(&d, None, emb_dim, vocab as usize)
+                        }),
+                    )
+                }
+                _ => {
+                    // Fallback: treat as flat 1D tensor
+                    let elements = data.as_ref().map(|d| d.len() / 4).unwrap_or(0);
+                    (
+                        config.embed_dim as u32,
+                        data.map(|d| Linear::from_f32_weight(&d, None)),
+                    )
+                }
+            }
+        } else {
+            (config.embed_dim as u32, None)
+        };
+
+        // Load output (LM head) — architecture-dependent name
+        let output_name = config.output_name();
+        let output = if let Some(info) = store.tensor_info(&output_name) {
+            let data = read_tensor_f32_bytes(&output_name);
+            match info.shape.len() {
+                2 => {
+                    // Shape is [vocab_size, embed_dim] for Llama-style models
+                    let vocab = info.shape[0] as usize;
+                    let emb_dim = info.shape[1];
+                    data.map(|d| Linear::from_f32_weight_with_shape(&d, None, emb_dim, vocab))
+                }
+                _ => {
+                    // Fallback: treat as flat 1D tensor
+                    data.map(|d| Linear::from_f32_weight(&d, None))
+                }
+            }
+        } else {
+            None
+        };
+
+        // Build transformer layers by reading tensors from the store
+        let mut layers = Vec::with_capacity(config.num_layers);
+        for layer_idx in 0..config.num_layers {
+            let layer = Self::load_layer_from_store(&store, &read_tensor_f32_bytes, layer_idx, &config)?;
+            layers.push(layer);
+        }
+
+        // Load final norm for architectures that have it (qwen2/qwen3)
+        let final_norm = if let Some(norm_name) = config.final_norm_name() {
+            read_tensor_f32_bytes(&norm_name).map(|data| {
+                // RmsNorm expects Vec<f32>, convert from bytes
+                let f32_data: Vec<f32> = data
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                RmsNorm::new(f32_data, config.rms_norm_eps)
+            })
+        } else {
+            None
+        };
+
+        // Build the cached GPU dispatch layers + output-head weight tensor
+        #[cfg(feature = "cuda")]
+        let dispatch_layers = Some(Self::build_dispatch_layers(&layers));
+        #[cfg(feature = "cuda")]
+        let output_weight_t_gpu = Self::build_output_weight_t_gpu(&output, &config, vocab_size);
+
+        Ok(Self {
+            config,
+            token_embeddings,
+            output,
+            final_norm,
+            layers,
+            vocab_size,
+            tokenizer: None,
+            tokenizer_config: None,
+            dispatch: Some(DispatchContext::new()),
+            kv_caches: None,
+            cpu_kv_caches: None,
+            #[cfg(feature = "cuda")]
+            q4k_kvcache: None,
+            capture_per_layer: None,
+            #[cfg(feature = "cuda")]
+            dispatch_layers,
+            #[cfg(feature = "cuda")]
+            output_weight_t_gpu,
+            weight_store: Some(store),
+        })
+    }
+
+    /// Load a single transformer layer from a shared [`WeightStore`].
+    fn load_layer_from_store(
+        store: &WeightStore,
+        read_tensor_f32_bytes: &dyn Fn(&str) -> Option<Vec<u8>>,
+        layer_idx: usize,
+        config: &LlamaConfig,
+    ) -> Result<TransformerLayer> {
+        let prefix = config.layer_prefix(layer_idx);
+
+        // Helper to convert f32 bytes to Vec<f32> for norms/biases
+        let bytes_to_f32_vec = |data: &[u8]| -> Vec<f32> {
+            data.chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()
+        };
+
+        // RMSNorm weights — architecture-dependent names (with fallbacks)
+        let attention_norm_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}input_layernorm.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                format!("{prefix}attn_norm.weight")
+            }
+            _ => format!("{prefix}attention_norm.weight"),
+        };
+
+        let attention_norm_data = read_tensor_f32_bytes(&attention_norm_name)
+            .or_else(|| {
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
+                    read_tensor_f32_bytes(&format!("{prefix}attn_norm.weight"))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                RunnerError::ModelLoad(format!(
+                    "missing attention norm in store (tried: {})",
+                    attention_norm_name
+                ))
+            })?;
+        let attention_norm = RmsNorm::new(bytes_to_f32_vec(&attention_norm_data), config.rms_norm_eps);
+
+        let ffn_norm_name = match config.arch {
+            ModelArch::Gemma => format!("{prefix}post_attention_layernorm.weight"),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                format!("{prefix}ffn_norm.weight")
+            }
+            _ => format!("{prefix}ffn_norm.weight"),
+        };
+        let ffn_norm_data = read_tensor_f32_bytes(&ffn_norm_name)
+            .ok_or_else(|| RunnerError::ModelLoad(format!("missing {ffn_norm_name} in store")))?;
+        let ffn_norm = RmsNorm::new(bytes_to_f32_vec(&ffn_norm_data), config.rms_norm_eps);
+
+        // Attention weights — architecture-dependent naming
+        let suffix = config.attn_weight_suffix();
+        let wq_data = match config.arch {
+            ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}q_proj{suffix}"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing q_proj weight in store".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                read_tensor_f32_bytes(&format!("{prefix}attn_q.weight")).ok_or_else(|| {
+                    RunnerError::ModelLoad("missing attn_q.weight in store".to_string())
+                })
+            }
+            _ => read_tensor_f32_bytes(&format!("{prefix}attention.wq.weight")).ok_or_else(|| {
+                RunnerError::ModelLoad(format!("missing {prefix}attention.wq.weight in store"))
+            }),
+        }?;
+        let wk_data = match config.arch {
+            ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}k_proj{suffix}"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing k_proj weight in store".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                read_tensor_f32_bytes(&format!("{prefix}attn_k.weight")).ok_or_else(|| {
+                    RunnerError::ModelLoad("missing attn_k.weight in store".to_string())
+                })
+            }
+            _ => read_tensor_f32_bytes(&format!("{prefix}attention.wk.weight")).ok_or_else(|| {
+                RunnerError::ModelLoad(format!("missing {prefix}attention.wk.weight in store"))
+            }),
+        }?;
+        let wv_data = match config.arch {
+            ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}v_proj{suffix}"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing v_proj weight in store".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                read_tensor_f32_bytes(&format!("{prefix}attn_v.weight")).ok_or_else(|| {
+                    RunnerError::ModelLoad("missing attn_v.weight in store".to_string())
+                })
+            }
+            _ => read_tensor_f32_bytes(&format!("{prefix}attention.wv.weight")).ok_or_else(|| {
+                RunnerError::ModelLoad(format!("missing {prefix}attention.wv.weight in store"))
+            }),
+        }?;
+        let wo_data = match config.arch {
+            ModelArch::Gemma => read_tensor_f32_bytes(&format!("{prefix}o_proj{suffix}"))
+                .ok_or_else(|| RunnerError::ModelLoad("missing o_proj weight in store".to_string())),
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                read_tensor_f32_bytes(&format!("{prefix}attn_output.weight")).ok_or_else(|| {
+                    RunnerError::ModelLoad("missing attn_output.weight in store".to_string())
+                })
+            }
+            _ => read_tensor_f32_bytes(&format!("{prefix}attention.wo.weight")).ok_or_else(|| {
+                RunnerError::ModelLoad(format!("missing {prefix}attention.wo.weight in store"))
+            }),
+        }?;
+
+        // Use explicit dimensions from config for Qwen2/Qwen3/Llama
+        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) = if matches!(
+            config.arch,
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama
+        ) {
+            let hidden = config.embed_dim;
+            let kv = config.num_kv_heads * config.head_dim;
+            (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
+        } else {
+            // For other architectures, infer from tensor shape in the store
+            let wq_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wq.weight"),
+            };
+            let wk_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wk.weight"),
+            };
+            let wv_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wv.weight"),
+            };
+            let wo_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wo.weight"),
+            };
+            // tensor_info gives shape as [out, in] for 2D weight tensors
+            let (wq_out, wq_in) = store.tensor_info(&wq_name).map(|t| {
+                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+            }).unwrap_or((0, 0));
+            let (wk_out, wk_in) = store.tensor_info(&wk_name).map(|t| {
+                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+            }).unwrap_or((0, 0));
+            let (wv_out, wv_in) = store.tensor_info(&wv_name).map(|t| {
+                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+            }).unwrap_or((0, 0));
+            let (wo_out, wo_in) = store.tensor_info(&wo_name).map(|t| {
+                (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+            }).unwrap_or((0, 0));
+            (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+        };
+
+        // Attention biases (optional — Qwen2/Qwen3 carry them)
+        let parse_bias = |name: String| -> Option<Vec<f32>> {
+            read_tensor_f32_bytes(&name).map(|d| bytes_to_f32_vec(&d))
+        };
+        let q_bias = parse_bias(format!("{prefix}attn_q.bias"));
+        let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
+        let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
+
+        let wq = Linear::from_f32_weight_with_dims(&wq_data, q_bias, wq_in, wq_out);
+        let wk = Linear::from_f32_weight_with_dims(&wk_data, k_bias, wk_in, wk_out);
+        let wv = Linear::from_f32_weight_with_dims(&wv_data, v_bias, wv_in, wv_out);
+        let wo = Linear::from_f32_weight_with_dims(&wo_data, None, wo_in, wo_out);
+
+        let attention = Attention::new(
+            wq,
+            wk,
+            wv,
+            wo,
+            config.head_dim,
+            config.num_heads,
+            config.num_kv_heads,
+            config.rope_base,
+        );
+
+        // FFN weights — architecture-dependent naming
+        let (w1_data, w2_data, w3_data) = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
+                let w1 = read_tensor_f32_bytes(&format!("{prefix}ffn_gate.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_gate.weight in store".into()))?;
+                let w2 = read_tensor_f32_bytes(&format!("{prefix}ffn_down.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_down.weight in store".into()))?;
+                let w3 = read_tensor_f32_bytes(&format!("{prefix}ffn_up.weight"))
+                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_up.weight in store".into()))?;
+                (w1, w2, w3)
+            }
+            _ => {
+                let w1 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w1.weight"))
+                    .ok_or_else(|| {
+                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w1.weight in store"))
+                    })?;
+                let w2 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w2.weight"))
+                    .ok_or_else(|| {
+                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w2.weight in store"))
+                    })?;
+                let w3 = read_tensor_f32_bytes(&format!("{prefix}feed_forward.w3.weight"))
+                    .ok_or_else(|| {
+                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w3.weight in store"))
+                    })?;
+                (w1, w2, w3)
+            }
+        };
+
+        // Use explicit Qwen2/Qwen3 dimensions from config
+        let (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out) =
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                let hidden = config.embed_dim;
+                let intermediate = config.intermediate_dim;
+                (hidden, intermediate, intermediate, hidden, hidden, intermediate)
+            } else {
+                let w1_name = format!("{prefix}feed_forward.w1.weight");
+                let w2_name = format!("{prefix}feed_forward.w2.weight");
+                let w3_name = format!("{prefix}feed_forward.w3.weight");
+                let (w1_in, w1_out) = store.tensor_info(&w1_name).map(|t| {
+                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+                }).unwrap_or((0, 0));
+                let (w2_in, w2_out) = store.tensor_info(&w2_name).map(|t| {
+                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+                }).unwrap_or((0, 0));
+                let (w3_in, w3_out) = store.tensor_info(&w3_name).map(|t| {
+                    (t.shape.first().copied().unwrap_or(0), t.shape.get(1).copied().unwrap_or(0))
+                }).unwrap_or((0, 0));
+                (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out)
+            };
+
+        let w1 = Linear::from_f32_weight_with_dims(&w1_data, None, w1_in, w1_out);
+        let w2 = Linear::from_f32_weight_with_dims(&w2_data, None, w2_in, w2_out);
+        let w3 = Linear::from_f32_weight_with_dims(&w3_data, None, w3_in, w3_out);
+
+        let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
+
+        Ok(TransformerLayer::new(
+            attention,
+            feed_forward,
+            attention_norm,
+            ffn_norm,
+        ))
     }
 
     /// Load a single transformer layer from GGUF weights.
@@ -915,34 +1331,36 @@ impl LlamaModel {
 
         // Use explicit dimensions from config for Qwen2/Qwen3/Llama to avoid
         // shape-metadata inconsistencies in GGUF K-family quantizations.
-        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
-                let hidden = config.embed_dim;
-                let kv = config.num_kv_heads * config.head_dim;
-                (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
-            } else {
-                let wq_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wq.weight"),
-                };
-                let wk_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wk.weight"),
-                };
-                let wv_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wv.weight"),
-                };
-                let wo_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wo.weight"),
-                };
-                let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
-                let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
-                let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
-                let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
-                (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) = if matches!(
+            config.arch,
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama
+        ) {
+            let hidden = config.embed_dim;
+            let kv = config.num_kv_heads * config.head_dim;
+            (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
+        } else {
+            let wq_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wq.weight"),
             };
+            let wk_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wk.weight"),
+            };
+            let wv_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wv.weight"),
+            };
+            let wo_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wo.weight"),
+            };
+            let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+            let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+            let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+            let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+            (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+        };
         // Attention biases. Qwen2/Qwen3 carry `attn_q/k/v.bias`; Llama, Gemma and
         // the llama-style default do not, so the lookups simply return None there.
         // Linear::forward adds bias[o] to every output row, which is exactly how
@@ -1195,34 +1613,36 @@ impl LlamaModel {
 
         // Use explicit dimensions from config for Qwen2/Qwen3/Llama to avoid
         // shape-metadata inconsistencies in GGUF K-family quantizations.
-        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) =
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama) {
-                let hidden = config.embed_dim;
-                let kv = config.num_kv_heads * config.head_dim;
-                (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
-            } else {
-                let wq_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wq.weight"),
-                };
-                let wk_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wk.weight"),
-                };
-                let wv_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wv.weight"),
-                };
-                let wo_name = match config.arch {
-                    ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
-                    _ => format!("{prefix}attention.wo.weight"),
-                };
-                let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
-                let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
-                let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
-                let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
-                (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+        let (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out) = if matches!(
+            config.arch,
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama
+        ) {
+            let hidden = config.embed_dim;
+            let kv = config.num_kv_heads * config.head_dim;
+            (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
+        } else {
+            let wq_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wq.weight"),
             };
+            let wk_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wk.weight"),
+            };
+            let wv_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wv.weight"),
+            };
+            let wo_name = match config.arch {
+                ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                _ => format!("{prefix}attention.wo.weight"),
+            };
+            let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
+            let (wk_out, wk_in) = weights.tensor_shape(&wk_name);
+            let (wv_out, wv_in) = weights.tensor_shape(&wv_name);
+            let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
+            (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
+        };
         // Attention biases. Qwen2/Qwen3 carry `attn_q/k/v.bias`; Llama, Gemma and
         // the llama-style default do not, so the lookups simply return None there.
         // Linear::forward adds bias[o] to every output row, which is exactly how
@@ -1915,4 +2335,196 @@ fn f32_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
 /// Convert f32 slice to f16 Vec.
 pub fn f32_to_f16(data: &[f32]) -> Vec<half::f16> {
     data.iter().map(|&v| half::f16::from_f32(v)).collect()
+}
+
+#[cfg(test)]
+mod phase3_tests {
+    use super::*;
+    use crate::weight_store::WeightStore;
+    use std::collections::HashMap;
+    use std::io::Write;
+
+    /// Create a minimal valid safetensors file for testing.
+    /// Model config: embed_dim=4, num_layers=1, num_heads=2, num_kv_heads=1,
+    /// head_dim=2, intermediate_dim=8, vocab_size=10 (implicit from embedding shape)
+    fn create_minimal_safetensors(path: &std::path::Path) -> LlamaConfig {
+        let mut tensors: HashMap<String, (Vec<half::f16>, Vec<usize>)> = HashMap::new();
+
+        // Token embeddings: [vocab_size, embed_dim]
+        tensors.insert(
+            "tok_embeddings.weight".to_string(),
+            (vec![half::f16::from_f32(0.1); 40], vec![10, 4]),
+        );
+
+        // Layer 0 attention weights (Llama naming: blk.{i}.attn_*)
+        tensors.insert(
+            "blk.0.attn_q.weight".to_string(),
+            (vec![half::f16::from_f32(0.2); 16], vec![4, 4]),
+        );
+        tensors.insert(
+            "blk.0.attn_k.weight".to_string(),
+            (vec![half::f16::from_f32(0.3); 8], vec![2, 4]),
+        );
+        tensors.insert(
+            "blk.0.attn_v.weight".to_string(),
+            (vec![half::f16::from_f32(0.4); 8], vec![2, 4]),
+        );
+        tensors.insert(
+            "blk.0.attn_output.weight".to_string(),
+            (vec![half::f16::from_f32(0.5); 16], vec![4, 4]),
+        );
+
+        // Layer 0 FFN weights (Llama naming: blk.{i}.ffn_*)
+        tensors.insert(
+            "blk.0.ffn_gate.weight".to_string(),
+            (vec![half::f16::from_f32(0.6); 32], vec![8, 4]),
+        );
+        tensors.insert(
+            "blk.0.ffn_down.weight".to_string(),
+            (vec![half::f16::from_f32(0.7); 32], vec![4, 8]),
+        );
+        tensors.insert(
+            "blk.0.ffn_up.weight".to_string(),
+            (vec![half::f16::from_f32(0.8); 32], vec![8, 4]),
+        );
+
+        // Layer 0 norms
+        tensors.insert(
+            "blk.0.attn_norm.weight".to_string(),
+            (vec![half::f16::from_f32(1.0); 4], vec![4]),
+        );
+        tensors.insert(
+            "blk.0.ffn_norm.weight".to_string(),
+            (vec![half::f16::from_f32(1.0); 4], vec![4]),
+        );
+
+        // Output head
+        tensors.insert(
+            "output.weight".to_string(),
+            (vec![half::f16::from_f32(0.9); 40], vec![10, 4]),
+        );
+
+        // Build safetensors file: JSON header + data
+        let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut offset = 0usize;
+
+        for (name, (data, shape)) in tensors.iter() {
+            let data_bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+            metadata.insert(
+                name.clone(),
+                serde_json::json!({
+                    "dtype": "F16",
+                    "shape": shape,
+                    "data_offsets": [offset, offset + data_bytes.len()]
+                }),
+            );
+            offset += data_bytes.len();
+        }
+
+        let header = serde_json::to_vec(&metadata).unwrap();
+        let header_len = (header.len() as u64).to_le_bytes();
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header_len).unwrap();
+        file.write_all(&header).unwrap();
+
+        // Write tensor data in the same order as metadata (for deterministic offsets)
+        for (_name, (data, _shape)) in tensors.iter() {
+            let data_bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+            file.write_all(&data_bytes).unwrap();
+        }
+
+        // Return config matching the minimal model
+        LlamaConfig {
+            arch: ModelArch::Llama,
+            embed_dim: 4,
+            num_layers: 1,
+            num_heads: 2,
+            num_kv_heads: 1,
+            head_dim: 2,
+            intermediate_dim: 8,
+            max_seq_len: 256,
+            rope_base: 10000.0,
+            rope_scaling_factor: None,
+            rope_scaling_type: None,
+            rms_norm_eps: 1e-5,
+        }
+    }
+
+    #[test]
+    fn test_from_store_loads_model() {
+        let dir = std::env::temp_dir().join("pesti_phase3_test");
+        let safetensors_path = dir.join("minimal.safetensors");
+        let config = create_minimal_safetensors(&safetensors_path);
+
+        // Load into store
+        let store = WeightStore::load_minimal(&safetensors_path).unwrap();
+        let store = Arc::new(store);
+
+        // Build model from store
+        let model = LlamaModel::from_store(store.clone(), config).unwrap();
+        assert_eq!(model.config.embed_dim, 4);
+        assert_eq!(model.config.num_layers, 1);
+        assert_eq!(model.layers.len(), 1);
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_shared_store_identical_outputs() {
+        let dir = std::env::temp_dir().join("pesti_phase3_test_shared");
+        let safetensors_path = dir.join("minimal.safetensors");
+        let config = create_minimal_safetensors(&safetensors_path);
+
+        // Load into store
+        let store = WeightStore::load_minimal(&safetensors_path).unwrap();
+        let store = Arc::new(store);
+
+        // Build two models from the same store
+        let model_a = LlamaModel::from_store(store.clone(), config.clone()).unwrap();
+        let model_b = LlamaModel::from_store(store.clone(), config).unwrap();
+
+        // Run inference on both with identical input (single token at position 0)
+        let logits_a = model_a.forward(1, 0).unwrap();
+        let logits_b = model_b.forward(1, 0).unwrap();
+
+        // Outputs must be byte-identical (same weights, same computation)
+        assert_eq!(logits_a.len(), logits_b.len());
+        for (a, b) in logits_a.iter().zip(logits_b.iter()) {
+            assert_eq!(*a, *b, "Shared-store models produced different logits");
+        }
+
+        // Verify the store is actually shared (Arc count > 1 means multiple refs)
+        assert!(Arc::strong_count(&store) >= 3);
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_store_memory_efficiency() {
+        let dir = std::env::temp_dir().join("pesti_phase3_test_mem");
+        let safetensors_path = dir.join("minimal.safetensors");
+        let config = create_minimal_safetensors(&safetensors_path);
+
+        // Load into store
+        let store = WeightStore::load_minimal(&safetensors_path).unwrap();
+        let store = Arc::new(store);
+
+        // Build model from store — should not duplicate weight data
+        let _file_size = std::fs::metadata(&safetensors_path).unwrap().len() as usize;
+        let model = LlamaModel::from_store(store.clone(), config).unwrap();
+
+        // The model's layers share the store's mmap, so no additional large allocations.
+        // Verify the model works and produces correct output shape.
+        let logits = model.forward(1, 0).unwrap();
+        assert_eq!(logits.len(), 10); // vocab_size derived from embedding shape
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

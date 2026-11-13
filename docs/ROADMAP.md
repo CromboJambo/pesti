@@ -159,13 +159,13 @@ Replaced ad-hoc boolean masking with a type-safe `Softmask` abstraction that uni
 
 **Key principle:** "Don't change the measurements to force the system into alignment. Preserve the measurements and represent the constraints separately." Softmask is now the authority on eligibility — future attention implementations must not recreate causal-mask logic independently.
 
-### Tensor Layer Separation (Phase 2 Complete)
+### Tensor Layer Separation (Complete)
 
 Layered weight storage architecture separating tensor bytes (Layer 0), structure/metadata (Layer 1), and system factors (Layer 2).
 
 - **Phase 1** (`d183c0a`): `weight_store.rs` foundation — `CoreTensor`, `TensorInfo`, `TensorStructure`, `SafetensorsFile`, `WeightStore`; memmap2 integration; zero-copy tensor access
-- **Phase 2** (this commit): Layer-2 `SystemFactors` — RoPE config, normalization stats, attention pattern, quantization scheme; `InferenceReader` trait extending `TensorReader`; dual-source config parsing (HuggingFace `config.json` + safetensors `__metadata__`); computed structure fields (`num_layers`, `hidden_size`)
-- **Phase 3** (planned): Migrate `LlamaModel::load_safetensors()` to use `WeightStore::load_inference()`; eliminate redundant config parsing in model construction
+- **Phase 2** (`cbe2349`): Layer-2 `SystemFactors` — RoPE config, normalization stats, attention pattern, quantization scheme; `InferenceReader` trait extending `TensorReader`; dual-source config parsing (HuggingFace `config.json` + safetensors `__metadata__`); computed structure fields (`num_layers`, `hidden_size`)
+- **Phase 3** (this commit): Migrated `LlamaModel::from_store()` to derive tensor shapes and vocab size from store metadata instead of config assumptions; shape-aware loading for embeddings, output heads, and all linear layers; shared mmap weight demonstration; 3 integration tests
 
 **Design:** Strictly additive — `LlamaModel::load_safetensors()` unchanged. `WeightStore::load_minimal()` preserves Phase 1 behavior (Layers 0+1 only); `load_inference()` adds Layer-2 system factors for full inference readiness.
 
@@ -184,7 +184,7 @@ When heading toward these patterns, expect trouble:
 **GPU memory allocation is cheap:** Don't over-optimize by avoiding `cudaMalloc`. The cost is in synchronization and kernel launches, not allocation.
 
 ---
-*Updated: November 12, 2026 — Softmask complete (Phases 1-3), Tensor Layer Separation Phase 2 complete*
+*Updated: November 13, 2026 — Softmask complete (Phases 1-3), Tensor Layer Separation complete (Phases 1-3)*
 
 ## Llama.cpp Replacement Track (Parallel)
 
