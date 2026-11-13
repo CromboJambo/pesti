@@ -42,6 +42,7 @@ pub mod runner;
 pub mod runtime;
 pub mod safetensors_tokenizer;
 pub mod safetensors_weight_loader;
+pub mod softmask; // Type-safe masking for attention and softmax
 pub mod tier;
 pub mod tile_dequant; // Tile-by-tile dequantization for memory efficiency
 pub mod tokenizer;
