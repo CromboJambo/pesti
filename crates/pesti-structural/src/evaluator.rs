@@ -63,10 +63,26 @@ impl std::error::Error for ParseError {}
 /// Result of parsing a token stream with a grammar.
 #[derive(Debug)]
 pub struct ParseResult {
-    /// The parse tree, if the entire input was consumed successfully.
+    /// The parse tree. Present even for partial parses (when not all tokens
+    /// were consumed). `None` only if the start rule failed to match anything.
     pub tree: Option<TreeNode>,
-    /// Any errors encountered during parsing.
+    /// Any errors encountered during parsing. For partial parses, this includes
+    /// a note about unconsumed trailing tokens.
     pub errors: Vec<ParseError>,
+    /// Number of tokens successfully consumed (for partial parse diagnostics).
+    pub consumed: usize,
+}
+
+impl ParseResult {
+    /// Whether the entire input was consumed (a complete parse).
+    pub fn is_complete(&self) -> bool {
+        self.tree.is_some() && self.errors.is_empty()
+    }
+
+    /// Whether any portion of the input was successfully parsed.
+    pub fn is_partial(&self) -> bool {
+        self.tree.is_some() && !self.errors.is_empty()
+    }
 }
 
 /// Internal match result: either a successful match with the resulting node
@@ -86,32 +102,40 @@ impl<'a> PegEvaluator<'a> {
         Self { grammar, tokens }
     }
 
-    /// Parse the entire token stream starting from the grammar's start rule.
+    /// Parse the token stream starting from the grammar's start rule.
     ///
-    /// Returns a `ParseResult` containing the parse tree (if successful) and
-    /// any errors encountered.
+    /// Returns a `ParseResult` containing the parse tree and any errors.
+    /// Unlike strict parsing, this returns **partial trees** when not all
+    /// tokens are consumed — the tree covers the successfully parsed prefix,
+    /// and trailing tokens are reported as errors. This is essential for
+    /// real-world code where the grammar may not cover every construct.
     pub fn parse(&self) -> ParseResult {
         let start_name = &self.grammar.start.0;
         match self.match_nonterminal(start_name, 0) {
             Ok((tree, end_pos)) => {
                 if end_pos == self.tokens.len() {
+                    // Complete parse: entire input consumed.
                     ParseResult {
                         tree: Some(tree),
                         errors: Vec::new(),
+                        consumed: end_pos,
                     }
                 } else {
-                    // Consumed part of the input but not all — report remaining tokens.
+                    // Partial parse: return the tree for the parsed prefix.
                     let remaining = &self.tokens[end_pos];
                     ParseResult {
-                        tree: None,
+                        tree: Some(tree),
                         errors: vec![ParseError {
                             message: format!(
-                                "trailing tokens after complete parse ({} tokens remaining)",
+                                "partial parse: {} of {} tokens consumed ({} trailing)",
+                                end_pos,
+                                self.tokens.len(),
                                 self.tokens.len() - end_pos
                             ),
                             span: remaining.span,
                             expected: vec!["end of input".to_string()],
                         }],
+                        consumed: end_pos,
                     }
                 }
             }
@@ -128,8 +152,117 @@ impl<'a> PegEvaluator<'a> {
                         span: pos,
                         expected,
                     }],
+                    consumed: 0,
                 }
             }
+        }
+    }
+
+    /// Parse with error recovery: when the start rule stops early, attempt to
+    /// continue parsing from likely item boundaries in the remaining tokens.
+    ///
+    /// This is a heuristic recovery pass that looks for top-level keywords
+    /// (fn, struct, impl, use, mod, etc.) in the unconsumed suffix and tries
+    /// to parse items starting from each one. Successfully recovered items
+    /// are appended to the original tree.
+    pub fn parse_with_recovery(&self) -> ParseResult {
+        let mut result = self.parse();
+
+        // If we already have a complete parse or no tree, nothing to recover.
+        if result.is_complete() || result.tree.is_none() {
+            return result;
+        }
+
+        let start_name = &self.grammar.start.0;
+        let item_rule = self.find_item_rule(start_name);
+        if item_rule.is_none() {
+            return result;
+        }
+        let item_rule = item_rule.unwrap();
+
+        // Find the repeat node in the tree (Module → repeat of items).
+        // We'll append recovered items to it.
+        let mut recovered_count = 0;
+        let mut pos = result.consumed;
+
+        while pos < self.tokens.len() {
+            // Skip whitespace/comments are already handled by lexer.
+            // Look for the next token that could start an item.
+            if !self.looks_like_item_start(pos) {
+                // Skip this token and try the next position.
+                pos += 1;
+                continue;
+            }
+
+            // Try to parse an item from this position.
+            match self.match_nonterminal(&item_rule, pos) {
+                Ok((node, new_pos)) => {
+                    if new_pos > pos {
+                        // Successfully recovered an item. Append it to the tree.
+                        self.append_to_repeat(&mut result.tree.as_mut().unwrap(), node);
+                        result.consumed = new_pos.max(result.consumed);
+                        pos = new_pos;
+                        recovered_count += 1;
+                    } else {
+                        pos += 1;
+                    }
+                }
+                Err(_) => {
+                    pos += 1;
+                }
+            }
+        }
+
+        if recovered_count > 0 {
+            // Update the error message to reflect recovery.
+            if let Some(err) = result.errors.first_mut() {
+                err.message = format!(
+                    "partial parse with recovery: {} items recovered, {} of {} tokens consumed",
+                    recovered_count,
+                    result.consumed,
+                    self.tokens.len()
+                );
+            }
+        }
+
+        result
+    }
+
+    /// Find the item rule name from a Module-like start rule.
+    /// Looks for a repeat of a nonterminal in the start rule's production.
+    fn find_item_rule(&self, start_name: &str) -> Option<String> {
+        let start_expr = self.grammar.productions.get(&Nonterminal(start_name.to_string()))?;
+        // Module = { item: Item* } — look for a Capture containing a Repeat of a Nonterminal
+        if let Expr::Capture(_, inner) = start_expr {
+            if let Expr::Repeat(nt_ref) = inner.as_ref() {
+                if let Expr::Nonterminal(name) = nt_ref.as_ref() {
+                    return Some(name.0.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if the token at position looks like it could start a top-level item.
+    fn looks_like_item_start(&self, pos: usize) -> bool {
+        if pos >= self.tokens.len() {
+            return false;
+        }
+        let text = &self.tokens[pos].text;
+        matches!(
+            text.as_str(),
+            "fn" | "struct" | "enum" | "impl" | "use" | "mod" | "type" | "const" | "static" | "trait" | "pub"
+        )
+    }
+
+    /// Append a recovered item node to the repeat node in the parse tree.
+    fn append_to_repeat(&self, root: &mut TreeNode, item: TreeNode) {
+        // Find the first "repeat" node (Module's item list) and append to it.
+        if let Some(repeat_node) = find_first_by_label(root, "repeat") {
+            repeat_node.children.push(item);
+        } else {
+            // Fallback: append directly to root's children.
+            root.children.push(item);
         }
     }
 
@@ -315,6 +448,19 @@ impl<'a> PegEvaluator<'a> {
     }
 }
 
+/// Find the first node in a tree with the given label (pre-order traversal).
+fn find_first_by_label<'a>(node: &'a mut TreeNode, label: &str) -> Option<&'a mut TreeNode> {
+    if node.label == label {
+        return Some(node);
+    }
+    for child in &mut node.children {
+        if let Some(found) = find_first_by_label(child, label) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,7 +593,7 @@ Start = { 'fn' name: Ident '(' ')' }
     }
 
     #[test]
-    fn test_trailing_tokens_error() {
+    fn test_trailing_tokens_partial_parse() {
         let grammar_src = r#"grammar test;
 Start = { 'fn' name: Ident '(' ')' }
 "#;
@@ -457,8 +603,28 @@ Start = { 'fn' name: Ident '(' ')' }
         let evaluator = PegEvaluator::new(&grammar, &tokens);
         let result = evaluator.parse();
 
-        assert!(result.tree.is_none());
+        // New behavior: partial tree is returned with an error about trailing tokens.
+        assert!(result.tree.is_some(), "partial tree should exist");
         assert!(!result.errors.is_empty());
-        assert!(result.errors[0].message.contains("trailing tokens"));
+        assert!(result.errors[0].message.contains("partial parse"));
+        assert_eq!(result.consumed, 4); // fn foo ( ) — 4 tokens consumed
+    }
+
+    #[test]
+    fn test_parse_with_recovery_skips_unknown() {
+        let grammar_src = r#"grammar test;
+Module = { item: Item* }
+Item = { 'fn' name: Ident '(' ')' }
+"#;
+        let grammar = parse_peg(grammar_src).unwrap();
+        // Two valid items with junk between them.
+        let tokens = tokenize_simple("fn foo ( ) junk fn bar ( )");
+        let evaluator = PegEvaluator::new(&grammar, &tokens);
+        let result = evaluator.parse_with_recovery();
+
+        assert!(result.tree.is_some(), "errors: {:?}", result.errors);
+        // Should have recovered both function items.
+        let formatted = format!("{:#?}", result.tree.unwrap());
+        assert!(formatted.contains("fn"));
     }
 }
