@@ -2,6 +2,7 @@
 members = [
     "crates/qwen2-bpe",
     "crates/pesti-structural-tokenizer",
+    "crates/pesti-structural",
     "crates/pesti-runner",
     "crates/llm-plug-in",
     "crates/pesti-safetensors",

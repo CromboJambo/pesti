@@ -17,9 +17,9 @@ FuncDef      = {
     visibility?,
     'fn',
     name: Ident,
-    generics?: GenericParams,
+    (generics: GenericParams)?,
     params: ParamList,
-    return_type?: ( '->' Type ),
+    (return_type: ( '->' Type ))?,
     body: Block
 }
 
@@ -28,7 +28,7 @@ StructDef    = {
     visibility?,
     'struct',
     name: Ident,
-    generics?: GenericParams,
+    (generics: GenericParams)?,
     body: ( '{' field: Field* '}' / '(' field: FieldType* ')' / ';' )?
 }
 
@@ -37,15 +37,15 @@ EnumDef      = {
     visibility?,
     'enum',
     name: Ident,
-    generics?: GenericParams,
+    (generics: GenericParams)?,
     '{' variant: EnumVariant* '}'
 }
 
 // Impl block: impl<generics> Trait for Type { methods }
 ImplBlock    = {
     'impl',
-    generics?: GenericParams,
-    trait_path?: Path,
+    (generics: GenericParams)?,
+    (trait_path: Path)?,
     'for'?,
     type_name: Type,
     body: Block
@@ -79,7 +79,7 @@ FieldType    = { type_ref: Type ','? }
 // Enum variant: Name | Name { fields } | Name ( tuple )
 EnumVariant  = {
     name: Ident,
-    body?: ( '{' field: Field* '}' / '(' field: FieldType* ')' )?,
+    (body: ( '{' field: Field* '}' / '(' field: FieldType* ')' ))?,
     ','?
 }
 
@@ -88,17 +88,22 @@ Block        = { '{' stmt: Stmt* '}' }
 
 // Statement: expression statement or let binding
 Stmt         = { LetBinding / ExprStmt }
-LetBinding   = { 'let' mut?: 'mut'? name: Ident '=' value: Expr ';' }
+LetBinding   = { 'let' 'mut'? name: Ident '=' value: Expr ';' }
 ExprStmt     = { expr: Expr ';' }
 
 // Expression (simplified — covers common structural patterns)
-Expr         = { Call / MethodCall / StructLit / IfExpr / MatchExpr / Literal / PathExpr / BlockExpr }
+// Note: MethodCall is separated to avoid left recursion through Expr.
+Expr         = { Call / StructLit / IfExpr / MatchExpr / Literal / PathExpr / BlockExpr / MethodCall }
 
 // Function call: name(args)
 Call         = { name: Ident '(' arg: Arg* ')' }
 
 // Method call: receiver.method(args)
-MethodCall   = { receiver: Expr '.' name: Ident '(' arg: Arg* ')' }
+// Receiver is a primary expression (not a full Expr) to avoid left recursion.
+MethodCall   = { receiver: PrimaryExpr '.' name: Ident '(' arg: Arg* ')' }
+
+// Primary expressions: the base cases that don't start with another expression.
+PrimaryExpr  = { Call / StructLit / Literal / PathExpr / BlockExpr }
 
 // Struct literal: Name { field: value, ... }
 StructLit    = { name: Ident '{' field_assign: FieldAssign* '}' }
@@ -125,7 +130,7 @@ Arg          = { expr: Expr ','? }
 
 // Type reference
 Type         = { Ident / Path / ReferenceType / TupleType / SliceType }
-ReferenceType = { '&' lifetime?: Ident Type }
+ReferenceType = { '&' (lifetime: lifetime)? type_ref: Type }
 TupleType     = { '(' type_ref: Type* ')' }
 SliceType     = { '[' type_ref: Type ']' }
 
@@ -133,7 +138,7 @@ SliceType     = { '[' type_ref: Type ']' }
 Path         = { seg: Ident ('::' seg: Ident)* }
 
 // Lifetime (simplified)
-lifetime     = { '\' Ident }
+lifetime     = { '\'' Ident }
 
 annotations {
     FuncDef     { role: "definition", embed_fields: ["name", "params", "return_type"], class: "declaration" }

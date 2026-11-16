@@ -27,15 +27,19 @@
 //! assert!(result.valid);
 //! ```
 
+pub mod evaluator;
 pub mod expr;
 pub mod grammar;
+pub mod lexer;
 pub mod parser;
 pub mod tree;
 pub mod validate;
 
 // Re-export key types at crate root for ergonomic use.
+pub use evaluator::{ParseResult, PegEvaluator, Token};
 pub use expr::Expr;
 pub use grammar::{Nonterminal, RuleAnnotation, StructuralGrammar, TerminalKind};
+pub use lexer::{tokenize_rust, LexError, RustLexer};
 pub use parser::{parse_peg, parse_peg_file, ParseError};
 pub use tree::{Span, TreeNode};
 pub use validate::{validate, ValidationError, ValidationResult};

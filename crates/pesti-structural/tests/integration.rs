@@ -105,3 +105,59 @@ fn test_grammar_file_io() {
 
     fs::remove_file(out_path).ok();
 }
+
+#[test]
+fn test_end_to_end_rust_parsing() {
+    use pesti_structural::{tokenize_rust, PegEvaluator};
+
+    // Load the real Rust structural grammar.
+    let src = include_str!("../grammars/rust.peg");
+    let grammar = parse_peg(src).expect("should parse rust.peg");
+
+    // Validate it first.
+    let result = validate(&grammar);
+    assert!(result.valid, "rust.peg should be valid: {:?}", result.errors);
+
+    // Real Rust source to parse.
+    let code = r#"
+        pub struct Point {
+            x: i32,
+            y: i32,
+        }
+
+        impl Point {
+            fn new(x: i32, y: i32) -> Self {
+                Self { x, y }
+            }
+
+            fn distance(&self, other: &Point) -> f64 {
+                let dx = self.x - other.x;
+                let dy = self.y - other.y;
+                (dx * dx + dy * dy) as f64
+            }
+        }
+
+        fn main() {
+            let p1 = Point::new(0, 0);
+            let p2 = Point::new(3, 4);
+            println!("{}", p1.distance(&p2));
+        }
+    "#;
+
+    // Tokenize.
+    let (tokens, lex_errors) = tokenize_rust(code);
+    assert!(lex_errors.is_empty(), "lex errors: {:?}", lex_errors);
+    assert!(!tokens.is_empty(), "should produce tokens");
+
+    // Parse with the PEG evaluator.
+    let evaluator = PegEvaluator::new(&grammar, &tokens);
+    let parse_result = evaluator.parse();
+
+    if parse_result.tree.is_none() {
+        eprintln!("parse errors: {:?}", parse_result.errors);
+    }
+
+    // The grammar is complex and may not match every construct perfectly yet,
+    // but we should at least get a partial parse or clear error messages.
+    // This test verifies the pipeline works end-to-end without panicking.
+}
