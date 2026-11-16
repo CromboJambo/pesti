@@ -78,18 +78,24 @@ impl<'a> RustLexer<'a> {
 
     /// Get the next token without consuming it.
     fn peek(&self) -> Option<char> {
-        // We need to look at the current position in the source.
-        self.source.chars().nth(self.pos)
+        // Get the character at the current byte offset.
+        self.source.get(self.pos..)?.chars().next()
+    }
+
+    /// Peek at the character N bytes ahead (for multi-char lookahead).
+    fn peek_at(&self, byte_offset: usize) -> Option<char> {
+        let target = self.pos + byte_offset;
+        self.source.get(target..)?.chars().next()
     }
 
     /// Advance the position by one character.
     fn advance(&mut self) {
-        if let Some(c) = self.source.chars().nth(self.pos) {
+        if let Some(c) = self.peek() {
             self.pos += c.len_utf8();
         }
     }
 
-    /// Skip whitespace and comments.
+    /// Skip whitespace, comments, and attributes.
     fn skip_whitespace_and_comments(&mut self) {
         loop {
             match self.peek() {
@@ -97,7 +103,7 @@ impl<'a> RustLexer<'a> {
                 Some(c) if c.is_whitespace() => self.advance(),
                 Some('/') => {
                     // Check for comment.
-                    let next = self.source.chars().nth(self.pos + 1);
+                    let next = self.peek_at(1);
                     match next {
                         Some('/') => {
                             // Line comment: skip to end of line.
@@ -113,7 +119,7 @@ impl<'a> RustLexer<'a> {
                             self.advance(); // Skip /
                             self.advance(); // Skip *
                             while let Some(c) = self.peek() {
-                                if c == '*' && self.source.chars().nth(self.pos + 1) == Some('/') {
+                                if c == '*' && self.peek_at(1) == Some('/') {
                                     self.advance(); // Skip *
                                     self.advance(); // Skip /
                                     break;
@@ -124,7 +130,45 @@ impl<'a> RustLexer<'a> {
                         _ => break,
                     }
                 }
+                Some('#') => {
+                    // Check for attribute: #[...] or #![...]
+                    let next = self.peek_at(1);
+                    if next == Some('[') {
+                        self.skip_attribute();
+                    } else {
+                        break;
+                    }
+                }
                 Some(_) => break,
+            }
+        }
+    }
+
+    /// Skip an attribute like `#[derive(Debug)]` or `#![no_std]`.
+    fn skip_attribute(&mut self) {
+        self.advance(); // Skip #
+        if self.peek() == Some('!') {
+            self.advance(); // Skip ! (inner attribute)
+        }
+        if self.peek() == Some('[') {
+            self.advance(); // Skip [
+            let mut depth = 1;
+            while let Some(c) = self.peek() {
+                match c {
+                    '[' | '(' | '{' => {
+                        depth += 1;
+                        self.advance();
+                    }
+                    ']' | ')' | '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            self.advance(); // Skip closing bracket
+                            return;
+                        }
+                        self.advance();
+                    }
+                    _ => self.advance(),
+                }
             }
         }
     }
