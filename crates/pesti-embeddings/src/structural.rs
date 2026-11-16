@@ -91,15 +91,25 @@ impl StructuralEmbedder {
     ///
     /// Returns a list of `EmbeddingFeature` entries derived from the annotated
     /// parse tree's rule annotations (role, similarity_class, embed_fields).
+    ///
+    /// Uses error recovery: if the grammar doesn't cover every construct in
+    /// the source, we still extract features from the successfully parsed
+    /// portions rather than failing the entire file.
     pub fn extract_features(&mut self, source: &str) -> Result<Vec<EmbeddingFeature>> {
         let grammar = self.load_grammar()?;
 
         // Tokenize with the Rust lexer
         let (tokens, _errors) = tokenize_rust(source);
 
-        // Parse with the PEG evaluator
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Parse with the PEG evaluator using error recovery.
+        // This returns partial trees for files with constructs our grammar
+        // doesn't cover yet, instead of failing entirely.
         let evaluator = PegEvaluator::new(grammar, &tokens);
-        let result: ParseResult = evaluator.parse();
+        let result: ParseResult = evaluator.parse_with_recovery();
 
         if result.tree.is_none() {
             return Err(anyhow!(
