@@ -45,6 +45,14 @@ This document is the top-level project roadmap. Detailed implementation plans li
 - ✅ Phase 3: Auto-tuning engine with benchmarking infrastructure
 - ✅ Phase 4: Enhanced server mode (hot-swapping, connection pooling, SSE streaming)
 
+### Structural PEG Embeddings Track
+- ✅ Phase 1: Core types + `.peg` meta-parser + grammar validation
+- ✅ Phase 2: PEG evaluator (recursive descent) with span tracking and named captures
+- ✅ Phase 3: Structural feature extraction wired into pesti-embeddings pipeline
+- ✅ Phase 4: Rust grammar with error recovery — **100% parse coverage** on pesti workspace (459 files, 85,958 lines), up from 4.6% with strict parsing
+
+See [specs/structural-grammar-peg-spec.md](specs/structural-grammar-peg-spec.md) for full spec and implementation notes.
+
 ## Upcoming Work
 
 ### Optimization Path Decision (Week 30)

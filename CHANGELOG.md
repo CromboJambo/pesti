@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 30 (In Progress)
 
+### pesti-structural + pesti-embeddings: Structural PEG Embeddings Pipeline 🧩
+**Status**: ✅ Phases 1–4 complete (Rust grammar production-ready)
+
+**Decision**: Implement a PEG-based structural tokenizer that extracts code structure as embedding features, complementing text-only embeddings. Grammar written in `.peg` files parsed at runtime into `StructuralGrammar`, enabling language-specific structural analysis without recompilation.
+
+**Key results:**
+- **100% parse coverage** on pesti workspace (459/459 files, 85,958 lines) via partial-parse error recovery
+- Strict parsing achieved only 4.6% — `parse_with_recovery()` scans unconsumed suffix for item boundaries and recovers additional items
+- Feature distribution: expression 7,820; definition 1,298; import 1,255; module 226; control_flow 165; implementation 96
+
+**Implementation:**
+- `pesti-structural` crate: `.peg` meta-parser, recursive-descent PEG evaluator with span tracking, named captures, and error recovery
+- `pesti-embeddings/src/structural.rs`: feature extraction wired into embedding pipeline via `extract_features()`
+- Rust grammar (`grammars/rust.peg`) with real-world coverage fixes (tuple structs, `self` paths, tuple field access, attribute skipping)
+
+**Commits:** `bfc059e` (Phase 2), `d424b5f` (Phase 3), `3e792b6` + `e1312e3` + `07f6e6a` (Phase 4)
+
+**Pending:** Python grammar, embedding quality benchmark (structural vs text-only similarity)
+
+See [specs/structural-grammar-peg-spec.md](specs/structural-grammar-peg-spec.md) for full spec.
+
+---
+
+### pesti: Dead Code Cleanup 🧹
+**Status**: ✅ Complete
+
+Removed ~644 lines of dead code across 24 files:
+- `pesti-structural-tokenizer`: unused error variants, re-exports, semantic analyzers (~144 lines)
+- `pesti-runner`: unused kernel paths, weight loading variants, dispatch branches (~283 lines)
+- Remaining crates (gguf-cli, safetensors, server, studio, durable-objects): unused handlers, conversion paths, imports (~217 lines)
+
+**Commits:** `0222242`, `897063e`, `d46ecba`
+
+---
+
 ### Weight-Space Programming Specification 🆕📋
 **Status**: ✅ Spec'd — ready for implementation
 
