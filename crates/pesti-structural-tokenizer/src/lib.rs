@@ -1045,7 +1045,6 @@ fn compute_span_info(src: &str, start_byte: usize, end_byte: usize) -> SpanInfo 
     
     // Clamp to valid range
     let start = start_byte.min(bytes.len());
-    let end = end_byte.min(bytes.len());
     
     // Compute line and column from byte offset
     let mut line = 1;
@@ -1066,34 +1065,6 @@ fn compute_span_info(src: &str, start_byte: usize, end_byte: usize) -> SpanInfo 
         start_byte,
         end_byte,
     }
-}
-
-/// Extract source text for a span.
-fn extract_span_text(src: &str, start_byte: usize, end_byte: usize) -> String {
-    let bytes = src.as_bytes();
-    let start = start_byte.min(bytes.len());
-    let end = end_byte.min(bytes.len());
-    String::from_utf8_lossy(&bytes[start..end]).to_string()
-}
-
-/// Count bytes from start of source to the given line/column.
-fn count_bytes_before_line_col(src: &str, target_line: u32, target_col: u32) -> usize {
-    let mut line = 1u32;
-    let mut col = 1u32;
-    
-    for (i, b) in src.bytes().enumerate() {
-        if line == target_line && col == target_col {
-            return i;
-        }
-        if b == b'\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    
-    src.len()
 }
 
 #[cfg(test)]

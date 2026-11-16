@@ -5,13 +5,6 @@
 
 use std::collections::HashMap;
 
-/// Mutability state of a binding or reference
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mutability {
-    Immutable,   // let x = ...; &T; fn foo(&self)
-    Mutable,     // let mut x = ...; &mut T; fn foo(&mut self)
-}
-
 /// Kind of mutability annotation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutKind {
@@ -67,15 +60,6 @@ impl MutabilityAnalyzer {
             kind,
             confidence: 2,  // proven from syntax
         });
-    }
-
-    fn lookup(&self, name: &str) -> Option<bool> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(mutable) = scope.get(name) {
-                return Some(*mutable);
-            }
-        }
-        None
     }
 
     /// Analyze function parameters for mutability

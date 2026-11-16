@@ -4,8 +4,6 @@
 //! enabling distinction between syntax errors in input code, tokenizer internal errors,
 //! and analyzer-specific failures.
 
-use std::collections::HashMap;
-
 /// Error severity level
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {

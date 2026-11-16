@@ -64,14 +64,6 @@ impl ComplexityAnalyzer {
         );
     }
 
-    /// Analyze a function for complexity patterns (string-based scanning)
-    pub fn analyze_function(&mut self, func: &str) -> ComplexityMetrics {
-        let node_id = 0; // Simplified - real impl would use actual node IDs
-
-        let metrics = compute_complexity(func);
-        self.annotate(node_id, metrics);
-        metrics
-    }
 }
 
 /// Compute complexity metrics for a Rust source string.
