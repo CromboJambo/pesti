@@ -66,7 +66,7 @@ impl Expr {
             Expr::Sequence(exprs) => exprs.iter().all(|e| e.can_match_empty()),
             Expr::OrderedChoice(alts) => alts.iter().any(|e| e.can_match_empty()),
             Expr::Optional(_) => true,
-            Expr::Repeat(_) => true, // Zero repetitions = empty match
+            Expr::Repeat(_) => true,       // Zero repetitions = empty match
             Expr::Nonterminal(_) => false, // Conservative: assume non-empty
             Expr::Capture(_, inner) => inner.can_match_empty(),
             Expr::CharRange(_, _) => false,
@@ -198,7 +198,10 @@ mod tests {
     fn test_collect_captures() {
         let expr = Expr::Sequence(vec![
             Expr::Capture("a".into(), Box::new(Expr::Terminal(TerminalKind::Ident))),
-            Expr::Capture("b".into(), Box::new(Expr::Repeat(Box::new(Expr::Terminal(TerminalKind::IntLit))))),
+            Expr::Capture(
+                "b".into(),
+                Box::new(Expr::Repeat(Box::new(Expr::Terminal(TerminalKind::IntLit)))),
+            ),
         ]);
         let mut caps = Vec::new();
         expr.collect_captures(&mut caps);

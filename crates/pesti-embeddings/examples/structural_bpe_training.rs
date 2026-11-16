@@ -7,7 +7,9 @@ use anyhow::Result;
 
 fn main() -> Result<()> {
     println!("=== Structural Pattern Vocabulary for BPE Training ===");
-    println!("\nThis example demonstrates how structural tokens could inform BPE tokenizer training.");
+    println!(
+        "\nThis example demonstrates how structural tokens could inform BPE tokenizer training."
+    );
     println!("\nConcept:");
     println!("  1. Analyze a corpus of code using universal structure tokens");
     println!("  2. Identify common structural patterns (function declarations, loops, etc.)");

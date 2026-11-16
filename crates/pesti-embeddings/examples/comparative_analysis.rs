@@ -12,12 +12,17 @@ use universal_structure::{LanguageAdapter, SpanKind};
 
 fn main() -> Result<()> {
     println!("=== Comparative Analysis: llama.cpp vs mistral.rs vs pesti ===");
-    println!("\nUsing universal structure tokens to compare architectural patterns across three LLM inference implementations.");
+    println!(
+        "\nUsing universal structure tokens to compare architectural patterns across three LLM inference implementations."
+    );
     println!();
 
     let projects = vec![
         ("llama.cpp", "/home/crombo/llama.cpp"),
-        ("mistral.rs", "/home/crombo/projects/experiments/GitCloneResearch/mistral.rs"),
+        (
+            "mistral.rs",
+            "/home/crombo/projects/experiments/GitCloneResearch/mistral.rs",
+        ),
         ("pesti", "/home/crombo/projects/active/pesti"),
     ];
 
@@ -31,7 +36,10 @@ fn main() -> Result<()> {
 
     // Compare architectural complexity
     println!("\n=== Architectural Complexity Comparison ===");
-    println!("{:<15} {:>10} {:>10} {:>10}", "Project", "Functions", "Classes", "Complexity");
+    println!(
+        "{:<15} {:>10} {:>10} {:>10}",
+        "Project", "Functions", "Classes", "Complexity"
+    );
     for r in &results {
         println!(
             "{:<15} {:>10} {:>10} {:>10.2}",
@@ -43,13 +51,13 @@ fn main() -> Result<()> {
     println!("\n=== Common Architectural Patterns ===");
     let all_tokens: Vec<String> = results.iter().flat_map(|r| r.tokens.clone()).collect();
     if !all_tokens.is_empty() {
-        let token_counts: std::collections::HashMap<String, usize> = all_tokens.iter().fold(
-            std::collections::HashMap::new(),
-            |mut map, token| {
-                *map.entry(token.clone()).or_insert(0) += 1;
-                map
-            },
-        );
+        let token_counts: std::collections::HashMap<String, usize> =
+            all_tokens
+                .iter()
+                .fold(std::collections::HashMap::new(), |mut map, token| {
+                    *map.entry(token.clone()).or_insert(0) += 1;
+                    map
+                });
 
         let mut sorted: Vec<_> = token_counts.into_iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
@@ -74,7 +82,10 @@ fn main() -> Result<()> {
 
     println!("Total functions analyzed: {}", total_functions);
     println!("Total classes/interfaces: {}", total_classes);
-    println!("Average complexity score: {:.2}", total_complexity / results.len() as f64);
+    println!(
+        "Average complexity score: {:.2}",
+        total_complexity / results.len() as f64
+    );
 
     // Identify architectural differences
     println!("\n=== Architectural Differences ===");
@@ -133,7 +144,8 @@ fn analyze_project(name: &str, path: &str) -> Result<ProjectAnalysis> {
                 match span.kind {
                     SpanKind::FnDecl => {
                         function_count += 1;
-                        total_complexity += estimate_function_complexity(span_tree.source.clone(), span);
+                        total_complexity +=
+                            estimate_function_complexity(span_tree.source.clone(), span);
                     }
                     SpanKind::ClassDecl | SpanKind::MethodDecl | SpanKind::TraitItem => {
                         class_count += 1;
@@ -150,7 +162,8 @@ fn analyze_project(name: &str, path: &str) -> Result<ProjectAnalysis> {
                 match span.kind {
                     SpanKind::FnDecl => {
                         function_count += 1;
-                        total_complexity += estimate_function_complexity(span_tree.source.clone(), span);
+                        total_complexity +=
+                            estimate_function_complexity(span_tree.source.clone(), span);
                     }
                     SpanKind::ClassDecl | SpanKind::MethodDecl | SpanKind::TraitItem => {
                         class_count += 1;

@@ -115,8 +115,11 @@ impl TreeNode {
         } else {
             text.to_string()
         };
-        let mut out = format!("{}{} {}
-", prefix, self.label, display_text);
+        let mut out = format!(
+            "{}{} {}
+",
+            prefix, self.label, display_text
+        );
         for child in &self.children {
             out.push_str(&child.format_tree(indent + 1, source));
         }

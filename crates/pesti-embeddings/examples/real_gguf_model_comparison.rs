@@ -3,7 +3,7 @@
 //! Loads actual GGUF model files, extracts architectural metadata, embeds the
 //! descriptions, and compares models based on structural similarity.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pesti_embeddings::Embedder;
 use pesti_gguf::parse_gguf;
 use std::fs;
@@ -56,7 +56,12 @@ fn find_gguf_models() -> Vec<String> {
                             let entry_path = entry.path();
                             if entry_path.is_dir() {
                                 find_models_in_dir(&entry_path, results);
-                            } else if entry_path.file_name().unwrap().to_string_lossy().ends_with(".gguf") {
+                            } else if entry_path
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .ends_with(".gguf")
+                            {
                                 results.push(entry_path.to_string_lossy().to_string());
                             }
                         }
@@ -79,7 +84,13 @@ fn find_gguf_models() -> Vec<String> {
                 if let Ok(sub_entries) = fs::read_dir(&path) {
                     for sub_entry in sub_entries.flatten() {
                         let sub_path = sub_entry.path();
-                        if sub_path.is_dir() && sub_path.file_name().unwrap().to_string_lossy().starts_with("snapshots") {
+                        if sub_path.is_dir()
+                            && sub_path
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .starts_with("snapshots")
+                        {
                             if let Ok(snapshot_entries) = fs::read_dir(&sub_path) {
                                 for snap_entry in snapshot_entries.flatten() {
                                     let snap_path = snap_entry.path();
@@ -87,9 +98,12 @@ fn find_gguf_models() -> Vec<String> {
                                         // Look for .gguf files
                                         if let Ok(files) = fs::read_dir(&snap_path) {
                                             for file in files.flatten() {
-                                                let file_name = file.file_name().to_string_lossy().to_string();
+                                                let file_name =
+                                                    file.file_name().to_string_lossy().to_string();
                                                 if file_name.ends_with(".gguf") {
-                                                    found.push(file.path().to_string_lossy().to_string());
+                                                    found.push(
+                                                        file.path().to_string_lossy().to_string(),
+                                                    );
                                                 }
                                             }
                                         }
@@ -117,7 +131,11 @@ fn find_gguf_models() -> Vec<String> {
                             if entry_path.is_dir() {
                                 find_gguf_in_dir(&entry_path, results);
                             } else {
-                                let file_name = entry_path.file_name().unwrap().to_string_lossy().to_string();
+                                let file_name = entry_path
+                                    .file_name()
+                                    .unwrap()
+                                    .to_string_lossy()
+                                    .to_string();
                                 if file_name.ends_with(".gguf") {
                                     results.push(entry_path.to_string_lossy().to_string());
                                 }
@@ -152,11 +170,19 @@ fn main() -> Result<()> {
     for path in &model_paths {
         match extract_model_description(path) {
             Ok(description) => {
-                println!("  {} - {}", Path::new(path).file_name().unwrap().to_string_lossy(), description);
+                println!(
+                    "  {} - {}",
+                    Path::new(path).file_name().unwrap().to_string_lossy(),
+                    description
+                );
                 descriptions.push((path.clone(), description));
             }
             Err(e) => {
-                println!("  {} - Error: {}", Path::new(path).file_name().unwrap().to_string_lossy(), e);
+                println!(
+                    "  {} - Error: {}",
+                    Path::new(path).file_name().unwrap().to_string_lossy(),
+                    e
+                );
             }
         }
     }
@@ -167,7 +193,8 @@ fn main() -> Result<()> {
     }
 
     // Use Qwen2.5-0.5B-Instruct as the embedding model (known working GGUF)
-    let embedder_model = "/home/crombo/projects/active/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    let embedder_model =
+        "/home/crombo/projects/active/pesti/conformance-corpus/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
     println!("Loading embedding model...");
     let embedder = Embedder::load(embedder_model)?;
@@ -181,7 +208,11 @@ fn main() -> Result<()> {
                 embeddings.push((path.clone(), desc.clone(), embedding));
             }
             Err(e) => {
-                println!("  Failed to embed {}: {}", Path::new(path).file_name().unwrap().to_string_lossy(), e);
+                println!(
+                    "  Failed to embed {}: {}",
+                    Path::new(path).file_name().unwrap().to_string_lossy(),
+                    e
+                );
             }
         }
     }
@@ -248,9 +279,18 @@ fn main() -> Result<()> {
         }
     }
 
-    let name_i = Path::new(&embeddings[best_pair.0].0).file_name().unwrap().to_string_lossy();
-    let name_j = Path::new(&embeddings[best_pair.1].0).file_name().unwrap().to_string_lossy();
-    println!("\nMost similar models: {} and {} (similarity={:.3})", name_i, name_j, best_pair.2);
+    let name_i = Path::new(&embeddings[best_pair.0].0)
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
+    let name_j = Path::new(&embeddings[best_pair.1].0)
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
+    println!(
+        "\nMost similar models: {} and {} (similarity={:.3})",
+        name_i, name_j, best_pair.2
+    );
 
     Ok(())
 }

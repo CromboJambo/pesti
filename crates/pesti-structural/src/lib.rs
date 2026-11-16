@@ -39,10 +39,10 @@ pub mod validate;
 pub use evaluator::{ParseResult, PegEvaluator, Token};
 pub use expr::Expr;
 pub use grammar::{Nonterminal, RuleAnnotation, StructuralGrammar, TerminalKind};
-pub use lexer::{tokenize_rust, LexError, RustLexer};
-pub use parser::{parse_peg, parse_peg_file, ParseError};
+pub use lexer::{LexError, RustLexer, tokenize_rust};
+pub use parser::{ParseError, parse_peg, parse_peg_file};
 pub use tree::{Span, TreeNode};
-pub use validate::{validate, ValidationError, ValidationResult};
+pub use validate::{ValidationError, ValidationResult, validate};
 
 /// The Lexer trait: converts raw source text into a stream of terminal tokens.
 ///

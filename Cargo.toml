@@ -15,8 +15,9 @@ members = [
     "crates/pesti-training",
     "crates/pesti-weightspace",
     "crates/pesti-state",
+    "crates/pesti-embeddings",
 ]
-exclude = ["test_ggml_quants", "cuda-oxide", "crates/pesti-conformance", "crates/pesti-embeddings"]
+exclude = ["test_ggml_quants", "cuda-oxide", "crates/pesti-conformance"]
 resolver = "2"
 
 [workspace.lints.rust]

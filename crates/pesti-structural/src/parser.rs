@@ -365,7 +365,10 @@ impl<'a> Parser<'a> {
                 break;
             }
             let rule_name = self.expect_ident()?;
-            if grammar.productions.contains_key(&Nonterminal(rule_name.clone())) {
+            if grammar
+                .productions
+                .contains_key(&Nonterminal(rule_name.clone()))
+            {
                 return Err(ParseError::DuplicateRule { rule: rule_name });
             }
             if first_rule.is_none() {
@@ -811,7 +814,10 @@ Start = { Ident IntLit FloatLit StrLit BoolLit }
 A = { 'a' }
 A = { 'b' }
 "#;
-        assert!(matches!(parse_peg(src), Err(ParseError::DuplicateRule { .. })));
+        assert!(matches!(
+            parse_peg(src),
+            Err(ParseError::DuplicateRule { .. })
+        ));
     }
 
     #[test]

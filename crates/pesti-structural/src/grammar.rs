@@ -193,10 +193,7 @@ mod tests {
             "Start",
             Expr::Sequence(vec![
                 Expr::Terminal(TerminalKind::Keyword("fn".into())),
-                Expr::Capture(
-                    "name".into(),
-                    Box::new(Expr::Terminal(TerminalKind::Ident)),
-                ),
+                Expr::Capture("name".into(), Box::new(Expr::Terminal(TerminalKind::Ident))),
             ]),
         );
         g.add_annotation(

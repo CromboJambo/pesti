@@ -25,7 +25,9 @@ pub enum ValidationError {
     #[error("empty loop in rule: {nt} (expression can match empty string)")]
     EmptyLoop { nt: String },
 
-    #[error("ambiguous ordered choice in rule: {rule} — alternatives may both match the same input")]
+    #[error(
+        "ambiguous ordered choice in rule: {rule} — alternatives may both match the same input"
+    )]
     AmbiguousChoice { rule: String },
 
     #[error("start rule not defined: {rule}")]
@@ -99,10 +101,7 @@ pub fn validate(grammar: &StructuralGrammar) -> ValidationResult {
             .map(|r| (r.0.clone(), nt.0.clone()))
             .collect();
         for (ref_nt, rule) in ref_owners {
-            result.add_error(ValidationError::UndefinedNonterminal {
-                nt: ref_nt,
-                rule,
-            });
+            result.add_error(ValidationError::UndefinedNonterminal { nt: ref_nt, rule });
         }
     }
 
@@ -110,9 +109,7 @@ pub fn validate(grammar: &StructuralGrammar) -> ValidationResult {
     let reachable = collect_reachable(grammar, &grammar.start);
     for nt in grammar.nonterminals() {
         if !reachable.contains(nt.0.as_str()) {
-            result.add_error(ValidationError::UnreachableRule {
-                nt: nt.0.clone(),
-            });
+            result.add_error(ValidationError::UnreachableRule { nt: nt.0.clone() });
         }
     }
 
@@ -132,9 +129,7 @@ pub fn validate(grammar: &StructuralGrammar) -> ValidationResult {
     // Check 7: Annotations reference valid rules and captures
     for (nt, annotation) in &grammar.annotations {
         if !grammar.has_rule(nt) {
-            result.add_error(ValidationError::AnnotationUndefinedRule {
-                rule: nt.0.clone(),
-            });
+            result.add_error(ValidationError::AnnotationUndefinedRule { rule: nt.0.clone() });
             continue;
         }
 
@@ -200,9 +195,7 @@ fn check_left_recursion(grammar: &StructuralGrammar, result: &mut ValidationResu
     // For each rule, check if it can reach itself through the first-position graph
     for (nt, _) in &grammar.productions {
         if reaches_self(&first_graph, &nt.0) {
-            result.add_error(ValidationError::LeftRecursion {
-                nt: nt.0.clone(),
-            });
+            result.add_error(ValidationError::LeftRecursion { nt: nt.0.clone() });
         }
     }
 }
@@ -337,11 +330,7 @@ fn check_choice_determinism(
 }
 
 /// Resolve first terminals for an expression, following nonterminal references (one level).
-fn resolve_first_terminals(
-    expr: &Expr,
-    grammar: &StructuralGrammar,
-    out: &mut Vec<TerminalKind>,
-) {
+fn resolve_first_terminals(expr: &Expr, grammar: &StructuralGrammar, out: &mut Vec<TerminalKind>) {
     match expr {
         Expr::Terminal(tk) => out.push(tk.clone()),
         Expr::CharRange(_, _) => {}
@@ -431,7 +420,12 @@ A = { A 'b' }
         let g = parse_peg(src).unwrap();
         let result = validate(&g);
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| matches!(e, ValidationError::LeftRecursion { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::LeftRecursion { .. }))
+        );
     }
 
     #[test]
@@ -443,7 +437,12 @@ Start = { ('a'?)* }
         let g = parse_peg(src).unwrap();
         let result = validate(&g);
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|e| matches!(e, ValidationError::EmptyLoop { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::EmptyLoop { .. }))
+        );
     }
 
     #[test]
@@ -526,6 +525,10 @@ annotations {
         let g = parse_peg(src).unwrap();
         let result = validate(&g);
         // This grammar should be valid (warnings about ambiguity are OK)
-        assert!(result.valid, "errors: {:?}, warnings: {:?}", result.errors, result.warnings);
+        assert!(
+            result.valid,
+            "errors: {:?}, warnings: {:?}",
+            result.errors, result.warnings
+        );
     }
 }

@@ -5,8 +5,8 @@
 
 use anyhow::Result;
 use pesti_embeddings::Embedder;
+use universal_structure::adapters::{GoAdapter, PythonAdapter, RustAdapter};
 use universal_structure::{LanguageAdapter, SpanKind};
-use universal_structure::adapters::{RustAdapter, PythonAdapter, GoAdapter};
 
 /// Compute cosine similarity.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -144,7 +144,10 @@ fn main() -> Result<()> {
     for i in 0..text_embeddings.len() {
         for j in i + 1..text_embeddings.len() {
             let sim = cosine_similarity(&text_embeddings[i].1, &text_embeddings[j].1);
-            println!("  {} vs {}: {:.4}", text_embeddings[i].0, text_embeddings[j].0, sim);
+            println!(
+                "  {} vs {}: {:.4}",
+                text_embeddings[i].0, text_embeddings[j].0, sim
+            );
         }
     }
 

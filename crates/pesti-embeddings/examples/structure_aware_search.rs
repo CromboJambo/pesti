@@ -64,24 +64,38 @@ fn main() -> Result<()> {
 
     // Codebase snippets to search through
     let snippets = vec![
-        ("simple_add", r#"fn add(x: i32, y: i32) -> i32 {
+        (
+            "simple_add",
+            r#"fn add(x: i32, y: i32) -> i32 {
     return x + y;
-}"#),
-        ("multiply", r#"fn multiply(a: i32, b: i32) -> i32 {
+}"#,
+        ),
+        (
+            "multiply",
+            r#"fn multiply(a: i32, b: i32) -> i32 {
     return a * b;
-}"#),
-        ("loop_process", r#"fn process(items: Vec<i32>) {
+}"#,
+        ),
+        (
+            "loop_process",
+            r#"fn process(items: Vec<i32>) {
     for item in items {
         println!("{}", item);
     }
-}"#),
-        ("conditional", r#"fn check(n: i32) -> bool {
+}"#,
+        ),
+        (
+            "conditional",
+            r#"fn check(n: i32) -> bool {
     if n > 0 {
         return true;
     }
     return false;
-}"#),
-        ("nested_loop", r#"fn matrix_multiply(a: Vec<Vec<i32>>, b: Vec<Vec<i32>>) -> Vec<Vec<i32>> {
+}"#,
+        ),
+        (
+            "nested_loop",
+            r#"fn matrix_multiply(a: Vec<Vec<i32>>, b: Vec<Vec<i32>>) -> Vec<Vec<i32>> {
     let mut result = vec![vec![0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
@@ -91,7 +105,8 @@ fn main() -> Result<()> {
         }
     }
     return result;
-}"#),
+}"#,
+        ),
     ];
 
     // Embed query

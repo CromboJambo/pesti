@@ -52,7 +52,9 @@ async fn create_structure_aware_embedding(
 
 fn main() -> Result<()> {
     println!("=== Structure-Aware Embeddings CLI Integration Demo ===");
-    println!("\nThis example demonstrates how structure-aware embeddings could be integrated into the pesti-embeddings CLI.");
+    println!(
+        "\nThis example demonstrates how structure-aware embeddings could be integrated into the pesti-embeddings CLI."
+    );
     println!("\nProposed CLI usage:");
     println!("  pesti-embeddings embed --structure-aware --language rust <<EOF");
     println!("fn add(a: i32, b: i32) -> i32 {{ a + b }}");

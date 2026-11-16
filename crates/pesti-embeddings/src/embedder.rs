@@ -1,14 +1,14 @@
 //! Embedding model runner using PESTI's transformer primitives.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pesti_runner::load_gguf_weights;
 use pesti_runner::transformer::model::LlamaModel;
 use pesti_runner::transformer::tokenizer::{
-    load_tokenizer_from_gguf, PestiTokenizer, TokenizerBackend,
+    PestiTokenizer, TokenizerBackend, load_tokenizer_from_gguf,
 };
 use std::path::Path;
 
-use crate::pooling::{pool, PoolingStrategy};
+use crate::pooling::{PoolingStrategy, pool};
 use crate::similarity::l2_normalize_owned;
 
 /// Configuration for an embedding model.
@@ -79,8 +79,10 @@ impl Embedder {
             PestiTokenizer::MistralRs(tok)
         } else {
             // Try GGUF-embedded tokenizer (requires BPE merges)
-            match load_tokenizer_from_gguf(Path::new(&config.model_path), TokenizerBackend::MistralRs)
-            {
+            match load_tokenizer_from_gguf(
+                Path::new(&config.model_path),
+                TokenizerBackend::MistralRs,
+            ) {
                 Ok((_, tok)) => tok,
                 Err(e) => {
                     // Fall back to looking for tokenizer.json in model directory
@@ -94,8 +96,10 @@ impl Embedder {
                             e,
                             tok_json.display()
                         );
-                        let (_, tok) = pesti_runner::safetensors_tokenizer
-                            ::load_tokenizer_from_safetensors(&tok_json)
+                        let (_, tok) =
+                            pesti_runner::safetensors_tokenizer::load_tokenizer_from_safetensors(
+                                &tok_json,
+                            )
                             .map_err(|e| {
                                 anyhow!(
                                     "Failed to load tokenizer from '{}': {}",

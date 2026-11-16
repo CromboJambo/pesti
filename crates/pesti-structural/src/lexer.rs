@@ -31,11 +31,10 @@ impl std::error::Error for LexError {}
 
 /// Common Rust keywords that map to specific `TerminalKind::Keyword` values.
 const KEYWORDS: &[&str] = &[
-    "fn", "struct", "enum", "impl", "trait", "mod", "use", "pub", "let",
-    "mut", "const", "static", "type", "where", "match", "if", "else",
-    "while", "for", "loop", "return", "break", "continue", "move", "ref",
-    "self", "Self", "super", "crate", "async", "await", "dyn", "box",
-    "unsafe", "extern", "macro", "in", "as",
+    "fn", "struct", "enum", "impl", "trait", "mod", "use", "pub", "let", "mut", "const", "static",
+    "type", "where", "match", "if", "else", "while", "for", "loop", "return", "break", "continue",
+    "move", "ref", "self", "Self", "super", "crate", "async", "await", "dyn", "box", "unsafe",
+    "extern", "macro", "in", "as",
 ];
 
 /// A simple Rust lexer that produces structural tokens.
@@ -272,8 +271,8 @@ impl<'a> RustLexer<'a> {
 
         // Try two-character operators first.
         let two_char_ops = [
-            "==", "!=", "<=", ">=", "->", "=>", "..", "::", "<<", ">>",
-            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+            "==", "!=", "<=", ">=", "->", "=>", "..", "::", "<<", ">>", "+=", "-=", "*=", "/=",
+            "%=", "&=", "|=", "^=",
         ];
 
         for op in &two_char_ops {

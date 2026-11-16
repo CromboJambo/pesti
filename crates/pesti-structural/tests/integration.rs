@@ -54,7 +54,11 @@ fn test_rust_structural_grammar_loads_and_validates() {
     for error in &result.errors {
         eprintln!("validation error: {:?}", error);
     }
-    assert!(result.valid, "rust_structural.peg should be valid: {:?}", result.errors);
+    assert!(
+        result.valid,
+        "rust_structural.peg should be valid: {:?}",
+        result.errors
+    );
 }
 
 #[test]
@@ -108,7 +112,7 @@ fn test_grammar_file_io() {
 
 #[test]
 fn test_end_to_end_rust_parsing() {
-    use pesti_structural::{tokenize_rust, PegEvaluator};
+    use pesti_structural::{PegEvaluator, tokenize_rust};
 
     // Load the real Rust structural grammar.
     let src = include_str!("../grammars/rust.peg");
@@ -116,7 +120,11 @@ fn test_end_to_end_rust_parsing() {
 
     // Validate it first.
     let result = validate(&grammar);
-    assert!(result.valid, "rust.peg should be valid: {:?}", result.errors);
+    assert!(
+        result.valid,
+        "rust.peg should be valid: {:?}",
+        result.errors
+    );
 
     // Real Rust source to parse.
     let code = r#"

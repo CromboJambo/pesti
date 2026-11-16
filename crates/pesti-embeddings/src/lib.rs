@@ -7,7 +7,9 @@
 pub mod embedder;
 pub mod pooling;
 pub mod similarity;
+pub mod structural;
 
 pub use embedder::{Embedder, EmbeddingConfig};
 pub use pooling::PoolingStrategy;
 pub use similarity::{cosine_similarity, dot_product};
+pub use structural::{EmbeddingFeature, StructuralConfig, StructuralEmbedder};

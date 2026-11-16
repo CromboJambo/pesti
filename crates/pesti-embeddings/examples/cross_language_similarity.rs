@@ -111,7 +111,13 @@ fn main() -> Result<()> {
     // Now try with structural representation for Rust (baseline)
     println!("\n=== Structural Representation Comparison ===");
     let rust_tokens = tokenizer.tokenize(rust_impl)?;
-    let rust_struct = format!("{:?}", rust_tokens.iter().map(|t| t.kind.clone()).collect::<Vec<_>>());
+    let rust_struct = format!(
+        "{:?}",
+        rust_tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect::<Vec<_>>()
+    );
     println!("Rust structural tokens: {}", rust_struct);
 
     // For Python/Go, we'd need language adapters - for now just show Rust baseline
