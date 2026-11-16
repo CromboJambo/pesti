@@ -70,7 +70,6 @@ impl Tier {
 pub struct TieredExecution {
     current_tier: AtomicUsize, // Numeric ID (u32 cast to usize for atomic ops)
     call_count: AtomicUsize,   // Cumulative invocations per tier
-    tier_up_threshold: usize,  // Threshold for tier-up decision
 }
 
 impl TieredExecution {
@@ -78,7 +77,6 @@ impl TieredExecution {
         Self {
             current_tier: AtomicUsize::new(initial_tier.as_u32() as usize),
             call_count: AtomicUsize::new(0),
-            tier_up_threshold: initial_tier.tier_up_threshold(),
         }
     }
 

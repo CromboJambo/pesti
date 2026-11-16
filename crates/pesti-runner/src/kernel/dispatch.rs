@@ -52,7 +52,6 @@ use crate::kernel::gemm_stub::GemmArch;
 use crate::kernel::kvcache::Kvcache;
 #[cfg(not(feature = "cuda"))]
 use crate::kernel::kvcache_stub::Kvcache;
-use crate::kernel::linear::{LinearLayer, new_linear_layer};
 #[cfg(feature = "cuda")]
 use crate::kernel::memory::MemoryManager;
 #[cfg(not(feature = "cuda"))]
@@ -130,8 +129,6 @@ pub struct DispatchContext {
     memory: MemoryManager,
     /// Whether GPU path is preferred (true) or CPU-only (false).
     prefer_gpu: bool,
-    /// Cached CPU GEMM kernel for fallback.
-    cpu_gemm: crate::kernel::CpuGemmKernel,
     /// Cached CPU attention kernel for fallback.
     cpu_attention: CpuAttentionKernel,
     /// Number of times a GPU op failed and fell back to CPU. Non-zero after a
@@ -192,7 +189,6 @@ impl DispatchContext {
             engine,
             memory,
             prefer_gpu,
-            cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -208,7 +204,7 @@ impl DispatchContext {
         {
             if let Some(info) = engine.cuda_device_info() {
                 let (major, minor) = info.compute_capability;
-                return Some(((major * 10 + minor) as u16));
+                return Some((major * 10 + minor) as u16);
             }
             None
         }
@@ -280,7 +276,6 @@ impl DispatchContext {
                 1024 * 1024,
             )),
             prefer_gpu,
-            cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -322,7 +317,6 @@ impl DispatchContext {
             engine,
             memory,
             prefer_gpu,
-            cpu_gemm: crate::kernel::CpuGemmKernel::new(),
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -695,25 +689,6 @@ impl DispatchContext {
         }
     }
 
-    /// Fallback when the selected GPU kernel is unavailable at runtime.
-    #[cfg(feature = "cuda")]
-    fn dispatch_linear_fallback(
-        &self,
-        x_f16: &[f16],
-        weights: &[f16],
-        m: usize,
-        n: usize,
-        k: usize,
-        weight_t_gpu: Option<&Tensor>,
-    ) -> Result<Vec<f32>, DispatchError> {
-        if self.prefer_gpu && self.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda()
-        {
-            self.dispatch_linear_candle_bridge(x_f16, weights, m, n, k, weight_t_gpu)
-        } else {
-            self.dispatch_linear_cpu_path(x_f16, weights, m, n, k)
-        }
-    }
-
     /// Add bias to result in-place. Returns the modified vector.
     fn add_bias(
         &self,
@@ -980,7 +955,7 @@ impl LinearDispatch {
         in_features: usize,
         out_features: usize,
     ) -> Self {
-        use crate::kernel::linear::{LinearLayer, new_linear_layer};
+        use crate::kernel::linear::new_linear_layer;
         // Convert f16 weights to f32 for the linear layer
         let weight_f32: Vec<f32> = weights_f16.iter().map(|w| (*w).into()).collect();
         let inner = new_linear_layer(weight_f32, bias, in_features, out_features);
@@ -1006,32 +981,6 @@ impl LinearDispatch {
     pub fn out_features(&self) -> usize {
         self.inner.out_features()
     }
-}
-
-/// Standalone CPU linear forward (free function to avoid circular impl).
-fn ctx_dispatch_linear_cpu(
-    x: &[f32],
-    weights: &[f32],
-    bias: Option<&[f32]>,
-    in_features: usize,
-    out_features: usize,
-    batch_size: usize,
-) -> Result<Vec<f32>, DispatchError> {
-    let mut output = vec![0.0f32; batch_size * out_features];
-    for b in 0..batch_size {
-        let x_start = b * in_features;
-        for o in 0..out_features {
-            let mut sum = 0.0f32;
-            for i in 0..in_features {
-                sum += x[x_start + i] * weights[o * in_features + i];
-            }
-            if let Some(bias) = bias {
-                sum += bias[o];
-            }
-            output[b * out_features + o] = sum;
-        }
-    }
-    Ok(output)
 }
 
 // ── AttentionDispatch: GPU-aware attention layer ───────────────────────────
@@ -1397,7 +1346,7 @@ impl AttentionDispatch {
                 .map_err(|e| DispatchError::Kernel(format!("k tensor to f32: {e}")))?;
 
             // Use cached rope kernel if available, otherwise build it or fall back to CPU
-            use crate::kernel::rope::{CudaRopeKernel, CudaRopeKernelBuilder};
+            use crate::kernel::rope::CudaRopeKernelBuilder;
             let rope_kernel = match &self.rope_kernel {
                 Some(k) => Arc::clone(k),
                 None => {
@@ -2006,7 +1955,7 @@ impl AttentionDispatch {
                     .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
 
                 let mut out_f32 = vec![0.0f32; embed_dim];
-                let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
+                let out_ptr = std::ptr::addr_of_mut!(out_f32[0]) as *mut u8;
                 ctx.memory
                     .d2h(out_handle, unsafe {
                         std::slice::from_raw_parts_mut(out_ptr, out_bytes)

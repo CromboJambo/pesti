@@ -3,28 +3,12 @@
 //! Uses cudarc's safe API: CudaBlas + Gemm trait with CudaSlice memory management.
 
 use half::f16;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
-
 #[cfg(feature = "cuda")]
 use cudarc::cublas::safe::{CudaBlas, Gemm, GemmConfig};
 #[cfg(feature = "cuda")]
 use cudarc::driver::{CudaContext, CudaStream, DevicePtr, DevicePtrMut};
 #[cfg(feature = "cuda")]
 use std::sync::Arc;
-
-/// Upload weights to GPU for this forward pass (no persistent caching).
-/// Weights are uploaded fresh each call to avoid unbounded memory growth.
-fn upload_weights(weights: &[half::f16]) -> Result<cudarc::driver::CudaSlice<half::f16>, String> {
-    let stream = get_stream();
-    let mut w_dev = unsafe { stream.alloc(weights.len()) }
-        .map_err(|e| format!("cudaMalloc W failed: {:?}", e))?;
-    stream
-        .memcpy_htod(weights, &mut w_dev)
-        .map_err(|e| format!("cudaMemcpy H2D W failed: {:?}", e))?;
-    Ok(w_dev)
-}
 
 /// CUDA bridge that manages cuBLAS handle and device context.
 pub struct CudaBridge {

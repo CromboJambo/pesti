@@ -4,33 +4,6 @@ use crate::softmask::{Softmask, segmented_softmax};
 use half::f16;
 use rayon::prelude::*;
 
-/// Apply RoPE using vectorized operations
-fn apply_rope_cpu_optimized(q: &mut [f32], head_dim: usize, pos: usize, rope_base: f32) {
-    let half_dim = head_dim / 2;
-
-    for dim_pair in 0..half_dim {
-        let idx = dim_pair * 2;
-        if idx + 1 >= q.len() {
-            continue;
-        }
-
-        // Precomputed frequency for this dimension pair
-        let inv_freq = 1.0 / (rope_base.powf((dim_pair as f32) / half_dim as f32));
-        let freq = pos as f32 * inv_freq;
-
-        // Vectorized trig: compute cos/sin once per dimension pair
-        let cos_val = freq.cos();
-        let sin_val = freq.sin();
-
-        let q0 = q[idx];
-        let q1 = q[idx + 1];
-
-        // RoPE rotation (can be SIMD'd as 2-element vectors)
-        q[idx] = q0 * cos_val - q1 * sin_val;
-        q[idx + 1] = q0 * sin_val + q1 * cos_val;
-    }
-}
-
 /// Optimized dot product using manual SIMD-like unrolling
 #[inline]
 fn simd_dot_product(q: &[f32], k: &[f32], head_dim: usize) -> f32 {
@@ -60,24 +33,6 @@ fn simd_dot_product(q: &[f32], k: &[f32], head_dim: usize) -> f32 {
     }
 
     sum
-}
-
-/// Optimized softmax with numerical stability
-#[inline]
-fn optimized_softmax(scores: &[f32]) -> Vec<f32> {
-    let max_val = scores.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-
-    // Compute exp in parallel
-    let exps: Vec<f32> = scores.par_iter().map(|&s| (s - max_val).exp()).collect();
-
-    // Parallel sum
-    let sum: f32 = exps.par_iter().sum();
-
-    if sum > 0.0 {
-        exps.iter().map(|&e| e / sum).collect()
-    } else {
-        vec![1.0 / scores.len() as f32; scores.len()]
-    }
 }
 
 /// Reference implementation with optimizations
@@ -315,15 +270,6 @@ mod tests {
         let expected: f32 = (0..16).map(|x| x as f32).sum();
 
         assert!((result - expected).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_optimized_softmax() {
-        let scores = vec![3.0, 4.0, 2.0];
-        let weights = optimized_softmax(&scores);
-
-        let sum: f32 = weights.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
     }
 
     /// Verify that causally-masked positions contribute EXACTLY zero to the

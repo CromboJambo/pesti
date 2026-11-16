@@ -7,9 +7,6 @@
 use crate::error::{Result, RunnerError};
 use half::f16;
 
-/// Tile size for dequantization (elements per tile)
-const TILE_SIZE: usize = 256;
-
 /// Dequantize a single Q4_0 block (32 elements) to f32
 #[inline]
 pub fn dequantize_q4_0_block(data: &[u8]) -> [f32; 32] {

@@ -157,44 +157,4 @@ impl QuantizedLinear {
             _ => tile_dequant::dequantize_q4_0_tile(row_data, 0, len),
         }
     }
-
-    /// Dequantize a range of rows to a flat f32 array.
-    fn dequantize_full_row_range(&self, row_start: usize, row_end: usize) -> Result<Vec<f32>> {
-        let rb = self.row_bytes();
-        if rb == 0 {
-            return Ok(vec![0.0; (row_end - row_start) * self.in_features]);
-        }
-
-        let mut result = Vec::with_capacity((row_end - row_start) * self.in_features);
-        for row in row_start..row_end {
-            let row_offset = row * rb;
-            let row_end_byte = (row_offset + rb).min(self.data.len());
-            if row_offset >= self.data.len() {
-                break;
-            }
-            let row_data = &self.data[row_offset..row_end_byte];
-
-            let dequantized = match self.dtype {
-                QuantDtype::Q4_0 => {
-                    tile_dequant::dequantize_q4_0_tile(row_data, 0, self.in_features)?
-                }
-                QuantDtype::Q8_0 => {
-                    tile_dequant::dequantize_q8_0_tile(row_data, 0, self.in_features)?
-                }
-                QuantDtype::Q4_K => {
-                    tile_dequant::dequantize_q4_k_tile(row_data, 0, self.in_features)?
-                }
-                QuantDtype::Q5_K => {
-                    // Q5_K has same block layout as Q4_K for dequant purposes
-                    tile_dequant::dequantize_q4_k_tile(row_data, 0, self.in_features)?
-                }
-                QuantDtype::Q6_K => {
-                    tile_dequant::dequantize_q6_k_tile(row_data, 0, self.in_features)?
-                }
-                _ => tile_dequant::dequantize_q4_0_tile(row_data, 0, self.in_features)?,
-            };
-            result.extend_from_slice(&dequantized);
-        }
-        Ok(result)
-    }
 }

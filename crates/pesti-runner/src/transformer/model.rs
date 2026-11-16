@@ -13,8 +13,7 @@ use tracing::debug;
 
 use crate::error::{Result, RunnerError};
 use crate::gguf_weight_loader::{GgufWeights, load_gguf_weights};
-use crate::kernel::dispatch::{AttentionDispatch, DispatchContext};
-use crate::kernel::linear::{LinearLayer, new_linear_layer};
+use crate::kernel::dispatch::DispatchContext;
 #[cfg(feature = "cuda")]
 use crate::kernel::q4k_kvcache::Q4KVCache;
 #[cfg(feature = "cuda")]
@@ -2357,34 +2356,6 @@ impl LlamaModel {
         // On CPU, dispatch just means regular forward pass
         self.forward_layers(hidden, start_pos)
     }
-}
-
-/// Convert f16 tensor bytes to f32 Vec.
-fn f16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(2)
-        .map(|chunk| {
-            let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
-            let sign = ((bits >> 15) & 1) as u32;
-            let exp = ((bits >> 10) & 0x1F) as i32;
-            let frac = (bits & 0x3FF) as u32;
-
-            if exp == 0 {
-                if frac == 0 {
-                    f32::from_bits(sign << 31)
-                } else {
-                    let f32_bits = (sign << 31) | (frac << 13);
-                    f32::from_bits(f32_bits)
-                }
-            } else if exp == 31 {
-                f32::from_bits((sign << 31) | (0xFF << 23) | (frac << 13))
-            } else {
-                let f32_exp = (exp - 15 + 127) as u32;
-                let f32_bits = (sign << 31) | (f32_exp << 23) | (frac << 13);
-                f32::from_bits(f32_bits)
-            }
-        })
-        .collect()
 }
 
 /// Convert f32 bytes to f32 Vec.

@@ -4,7 +4,7 @@
 //! identified as 23.2% of kernel time in Week 26 profiling.
 
 use crate::kernel::candle_bridge;
-use candle_core::{Device, Tensor};
+use candle_core::Tensor;
 use half::f16;
 use std::collections::HashMap;
 use tracing::info;
