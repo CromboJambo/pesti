@@ -1,0 +1,193 @@
+# Rust structural token grammar
+# Maps source code patterns to TokenKind variants in pesti-structural-tokenizer.
+# Used for structure-aware embeddings: each rule corresponds to a semantic role
+# (definition, expression, invocation) with configurable embedding fields.
+
+grammar rust_structural {
+
+    // ============================================================
+    // Top-level structure
+    // ============================================================
+
+    Module = { Item* }
+
+    Item = {
+        FnDecl
+        / StructDecl
+        / EnumDecl
+        / TraitDecl
+        / ImplBlock
+        / UseStmt
+        / ModDecl
+    }
+
+    // ============================================================
+    // Declarations
+    // ============================================================
+
+    Visibility = { 'pub' ~ ('(' ~ ('crate' / 'super' / 'self') ~ ')')? }
+
+    FnDecl = {
+        @vis Visibility?
+        ~ 'fn'
+        ~ @name Ident
+        ~ '('
+        ~ @params ParamList?
+        ~ ')'
+        ~ TypeAnnotation?
+        ~ @body Block
+    }
+
+    StructDecl = {
+        @vis Visibility?
+        ~ 'struct'
+        ~ @name Ident
+        ~ (
+            '{' ~ @fields Field* ~ '}'
+            / '(' ~ Type+ ~ ')'
+        )
+    }
+
+    EnumDecl = {
+        @vis Visibility?
+        ~ 'enum'
+        ~ @name Ident
+        ~ '{'
+        ~ @variants Variant+
+        ~ '}'
+    }
+
+    Variant = {
+        Ident
+        ~ ('(' ~ Type+ ~ ')' / '{' ~ Field* ~ '}')?
+        ~ ','?
+    }
+
+    TraitDecl = {
+        @vis Visibility?
+        ~ 'trait'
+        ~ @name Ident
+        ~ @body Block
+    }
+
+    ImplBlock = {
+        'impl'
+        ~ Path
+        ~ ('for' ~ Path)?
+        ~ Block
+    }
+
+    UseStmt = { 'use' ~ Path ~ ';' }
+    ModDecl = { @vis Visibility? ~ 'mod' ~ Ident ~ (';' / Block) }
+
+    // ============================================================
+    // Types and paths
+    // ============================================================
+
+    TypeAnnotation = { ':' ~ Type }
+    Type = { PathType / RefType / BoxType }
+    PathType = { Path }
+    RefType = { '&' ~ Lifetime? ~ 'mut'? ~ Type }
+    BoxType = { 'box' ~ Type }
+    Lifetime = { '\'' ~ Ident }
+
+    Path = { PathSegment (~ '::' ~ PathSegment)* }
+    PathSegment = { Ident / 'self' / 'super' / 'crate' / 'Self' }
+
+    // ============================================================
+    // Parameters and fields
+    // ============================================================
+
+    ParamList = { Param (~ ',' ~ Param)* ~ ','? }
+    Param = { Ident ~ ':' ~ Type }
+
+    Field = {
+        Visibility?
+        ~ Ident
+        ~ ':'
+        ~ Type
+        ~ ','?
+    }
+
+    // ============================================================
+    // Expressions
+    // ============================================================
+
+    Expr = {
+        CallExpr
+        / MatchExpr
+        / IfExpr
+        / ForLoop
+        / WhileLoop
+        / ReturnExpr
+        / Literal
+        / Path
+        / Ident
+        / Block
+    }
+
+    Block = { '{' ~ Stmt* ~ '}' }
+    Stmt = { Expr ~ ';' / Item }
+
+    CallExpr = {
+        @callee Path
+        ~ '('
+        ~ @args (Expr (~ ',' ~ Expr)*)?
+        ~ ')'
+    }
+
+    MatchExpr = {
+        'match'
+        ~ @scrutinee Expr
+        ~ '{'
+        ~ @arms Arm+
+        ~ '}'
+    }
+
+    Arm = { Expr ~ '=>' ~ Expr ~ ','? }
+
+    IfExpr = {
+        'if'
+        ~ @cond Expr
+        ~ @then Block
+        ~ ('else' ~ (@else_if Block / Expr))?
+    }
+
+    ForLoop = { 'for' ~ Ident ~ 'in' ~ Expr ~ Block }
+    WhileLoop = { 'while' ~ Expr ~ Block }
+    ReturnExpr = { 'return' ~ Expr? }
+
+    // ============================================================
+    // Literals and terminals
+    // ============================================================
+
+    Literal = { IntLit / FloatLit / StrLit / CharLit / BoolLit }
+
+    IntLit = { ('0'..'9')+ }
+    FloatLit = { ('0'..'9')+ ~ '.' ~ ('0'..'9')+ }
+    StrLit = { '"' ~ ('a'..'z' / 'A'..'Z' / '0'..'9' / '_' / '-' / ' ')* ~ '"' }
+    CharLit = { '\'' ~ ('a'..'z' / 'A'..'Z' / '0'..'9') ~ '\'' }
+    BoolLit = { 'true' / 'false' }
+
+    // ============================================================
+    // Identifiers and character classes
+    // ============================================================
+
+    Ident = { ('a'..'z' / 'A'..'Z' / '_') ~ ('a'..'z' / 'A'..'Z' / '0'..'9' / '_')* }
+
+    // ============================================================
+    // Annotations: embedding metadata per rule
+    // ============================================================
+
+    annotations {
+        Module     { role: "definition", class: "container" }
+        FnDecl     { role: "definition", embed_fields: ["name", "params", "body"], class: "declaration" }
+        StructDecl { role: "definition", embed_fields: ["name", "fields"], class: "declaration" }
+        EnumDecl   { role: "definition", embed_fields: ["name", "variants"], class: "declaration" }
+        TraitDecl  { role: "definition", embed_fields: ["name", "body"], class: "declaration" }
+        CallExpr   { role: "expression", embed_fields: ["callee", "args"], class: "invocation" }
+        MatchExpr  { role: "expression", embed_fields: ["scrutinee", "arms"], class: "control-flow" }
+        IfExpr     { role: "expression", embed_fields: ["cond", "then"], class: "control-flow" }
+    }
+
+}

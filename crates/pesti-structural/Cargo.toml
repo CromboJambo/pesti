@@ -1,0 +1,19 @@
+[package]
+name = "pesti-structural"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PESTI structural grammar engine - PEG-based structural tokenization with embedding features"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ahash = "0.8"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

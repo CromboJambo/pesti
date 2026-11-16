@@ -1,0 +1,151 @@
+// rust.peg — Structural grammar for Rust source code
+//
+// This grammar operates on terminal kinds from a Rust lexer, not raw characters.
+// It captures the top-level structural constructs needed for embedding features:
+// functions, structs, enums, impl blocks, use statements, and modules.
+
+grammar rust_structural;
+
+// Entry point: a module (file) contains zero or more items.
+Module       = { item: Item* }
+
+// An item is any top-level construct.
+Item         = { kind: FuncDef / StructDef / EnumDef / ImplBlock / UseStmt / ModDecl / TypeAlias }
+
+// Function definition: [vis] fn name<generics>(params) -> ret { body }
+FuncDef      = {
+    visibility?,
+    'fn',
+    name: Ident,
+    generics?: GenericParams,
+    params: ParamList,
+    return_type?: ( '->' Type ),
+    body: Block
+}
+
+// Struct definition: [vis] struct name<generics> { fields } | ( tuple ) | ;
+StructDef    = {
+    visibility?,
+    'struct',
+    name: Ident,
+    generics?: GenericParams,
+    body: ( '{' field: Field* '}' / '(' field: FieldType* ')' / ';' )?
+}
+
+// Enum definition: [vis] enum name<generics> { variants }
+EnumDef      = {
+    visibility?,
+    'enum',
+    name: Ident,
+    generics?: GenericParams,
+    '{' variant: EnumVariant* '}'
+}
+
+// Impl block: impl<generics> Trait for Type { methods }
+ImplBlock    = {
+    'impl',
+    generics?: GenericParams,
+    trait_path?: Path,
+    'for'?,
+    type_name: Type,
+    body: Block
+}
+
+// Use statement: use path::to::{item1, item2};
+UseStmt      = { 'use' path: Path ';' }
+
+// Module declaration: mod name { ... } | mod name;
+ModDecl      = { 'mod' name: Ident (body: Block / ';')? }
+
+// Type alias: type Name = Type;
+TypeAlias    = { 'type' name: Ident '=' type_ref: Type ';' }
+
+// Visibility modifier: pub, pub(crate), pub(super), pub(in path)
+visibility   = { 'pub' ('(' ( 'crate' / 'super' / 'in' Path ) ')')? }
+
+// Generic parameters: <T, U: Bound, 'a>
+GenericParams = { '<' generic: GenericParam+ '>' }
+GenericParam  = { name: Ident (':' bounds: BoundList)? }
+BoundList     = { bound: Type ('+' bound: Type)* }
+
+// Parameter list: (name: Type, ...)
+ParamList    = { '(' param: Param* ')' }
+Param        = { name: Ident ':' type_ref: Type }
+
+// Field in a struct: name: Type
+Field        = { visibility?, name: Ident ':' type_ref: Type ','? }
+FieldType    = { type_ref: Type ','? }
+
+// Enum variant: Name | Name { fields } | Name ( tuple )
+EnumVariant  = {
+    name: Ident,
+    body?: ( '{' field: Field* '}' / '(' field: FieldType* ')' )?,
+    ','?
+}
+
+// Block: { statements }
+Block        = { '{' stmt: Stmt* '}' }
+
+// Statement: expression statement or let binding
+Stmt         = { LetBinding / ExprStmt }
+LetBinding   = { 'let' mut?: 'mut'? name: Ident '=' value: Expr ';' }
+ExprStmt     = { expr: Expr ';' }
+
+// Expression (simplified — covers common structural patterns)
+Expr         = { Call / MethodCall / StructLit / IfExpr / MatchExpr / Literal / PathExpr / BlockExpr }
+
+// Function call: name(args)
+Call         = { name: Ident '(' arg: Arg* ')' }
+
+// Method call: receiver.method(args)
+MethodCall   = { receiver: Expr '.' name: Ident '(' arg: Arg* ')' }
+
+// Struct literal: Name { field: value, ... }
+StructLit    = { name: Ident '{' field_assign: FieldAssign* '}' }
+FieldAssign  = { name: Ident ':' value: Expr ','? }
+
+// If expression: if cond { then } else { else_ }?
+IfExpr       = { 'if' cond: Expr then_block: Block ('else' else_block: (Block / IfExpr))? }
+
+// Match expression: match scrutinee { Pattern => expr, ... }
+MatchExpr    = { 'match' scrutinee: Expr '{' arm: MatchArm* '}' }
+MatchArm     = { pattern: PathExpr '=>' body: Expr ','? }
+
+// Literal values
+Literal      = { IntLit / FloatLit / StrLit / CharLit / BoolLit }
+
+// Path expression: ident or path::to::ident
+PathExpr     = { Path }
+
+// Block expression: { ... } (as an expression)
+BlockExpr    = { Block }
+
+// Argument in a call expression
+Arg          = { expr: Expr ','? }
+
+// Type reference
+Type         = { Ident / Path / ReferenceType / TupleType / SliceType }
+ReferenceType = { '&' lifetime?: Ident Type }
+TupleType     = { '(' type_ref: Type* ')' }
+SliceType     = { '[' type_ref: Type ']' }
+
+// Path: ident or path::ident
+Path         = { seg: Ident ('::' seg: Ident)* }
+
+// Lifetime (simplified)
+lifetime     = { '\' Ident }
+
+annotations {
+    FuncDef     { role: "definition", embed_fields: ["name", "params", "return_type"], class: "declaration" }
+    StructDef   { role: "definition", embed_fields: ["name"], class: "declaration" }
+    EnumDef     { role: "definition", embed_fields: ["name"], class: "declaration" }
+    ImplBlock   { role: "implementation", embed_fields: ["type_name"], class: "declaration" }
+    UseStmt     { role: "import", embed_fields: ["path"], class: "declaration" }
+    ModDecl     { role: "module", embed_fields: ["name"], class: "declaration" }
+    TypeAlias   { role: "definition", embed_fields: ["name"], class: "declaration" }
+    Call        { role: "expression", embed_fields: ["name", "arg"], class: "invocation" }
+    MethodCall  { role: "expression", embed_fields: ["receiver", "name", "arg"], class: "invocation" }
+    StructLit   { role: "expression", embed_fields: ["name"], class: "construction" }
+    IfExpr      { role: "control_flow", embed_fields: ["cond", "then_block"], class: "conditional" }
+    MatchExpr   { role: "control_flow", embed_fields: ["scrutinee"], class: "conditional" }
+}
