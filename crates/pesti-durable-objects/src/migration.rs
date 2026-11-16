@@ -42,7 +42,7 @@ pub fn migrate_snapshot(
     from_version: u32,
     to_version: u32,
 ) -> Result<serde_json::Value, MigrationError> {
-    let mut current = data;
+    let current = data;
 
     for version in from_version..to_version {
         match version {

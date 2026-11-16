@@ -3,10 +3,10 @@
 //! Mirrors herdr's session snapshot architecture: capture state into serializable
 //! structs, save to disk, restore on startup. Versioned format with migration support.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::io;
 
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::fs;
 use thiserror::Error;
 

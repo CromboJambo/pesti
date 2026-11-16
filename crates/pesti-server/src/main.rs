@@ -14,12 +14,10 @@ use axum::routing::{get, post};
 use axum::Router;
 use chrono::Utc;
 use pesti_runner::llama::{LlamaChatMessage, LlamaRunner, SamplingConfig};
-use std::ffi::CString;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tokio_stream::StreamExt;
 use tracing_subscriber::{EnvFilter, fmt};
 use uuid::Uuid;
 
@@ -71,29 +69,6 @@ struct Usage {
     prompt_tokens: i32,
     completion_tokens: i32,
     total_tokens: i32,
-}
-
-// Streaming chunk types
-#[derive(Debug, Serialize)]
-struct ChatCompletionChunk {
-    id: String,
-    object: String,
-    created: i64,
-    model: String,
-    choices: Vec<ChatChoiceChunk>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatChoiceChunk {
-    index: usize,
-    delta: Option<DeltaContent>,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct DeltaContent {
-    role: Option<String>,
-    content: Option<String>,
 }
 
 // Model management types
@@ -245,7 +220,7 @@ async fn load_model_handler(
         filename
     });
 
-    let (slot, path) = app.get_or_load_model(&model_id, &req.model_path).await?;
+    let (_slot, path) = app.get_or_load_model(&model_id, &req.model_path).await?;
 
     Ok(Json(ModelStatus {
         id: model_id,
@@ -320,8 +295,8 @@ async fn chat_completions(
                 let generation_result = runner.generate(&prompt, &sampling);
 
                 // Now create stream with the result
-                let id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
-                let created = Utc::now().timestamp();
+                let _id = format!("chatcmpl-{}", Uuid::new_v4().to_string().chars().take(8).collect::<String>());
+                let _created = Utc::now().timestamp();
                 let model_id_clone = model_id.clone();
 
                 match generation_result {
@@ -418,7 +393,7 @@ async fn health_check() -> Json<serde_json::Value> {
 
 #[tokio::main]
 async fn main() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+    let _filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info")
             .add_directive("pesti_server=debug".parse().unwrap())
             .add_directive("axum=info".parse().unwrap())

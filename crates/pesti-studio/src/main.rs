@@ -4,7 +4,7 @@
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
-use pesti_runner::llama::{LlamaRunner, ModelInfo};
+use pesti_runner::llama::LlamaRunner;
 use std::time::Instant;
 
 mod benchmark;

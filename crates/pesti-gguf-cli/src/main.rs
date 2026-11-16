@@ -63,9 +63,8 @@ fn main() {
 }
 
 fn dump_json(header: &pesti_gguf::GgufHeader) {
-    let mut out = serde_json::Map::new();
-    match serde_json::to_value(header) {
-        Ok(serde_json::Value::Object(map)) => out = map,
+    let mut out = match serde_json::to_value(header) {
+        Ok(serde_json::Value::Object(map)) => map,
         Ok(_) => {
             eprintln!("error: header serialized to non-object value");
             std::process::exit(1);
@@ -74,7 +73,7 @@ fn dump_json(header: &pesti_gguf::GgufHeader) {
             eprintln!("error: failed to serialize header: {e}");
             std::process::exit(1);
         }
-    }
+    };
 
     let stored: Vec<serde_json::Value> = header
         .tensors
