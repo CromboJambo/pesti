@@ -41,15 +41,17 @@ EnumDef      = {
     '{' variant: EnumVariant* '}'
 }
 
-// Impl block: impl<generics> Trait for Type { methods }
+// Impl block: impl Type { methods } or impl Trait for Type { methods }
 ImplBlock    = {
     'impl',
     (generics: GenericParams)?,
-    (trait_path: Path)?,
-    'for'?,
+    (trait_path: Path 'for')?,
     type_name: Type,
-    body: Block
+    body: ImplBody
 }
+
+// Impl body contains method definitions (not statements).
+ImplBody     = { '{' method: FuncDef* '}' }
 
 // Use statement: use path::to::{item1, item2};
 UseStmt      = { 'use' path: Path ';' }
@@ -69,7 +71,7 @@ GenericParam  = { name: Ident (':' bounds: BoundList)? }
 BoundList     = { bound: Type ('+' bound: Type)* }
 
 // Parameter list: (name: Type, ...)
-ParamList    = { '(' param: Param* ')' }
+ParamList    = { '(' param: Param? (',' param: Param)* ')' }
 Param        = { name: Ident ':' type_ref: Type }
 
 // Field in a struct: name: Type
@@ -83,8 +85,8 @@ EnumVariant  = {
     ','?
 }
 
-// Block: { statements }
-Block        = { '{' stmt: Stmt* '}' }
+// Block: { statements... [optional trailing expr without semicolon] }
+Block        = { '{' stmt: Stmt* (tail_expr: Expr)? '}' }
 
 // Statement: expression statement or let binding
 Stmt         = { LetBinding / ExprStmt }
@@ -93,7 +95,13 @@ ExprStmt     = { expr: Expr ';' }
 
 // Expression (simplified — covers common structural patterns)
 // Note: MethodCall is separated to avoid left recursion through Expr.
-Expr         = { Call / StructLit / IfExpr / MatchExpr / Literal / PathExpr / BlockExpr / MethodCall }
+Expr         = { PathCall / MacroCall / Call / StructLit / IfExpr / MatchExpr / Literal / PathExpr / BlockExpr / MethodCall }
+
+// Path call: path::to::name(args) — e.g., Point::new(1.0, 2.0) or println!(...)
+PathCall     = { name: Path '(' arg: Arg* ')' }
+
+// Macro call: name!(args) — e.g., println!("hello")
+MacroCall    = { name: Ident '!' '(' arg: Arg* ')' }
 
 // Function call: name(args)
 Call         = { name: Ident '(' arg: Arg* ')' }
@@ -105,9 +113,9 @@ MethodCall   = { receiver: PrimaryExpr '.' name: Ident '(' arg: Arg* ')' }
 // Primary expressions: the base cases that don't start with another expression.
 PrimaryExpr  = { Call / StructLit / Literal / PathExpr / BlockExpr }
 
-// Struct literal: Name { field: value, ... }
+// Struct literal: Name { field: value, ... } or Name { field, ... } (shorthand)
 StructLit    = { name: Ident '{' field_assign: FieldAssign* '}' }
-FieldAssign  = { name: Ident ':' value: Expr ','? }
+FieldAssign  = { name: Ident (':' value: Expr)? ','? }
 
 // If expression: if cond { then } else { else_ }?
 IfExpr       = { 'if' cond: Expr then_block: Block ('else' else_block: (Block / IfExpr))? }
@@ -128,8 +136,9 @@ BlockExpr    = { Block }
 // Argument in a call expression
 Arg          = { expr: Expr ','? }
 
-// Type reference
-Type         = { Ident / Path / ReferenceType / TupleType / SliceType }
+// Type reference. Note: some types are keywords in Rust (Self, str, etc.)
+// so we accept both Ident and specific keyword literals here.
+Type         = { Ident / 'Self' / Path / ReferenceType / TupleType / SliceType }
 ReferenceType = { '&' (lifetime: lifetime)? type_ref: Type }
 TupleType     = { '(' type_ref: Type* ')' }
 SliceType     = { '[' type_ref: Type ']' }

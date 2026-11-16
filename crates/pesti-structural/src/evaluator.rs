@@ -81,6 +81,7 @@ pub struct PegEvaluator<'a> {
 
 impl<'a> PegEvaluator<'a> {
     /// Create a new evaluator for the given grammar and token stream.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn new(grammar: &'a StructuralGrammar, tokens: &'a [Token]) -> Self {
         Self { grammar, tokens }
     }
@@ -190,7 +191,7 @@ impl<'a> PegEvaluator<'a> {
                     current_pos = new_pos;
                 }
                 Err(mut e) => {
-                    expected.extend(e.drain(..));
+                    expected.append(&mut e);
                     // In a sequence, if any item fails, the whole sequence fails.
                     // But we continue to collect what was expected for better errors.
                     break;
@@ -224,7 +225,7 @@ impl<'a> PegEvaluator<'a> {
             match self.match_expr(alt, pos) {
                 Ok(result) => return Ok(result),
                 Err(mut e) => {
-                    all_expected.extend(e.drain(..));
+                    all_expected.append(&mut e);
                     // Try the next alternative.
                 }
             }
@@ -235,15 +236,15 @@ impl<'a> PegEvaluator<'a> {
 
     /// Match an optional expression (succeeds even if the inner fails).
     fn match_optional(&self, inner: &Expr, pos: usize) -> MatchResult {
-        match self.match_expr(inner, pos) {
-            Ok(result) => Ok(result),
-            Err(_) => {
-                // Optional: return an empty node at the current position.
-                let span = Span::new(pos, pos);
-                let node = TreeNode::terminal("optional(empty)", span);
-                Ok((node, pos))
-            }
-        }
+        self.match_expr(inner, pos).map_or_else(
+            |_| {
+                Ok((
+                    TreeNode::terminal("optional(empty)", Span::new(pos, pos)),
+                    pos,
+                ))
+            },
+            Ok,
+        )
     }
 
     /// Match a repeat expression (zero or more times).
@@ -309,7 +310,7 @@ impl<'a> PegEvaluator<'a> {
         // Create a parent node that holds the capture.
         let span = child.span;
         let node = TreeNode::internal(format!("capture:{}", name), span, vec![])
-            .with_capture(name.to_string(), child.clone());
+            .with_capture(name.to_string(), child);
         Ok((node, new_pos))
     }
 }
