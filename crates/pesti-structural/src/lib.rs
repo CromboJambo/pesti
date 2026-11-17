@@ -39,7 +39,7 @@ pub mod validate;
 pub use evaluator::{ParseResult, PegEvaluator, Token};
 pub use expr::Expr;
 pub use grammar::{Nonterminal, RuleAnnotation, StructuralGrammar, TerminalKind};
-pub use lexer::{LexError, RustLexer, tokenize_rust};
+pub use lexer::{LexError, PythonLexer, RustLexer, tokenize_for_language, tokenize_python, tokenize_rust};
 pub use parser::{ParseError, parse_peg, parse_peg_file};
 pub use tree::{Span, TreeNode};
 pub use validate::{ValidationError, ValidationResult, validate};

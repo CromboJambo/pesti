@@ -1,0 +1,162 @@
+// python.peg — Structural grammar for Python source code
+//
+// This grammar operates on terminal kinds from a Python lexer, not raw characters.
+// It captures the top-level structural constructs needed for embedding features:
+// functions, classes, imports, and assignments.
+//
+// Design: sequential top-level parsing with error recovery for unparseable regions.
+// Indentation is NOT tracked (the lexer doesn't track it) — block boundaries are
+// inferred from keyword structure.
+
+grammar python_structural;
+
+// Entry point: a source file contains zero or more top-level items.
+SourceFile   = { item: TopLevelItem* }
+
+// A top-level item: optionally decorated class, function, import, assignment, or expression.
+TopLevelItem = { Decorator* (ClassDef / FunctionDef / ImportStmt / AssignmentStmt / ExpressionStmt) }
+
+// Decorator: @name or @name(args)
+Decorator    = { '@' name: Identifier ('(' args: ArgList? ')')? }
+
+// Class definition: class Name(Base1, Base2): body
+ClassDef     = { 'class', name: Identifier bases: BaseList? ':' body: Block }
+BaseList     = { '(' base: PathExpr (',' base: PathExpr)* ')' }
+
+// Function/Method definition: [async] def name(params) -> ret: body
+FunctionDef  = { 'async'? 'def', name: Identifier params: ParamList ret: ReturnType? ':' body: Block }
+ParamList    = { '(' param: Param* (',' param: Param)? ')' / '(' ')' }
+Param        = { '**'? '*'? name: Identifier ann: TypeAnnotation? default: DefaultArg? }
+ReturnType   = { '->' ty: TypeExpr }
+DefaultArg   = { '=' expr: Expr }
+
+// Imports
+ImportStmt   = { FromImport / SimpleImport }
+FromImport   = { 'from', module: PathExpr, 'import', names: ImportNames }
+SimpleImport = { 'import', module: PathExpr ('as' alias: Identifier)? }
+ImportNames  = { name: ImportName (',' name: ImportName)* ','? }
+ImportName   = { name: Identifier ('as' alias: Identifier)? }
+
+// Assignment: target: Type = value or target = value
+AssignmentStmt = { target: PathExpr ann: TypeAnnotation? '=' value: Expr }
+
+// Blocks: consume statements until a keyword that starts a new construct.
+// Since we don't track indentation, blocks are delimited by dedent keywords
+// (elif, else, except, finally) or the next top-level construct.
+Block        = { stmt: BlockStmt* }
+BlockStmt    = { FunctionDef / ClassDef / IfStmt / ForStmt / WhileStmt / TryStmt / WithStmt / ReturnStmt / AssignmentStmt / ExpressionStmt / PassStmt }
+
+// Control flow
+IfStmt       = { 'if', cond: Expr, ':', body: Block elifs: ElifClause* else_clause: ElseClause? }
+ElifClause   = { 'elif', cond: Expr, ':', body: Block }
+ElseClause   = { 'else', ':', body: Block }
+
+ForStmt      = { 'for', target: ForTarget, 'in', iter_expr: Expr, ':', body: Block else_clause: ElseClause? }
+ForTarget    = { name: Identifier (',' name: Identifier)* ','? }
+
+WhileStmt    = { 'while', cond: Expr, ':', body: Block else_clause: ElseClause? }
+
+TryStmt      = { 'try', ':', body: Block excepts: ExceptClause* else_clause: ElseClause? finally_clause: FinallyClause? }
+ExceptClause = { 'except', exc: TypeExpr? ('as' name: Identifier)? ':', body: Block }
+FinallyClause = { 'finally', ':', body: Block }
+
+WithStmt     = { 'with', items: WithItem+ ':', body: Block }
+WithItem     = { expr: Expr ('as' name: Identifier)? ','? }
+
+// Statements
+ReturnStmt   = { 'return', value: Expr? }
+PassStmt     = { 'pass' }
+
+ExpressionStmt = { expr: Expr }
+
+// Expressions (ordered by specificity — PEG first-match-wins)
+Expr         = { Lambda / Ternary / OrExpr }
+Lambda       = { 'lambda' params: ParamList ':' body: Expr }
+Ternary      = { true_val: OrExpr 'if' cond: OrExpr 'else' false_val: OrExpr }
+OrExpr       = { left: AndExpr ('or' right: AndExpr)* }
+AndExpr      = { left: NotExpr ('and' right: NotExpr)* }
+NotExpr      = { 'not'? expr: CompareExpr }
+
+CompareExpr  = { left: AddExpr (op: CompareOp right: AddExpr)* }
+AddExpr      = { left: MulExpr (op: AddOp right: MulExpr)* }
+MulExpr      = { left: UnaryExpr (op: MulOp right: UnaryExpr)* }
+UnaryExpr    = { op: ('-' / '+')* expr: PostfixExpr }
+
+PostfixExpr  = { base: PrimaryExpr postfix: PostfixOp* }
+PostfixOp    = { Call / Subscript / Attribute }
+Call         = { '(' args: ArgList? ')' }
+Subscript    = { '[' index: SliceExpr ']' }
+Attribute    = { '.' name: Identifier }
+
+ArgList      = { arg: Arg (',' arg: Arg)* ','? }
+Arg          = { keyword: Identifier '=' value: Expr / '*' expr: Expr / '**' expr: Expr / expr: Expr }
+
+SliceExpr    = { SliceRange / Expr }
+SliceRange   = { start: Expr? ':' end: Expr? (':' step: Expr)? }
+
+PrimaryExpr  = { Literal / PathExpr / GroupedExpr / ListLit / DictLit / SetLit / TupleLit / Comprehension / AwaitExpr / YieldExpr }
+Literal      = { StringLit / NumberLit / BoolLit / NoneLit }
+StringLit    = { s: StrLit }
+NumberLit    = { n: (IntLit / FloatLit) }
+BoolLit      = { b: ('True' / 'False') }
+NoneLit      = { n: 'None' }
+
+GroupedExpr  = { '(' expr: Expr ')' }
+ListLit      = { '[' elem: ListElem? ']' }
+ListElem     = { '*' expr: Expr / expr: Expr (',' elem: ListElem)* ','? }
+DictLit      = { '{' pair: DictPair? '}' }
+DictPair     = { key: Expr ':' value: Expr (',' pair: DictPair)* ','? }
+SetLit       = { '{' elem: SetElem? '}' }
+SetElem      = { expr: Expr (',' elem: SetElem)* ','? }
+TupleLit     = { '(' elem: TupleElem? ')' }
+TupleElem    = { '*' expr: Expr / expr: Expr (',' elem: TupleElem)* ','? }
+
+Comprehension = { ListComp / DictComp / SetComp / GeneratorExpr }
+ListComp     = { '[' element: Expr for_clause: ForClause+ ']' }
+DictComp     = { '{' key: Expr ':' value: Expr for_clause: ForClause+ '}' }
+SetComp      = { '{' element: Expr for_clause: ForClause+ '}' }
+GeneratorExpr = { '(' element: Expr for_clause: ForClause+ ')' }
+ForClause    = { 'for', target: ForTarget, 'in', iter_expr: Expr if_cond: IfFilter? }
+IfFilter     = { 'if' cond: Expr }
+
+AwaitExpr    = { 'await' expr: PostfixExpr }
+YieldExpr    = { 'yield' ('from' expr: Expr / expr: Expr?)? }
+
+// Types (for annotations)
+TypeExpr     = { TypeUnion / TypeBase }
+TypeUnion    = { left: TypeBase ('|' right: TypeBase)* }
+TypeBase     = { PathExpr / GenericType / CallableType / TypeLiteral }
+GenericType  = { path: PathExpr '[' args: TypeArgList? ']' }
+TypeArgList  = { arg: TypeExpr (',' arg: TypeExpr)* ','? }
+CallableType = { 'Callable' '(' params: TypeParamList? ')' '->' ret: TypeExpr }
+TypeParamList = { param: TypeParam (',' param: TypeParam)* ','? }
+TypeParam    = { name: Identifier ':' ty: TypeExpr }
+TypeLiteral  = { lit: ('None' / 'True' / 'False') }
+
+PathExpr     = { PathDotted }
+PathDotted   = { first: PathSeg rest: PathRest* }
+PathSeg      = { Identifier }
+PathRest     = { '.' seg: Identifier }
+
+TypeAnnotation = { ':' ty: TypeExpr }
+
+// Operators (for feature extraction)
+CompareOp    = { '==' / '!=' / '<' / '>' / '<=' / '>=' / 'in' / 'is' }
+AddOp        = { '+' / '-' }
+MulOp        = { '*' / '/' / '**' / '%' / '@' / '//' }
+
+// Identifier: matches any Ident token from the lexer.
+Identifier   = { i: Ident }
+
+annotations {
+    ClassDef      { role: "definition", embed_fields: ["name"], class: "declaration" }
+    FunctionDef   { role: "definition", embed_fields: ["name", "params", "ret"], class: "declaration" }
+    ImportStmt    { role: "import", embed_fields: ["module", "names"], class: "declaration" }
+    Call          { role: "expression", embed_fields: ["args"], class: "invocation" }
+    Attribute     { role: "expression", embed_fields: ["name"], class: "access" }
+    IfStmt        { role: "control_flow", embed_fields: ["cond"], class: "conditional" }
+    ForStmt       { role: "control_flow", embed_fields: ["target", "iter_expr"], class: "loop" }
+    WhileStmt     { role: "control_flow", embed_fields: ["cond"], class: "loop" }
+    TryStmt       { role: "error_handling", embed_fields: [], class: "exception" }
+    WithStmt      { role: "resource_management", embed_fields: [], class: "context" }
+}

@@ -132,6 +132,7 @@ fn main() -> Result<()> {
     } else {
         let mut peg_embedder = StructuralEmbedder::new(StructuralConfig {
             grammar_path: grammar_path.to_string(),
+            language: None,
             text_weight: 0.5,
             struct_weight: 0.5,
         });

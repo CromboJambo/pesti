@@ -30,8 +30,30 @@ impl Span {
     }
 
     /// Extract the matched text from the source.
+    /// Safe for spans that don't align with UTF-8 character boundaries —
+    /// adjusts indices to the nearest valid boundary.
     pub fn text<'a>(&self, source: &'a str) -> &'a str {
-        &source[self.start..self.end]
+        let start = if self.start <= source.len() && source.is_char_boundary(self.start) {
+            self.start
+        } else {
+            // Advance to the next valid char boundary
+            (self.start.min(source.len())..=source.len())
+                .find(|&i| source.is_char_boundary(i))
+                .unwrap_or(source.len())
+        };
+        let end = if self.end <= source.len() && source.is_char_boundary(self.end) {
+            self.end
+        } else {
+            // Advance to the next valid char boundary
+            (self.end.min(source.len())..=source.len())
+                .find(|&i| source.is_char_boundary(i))
+                .unwrap_or(source.len())
+        };
+        if start >= end || start > source.len() || end > source.len() {
+            ""
+        } else {
+            &source[start..end]
+        }
     }
 
     /// Merge two spans into one covering both.

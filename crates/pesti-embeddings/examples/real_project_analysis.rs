@@ -25,14 +25,19 @@ struct FileStats {
     roles: HashMap<String, usize>,
 }
 
-fn find_rust_files(dir: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+fn find_source_files(dir: &Path, recursive: bool, language: &str) -> Result<Vec<PathBuf>> {
+    let ext = match language {
+        "python" | "py" => "py",
+        "typescript" | "ts" => "ts",
+        _ => "rs",
+    };
     let mut files = Vec::new();
-    collect_rust_files(dir, &mut files, recursive)?;
+    collect_files(dir, &mut files, recursive, ext)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>, recursive: bool) -> Result<()> {
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>, recursive: bool, ext: &str) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -43,9 +48,9 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>, recursive: bool) -> Re
                 continue;
             }
             if recursive {
-                collect_rust_files(&path, out, recursive)?;
+                collect_files(&path, out, recursive, ext)?;
             }
-        } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+        } else if path.extension().map(|e| e == ext).unwrap_or(false) {
             out.push(path);
         }
     }
@@ -98,26 +103,35 @@ fn analyze_file(embedder: &mut StructuralEmbedder, path: &Path) -> FileStats {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <path> [--recursive]", args[0]);
+        eprintln!("Usage: {} <path> [--recursive] [--language rust|python|typescript]", args[0]);
         std::process::exit(1);
     }
 
     let target_path = PathBuf::from(&args[1]);
     let recursive = args.iter().any(|a| a == "--recursive");
+    let language = if let Some(pos) = args.iter().position(|a| a == "--language") {
+        args.get(pos + 1).cloned().unwrap_or_else(|| "rust".to_string())
+    } else {
+        "rust".to_string()
+    };
 
     if !target_path.exists() {
         anyhow::bail!("Path does not exist: {}", target_path.display());
     }
 
-    // Initialize embedder with default grammar
-    let config = StructuralConfig::default();
+    // Initialize embedder with language-specific grammar
+    let config = StructuralConfig {
+        grammar_path: format!("crates/pesti-structural/grammars/{}.peg", language),
+        language: Some(language.clone()),
+        ..Default::default()
+    };
     let mut embedder = StructuralEmbedder::new(config);
 
-    // Find Rust files
+    // Find source files for the specified language
     let files = if target_path.is_file() {
         vec![target_path.clone()]
     } else {
-        find_rust_files(&target_path, recursive)?
+        find_source_files(&target_path, recursive, &language)?
     };
 
     println!("=== Real Project Structural Analysis ===");
