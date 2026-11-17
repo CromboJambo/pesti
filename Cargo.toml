@@ -6,6 +6,7 @@ members = [
     "crates/pesti-runner",
     "crates/llm-plug-in",
     "crates/pesti-safetensors",
+    "crates/pesti-gguf",
     "crates/pesti-gguf-cli",
     "crates/pesti-mcp-server",
     "crates/pesti-server",
@@ -39,7 +40,7 @@ description = "Portable Execution Substrate for Transformer Inference"
 
 [workspace.dependencies]
 # GGUF parser
-pesti-gguf = { path = "crates/pesti-gguf-standalone" }
+pesti-gguf = { path = "crates/pesti-gguf" }
 pesti-structural-tokenizer = { path = "crates/pesti-structural-tokenizer" }
 # Plugin system (llm-plug-in package)
 pesti-plug-in = { path = "crates/llm-plug-in" }

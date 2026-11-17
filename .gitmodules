@@ -1,3 +1,0 @@
-[submodule "crates/pesti-gguf-standalone"]
-	path = crates/pesti-gguf-standalone
-	url = https://github.com/CromboJambo/pesti-gguf

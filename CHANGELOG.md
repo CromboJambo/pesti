@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Week 30 (In Progress)
 
+### pesti-gguf: 0.2.5 Release Prep 🧰
+
+**Status**: ✅ Release prep complete — crate vendored into workspace, CLI + defensive tests landed, bench gate green
+
+**Key results:**
+- Standalone crate vendored into the PESTI workspace at `crates/pesti-gguf` (removed the `crates/pesti-gguf-standalone` submodule, repointed the workspace `pesti-gguf` path dependency)
+- `cli` feature + `gguf-inspect` binary added (tensors-only, `--extract`, `--json`)
+- Defensive test suite: overflow / allocation-bomb / truncation / UTF-8 / unknown-type protection
+
+**Testing:** full suite 55 passed / 0 failed / 6 ignored; comprehensive + detailed benches exit 0
+
 ### pesti-structural + pesti-embeddings: Structural PEG Embeddings Pipeline 🧩
 **Status**: ✅ Phases 1–4 complete (Rust grammar production-ready)
 

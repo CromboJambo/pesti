@@ -286,11 +286,11 @@ pesti/
 │   │   ├── dequantize.rs  #   pure-Rust K-family dequantization
 │   │   └── gguf_weight_loader.rs
 │   └── examples/          #   cpu_e2e_generate, dump_all_layers, ...
-├── pesti-gguf/            # GGUF parser crate (workspace member)
-├── pesti-safetensors/     # Safetensors crate (workspace member)
-├── llm-plug-in/           # llama.cpp FFI runner (workspace member)
-├── pesti-gguf-cli/        # GGUF CLI (workspace member)
 ├── crates/
+│   ├── pesti-gguf/        # GGUF parser crate (workspace member, v0.2.5)
+│   ├── pesti-gguf-cli/    # GGUF CLI binary crate (workspace member, `cli` feature)
+│   ├── pesti-safetensors/ # Safetensors crate (workspace member)
+│   ├── llm-plug-in/       # llama.cpp FFI runner (workspace member)
 │   ├── qwen2-bpe/         # Optional pure-Rust Qwen2 BPE tokenizer
 │   └── pesti-structural-tokenizer/  # AST-based Rust code tokenizer (published to crates.io)
 ├── conformance-corpus/    # numpy oracle + diff tools + canonical Q4_K_M model

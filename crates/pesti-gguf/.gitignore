@@ -1,0 +1,18 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Documentation
+doc/
+
+# Cargo lock (optional, but good to track)
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test files
+conformance-corpus/*.gguf
+references/
