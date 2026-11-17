@@ -428,6 +428,21 @@ Writing complete grammars for real languages is hard. Strategy:
 - Match expression annotation in Rust grammar
 - Full embedding-quality comparison against text-only model embeddings (requires model inference setup)
 
+### Consumer: crabjar code-audit (Integrated 2026-11-17)
+
+pesti-structural is now used by crabjar's `code-audit` crate for structural vulnerability
+detection. The `PegStructuralAnalyzer` loads Rust and Python grammars from this crate's
+`grammars/` directory, parses source files with `parse_with_recovery()`, and traverses the
+resulting trees to detect 7 vulnerability patterns (unsafe blocks, excessive params, deep
+nesting, raw pointers, eval/exec, SQL injection, shell injection).
+
+**Integration notes for grammar authors:**
+- The analyzer uses `parse_with_recovery()` — grammars don't need to be 100% complete
+- Rule names are matched directly (`FuncDef`, `Block`, `ImplBody`, etc.) — keep PascalCase
+- Vulnerability rules check both the rule name and the captured text content
+- Grammar improvements (e.g., handling `unsafe fn`, multi-param capture) directly improve
+  detection quality in code-audit
+
 ### Phase 5: Additional Languages (Deferred — pending use cases)
 
 **Status:** Planned, not started. Each language is triggered by a real workload requiring structural embeddings in that language.
