@@ -1,8 +1,8 @@
 # PESTI Structural Grammar & PEG Tokenizer Format
 
-**Status:** Complete (Rust) — implementation diverges from draft architecture where noted
+**Status:** Complete (Rust + Python) — implementation diverges from draft architecture where noted
 **Date:** 2026-11-15
-**Last Updated:** 2026-11-16 (Phase 4 complete, Rust grammar production-ready)
+**Last Updated:** 2026-11-16 (Phases 1–4 complete, Rust + Python grammars production-ready)
 **Author:** crombo (with Hermes)
 
 ## Overview
@@ -425,9 +425,27 @@ Writing complete grammars for real languages is hard. Strategy:
 - Known gap: `match` expressions not yet annotated in the grammar
 
 **Pending (follow-up items):**
-- Python grammar (`python.peg`)
 - Match expression annotation in Rust grammar
 - Full embedding-quality comparison against text-only model embeddings (requires model inference setup)
+
+### Phase 5: Additional Languages (Deferred — pending use cases)
+
+**Status:** Planned, not started. Each language is triggered by a real workload requiring structural embeddings in that language.
+
+| Language | Trigger | Priority | Notes |
+|----------|---------|----------|-------|
+| TypeScript | Real TS codebase needing structural search/embeddings | Medium | Shares expression patterns with Rust; lexer needs semicolon/bracket handling, type annotations, generics |
+| Go | Real Go service codebase in scope | Low-Medium | Simpler syntax (no generics until 1.18, no classes); packages/interfaces instead of modules/classes |
+| C++ | Real C++ codebase needing structural analysis | Low | Highest complexity: templates, macros, multiple inheritance, operator overloading. Requires preprocessor awareness |
+
+**Implementation pattern per language:**
+1. Create `<lang>.peg` grammar (follow Rust/Python structure)
+2. Add lexer support in `tokenize_for_language()` dispatch
+3. Validate on real code corpus (target: 95%+ parse rate with error recovery)
+4. Add similarity validation test (similar vs different constructs)
+5. Commit as single logical unit
+
+**No language should be added without a concrete use case.** The grammar is infrastructure — it earns its place by enabling something specific, not by completeness.
 
 ## Dependencies
 
