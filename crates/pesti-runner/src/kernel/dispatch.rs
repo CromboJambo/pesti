@@ -382,6 +382,11 @@ impl DispatchContext {
         self.engine.gemm_arch()
     }
 
+    /// Get a reference to the kernel selector for dispatch decisions.
+    pub fn kernel_selector(&self) -> &crate::kernel::selector::KernelSelector {
+        &self.kernel_selector
+    }
+
     // ── Core dispatch: GEMM ──────────────────────────────────────────────
 
     /// Dispatch a GEMM operation: C = alpha * A @ B + beta * C.
@@ -406,14 +411,25 @@ impl DispatchContext {
         alpha: f32,
         beta: f32,
     ) -> Result<Vec<f32>, DispatchError> {
+        use crate::kernel::selector::{ComputeArch, KernelDType, KernelId, KernelRequest};
         use crate::profiler;
 
         let c_len = m * n;
 
-        // If GPU not preferred or unavailable, use CPU directly
-        if !self.prefer_gpu || !self.gpu_available() {
-            debug!(m, n, k, "GEMM dispatch: GPU not available, using CPU");
-            return self.dispatch_gemm_cpu(a_host, b_host, c_init, m, n, k, alpha, beta);
+        // Selector-based dispatch: decide GPU vs CPU via the kernel registry.
+        let arch = if self.prefer_gpu && self.gpu_available() {
+            ComputeArch::Cuda { sm: self.cuda_sm() }
+        } else {
+            ComputeArch::Cpu
+        };
+
+        let req = KernelRequest::gemm(arch, KernelDType::F16, m, n, k);
+        let selected = self.kernel_selector.select_ref(&req);
+        debug!(m, n, k, selected = %selected, "GEMM: kernel selected");
+
+        match selected {
+            KernelId::CudaDirectHgemm | KernelId::CudaCublasHgemm => {} // GPU path below
+            _ => return self.dispatch_gemm_cpu(a_host, b_host, c_init, m, n, k, alpha, beta),
         }
 
         // GPU path: allocate device buffers
@@ -1128,25 +1144,35 @@ impl AttentionDispatch {
         let k = self.wk.forward(ctx, x, batch_size)?;
         let v = self.wv.forward(ctx, x, batch_size)?;
 
-        // GPU-accelerated path when available.
-        //
-        // NOTE: this routes through `candle_bridge`, which only runs on a real
-        // CUDA device when candle-core is built with its `cuda` feature. When
-        // the bridge falls back to CPU, the native CPU dispatch path below is
-        // used instead (it is correct and avoids the bridge's GQA shape bugs).
-        if ctx.gpu_available() && crate::kernel::candle_bridge::bridge_is_cuda() {
-            return self.forward_gpu(
-                ctx,
-                &q,
-                &k,
-                &v,
-                batch_size,
-                seq_len,
-                start_pos,
-                key_cache,
-                value_cache,
-                scale,
-            );
+        // Selector-based dispatch: decide GPU vs CPU attention via the kernel registry.
+        use crate::kernel::selector::{ComputeArch, KernelDType, KernelId, KernelRequest};
+
+        let arch = if ctx.gpu_available() {
+            ComputeArch::Cuda { sm: ctx.cuda_sm() }
+        } else {
+            ComputeArch::Cpu
+        };
+
+        let req = KernelRequest::attention(arch, KernelDType::F16, seq_len, start_pos);
+        let selected = ctx.kernel_selector().select_ref(&req);
+        debug!(seq_len, cache_len = start_pos, selected = %selected, "Attention: kernel selected");
+
+        match selected {
+            KernelId::CudaAttentionFused | KernelId::CudaAttentionDecodeFused => {
+                return self.forward_gpu(
+                    ctx,
+                    &q,
+                    &k,
+                    &v,
+                    batch_size,
+                    seq_len,
+                    start_pos,
+                    key_cache,
+                    value_cache,
+                    scale,
+                );
+            }
+            _ => {} // CPU path below
         }
 
         // CPU fallback: RoPE + manual SDPA
