@@ -1,0 +1,9 @@
+# Build configuration for pesti workspace
+#
+# llama-cpp-sys-2 vendors cpp-httplib which has a const-correctness issue
+# with OpenSSL 3.x (X509_NAME* conversion). -fpermissive downgrades this
+# from an error to a warning. This is a known upstream issue in older
+# versions of cpp-httplib vendored by llama.cpp.
+
+[env]
+CMAKE_CXX_FLAGS = "-fpermissive"
