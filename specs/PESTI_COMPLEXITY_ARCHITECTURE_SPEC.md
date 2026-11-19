@@ -381,11 +381,11 @@ pub struct CpuBackend { /* ... */ }
 ## §3 Acceptance Criteria
 
 ### Phase 1: KernelSelector
-- [ ] `crates/pesti-runner/src/kernel/selector.rs` exists with `KernelRequest`, `KernelId`, `OpKind`, `KernelSelector`, `KernelRegistry`, `KernelSpec`, `PerfClass`
-- [ ] `KernelRegistry::detect()` correctly identifies available kernels based on compiled features and runtime hardware
-- [ ] `KernelSelector::select()` returns correct kernel for all (arch, dtype, seq_len, batch) combinations — unit tests for each dimension
-- [ ] `KernelSelector` cache works: second call with same request is a HashMap lookup (verify with benchmark or test)
-- [ ] `dispatch_gemm`, `dispatch_linear`, `dispatch_attention` use `KernelSelector` instead of inline if/else chains
+- [x] `crates/pesti-runner/src/kernel/selector.rs` exists with `KernelRequest`, `KernelId`, `OpKind`, `KernelSelector`, `KernelRegistry`, `KernelSpec`, `PerfClass`
+- [x] `KernelRegistry::detect()` correctly identifies available kernels based on compiled features and runtime hardware
+- [x] `KernelSelector::select()` returns correct kernel for all (arch, dtype, seq_len, batch) combinations — unit tests for each dimension
+- [x] `KernelSelector` cache works: second call with same request is a HashMap lookup (verify with benchmark or test)
+- [x] `dispatch_gemm`, `dispatch_linear`, `dispatch_attention` use `KernelSelector` instead of inline if/else chains
 - [ ] No behavioral change: all existing tests pass, tok/s unchanged within measurement noise
 - [ ] Adding a new kernel to the registry requires zero changes to dispatch methods (verified by adding a test kernel)
 
