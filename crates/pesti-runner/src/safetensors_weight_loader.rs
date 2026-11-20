@@ -58,6 +58,34 @@ impl SafetensorsWeights {
             })
             .unwrap_or((0, 0))
     }
+
+    /// Try to get a tensor by multiple candidate names (GGUF-style first, then HF-style).
+    /// Returns the first match found.
+    pub fn try_get_tensor(&self, candidates: &[&str]) -> Option<&Vec<u8>> {
+        for name in candidates {
+            if let Some(data) = self.tensors.get(*name) {
+                return Some(data);
+            }
+        }
+        None
+    }
+
+    /// Check if any of the candidate tensor names exist.
+    pub fn has_tensor(&self, candidates: &[&str]) -> bool {
+        candidates.iter().any(|name| self.tensors.contains_key(*name))
+    }
+
+    /// Get the shape of a tensor by trying multiple candidate names.
+    pub fn try_tensor_shape(&self, candidates: &[&str]) -> Option<(usize, usize)> {
+        for name in candidates {
+            if let Some((shape, _, _)) = self.metadata.get(*name) {
+                if shape.len() >= 2 {
+                    return Some((shape[0], shape[1]));
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Load all tensors from a safetensors file into memory.

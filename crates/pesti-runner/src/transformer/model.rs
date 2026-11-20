@@ -298,6 +298,112 @@ impl LlamaConfig {
         })
     }
 
+    /// Build config from a HuggingFace config.json file.
+    ///
+    /// Reads standard HF config keys: architectures, model_type, hidden_size,
+    /// num_attention_heads, num_key_value_heads, num_hidden_layers,
+    /// intermediate_size, max_position_embeddings, rope_theta, rms_norm_eps.
+    pub fn from_hf_config_json(path: &std::path::Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| RunnerError::ModelLoad(format!("Failed to read config.json: {e}")))?;
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| RunnerError::ModelLoad(format!("Failed to parse config.json: {e}")))?;
+
+        // Determine architecture from architectures[] or model_type
+        let arch = json
+            .get("architectures")
+            .and_then(|a| a.as_array())
+            .and_then(|arr| arr.first())
+            .or_else(|| json.get("model_type"))
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                let lower = s.to_lowercase();
+                if lower.contains("qwen3") {
+                    ModelArch::Qwen3
+                } else if lower.contains("qwen2") {
+                    ModelArch::Qwen2
+                } else if lower.contains("gemma") {
+                    ModelArch::Gemma
+                } else if lower.contains("phi3") || lower.contains("phi-3") {
+                    ModelArch::Phi3
+                } else if lower.contains("mixtral") || lower.contains("mistral") {
+                    ModelArch::Mixtral
+                } else if lower.contains("starcoder2") {
+                    ModelArch::Starcoder2
+                } else {
+                    ModelArch::Llama
+                }
+            })
+            .unwrap_or(ModelArch::Llama);
+
+        let get_u64 = |key: &str| -> Option<u64> {
+            json.get(key).and_then(|v| v.as_u64())
+        };
+        let get_f32 = |key: &str| -> Option<f32> {
+            json.get(key).and_then(|v| v.as_f64()).map(|v| v as f32)
+        };
+
+        let embed_dim = get_u64("hidden_size")
+            .or_else(|| get_u64("dim"))
+            .map(|v| v as usize)
+            .ok_or_else(|| {
+                RunnerError::ModelLoad("config.json missing hidden_size".to_string())
+            })?;
+
+        let num_heads = get_u64("num_attention_heads")
+            .or_else(|| get_u64("n_heads"))
+            .map(|v| v as usize)
+            .unwrap_or(32);
+        let num_kv_heads = get_u64("num_key_value_heads")
+            .or_else(|| get_u64("n_heads_kv"))
+            .map(|v| v as usize)
+            .unwrap_or(num_heads);
+        let num_layers = get_u64("num_hidden_layers")
+            .or_else(|| get_u64("n_layers"))
+            .map(|v| v as usize)
+            .unwrap_or(32);
+        let head_dim = if num_heads > 0 { embed_dim / num_heads } else { 64 };
+        let intermediate_dim = get_u64("intermediate_size")
+            .or_else(|| get_u64("ffn_dim"))
+            .map(|v| v as usize)
+            .unwrap_or(embed_dim * 4);
+        let max_seq_len = get_u64("max_position_embeddings")
+            .or_else(|| get_u64("context_length"))
+            .map(|v| v as usize)
+            .unwrap_or(4096);
+        let rope_base = get_f32("rope_theta").unwrap_or(10000.0);
+        let rms_norm_eps = get_f32("rms_norm_eps")
+            .or_else(|| get_f32("layer_norm_epsilon"))
+            .unwrap_or(1e-5);
+
+        // Rope scaling (optional)
+        let rope_scaling_factor = json
+            .get("rope_scaling")
+            .and_then(|v| v.get("factor"))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32);
+        let rope_scaling_type = json
+            .get("rope_scaling")
+            .and_then(|v| v.get("type"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Ok(Self {
+            arch,
+            num_layers,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            embed_dim,
+            intermediate_dim,
+            max_seq_len,
+            rope_base,
+            rope_scaling_factor,
+            rope_scaling_type,
+            rms_norm_eps,
+        })
+    }
+
     /// Get the layer prefix for this architecture.
     pub fn layer_prefix(&self, layer_idx: usize) -> String {
         match self.arch {
@@ -707,28 +813,111 @@ impl LlamaModel {
         config: LlamaConfig,
     ) -> Result<Self> {
         let rope_config = RopeConfig::new(config.head_dim, config.rope_base, config.max_seq_len);
-        let vocab_size = config.embed_dim as u32; // default if not in metadata
 
-        // Load token embeddings — architecture-dependent name
-        let embedding_name = config.embedding_name();
-        let token_embeddings = weights
-            .tensors
-            .get(embedding_name)
-            .map(|tensor_data| Linear::from_f32_weight(tensor_data, None));
+        // Build candidate names for embedding (GGUF-style first, then HF-style)
+        let embedding_candidates: Vec<String> = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => vec![
+                "token_embd.weight".to_string(),           // GGUF-derived
+                "model.embed_tokens.weight".to_string(),   // HF standard
+            ],
+            ModelArch::Gemma => vec!["model.embed_tokens.weight".to_string()],
+            _ => vec!["tok_embeddings.weight".to_string()],
+        };
+        let embedding_refs: Vec<&str> = embedding_candidates.iter().map(|s| s.as_str()).collect();
 
-        // Load output (LM head) — architecture-dependent name
-        let output_name = config.output_name();
-        let output = weights.tensors.get(output_name).map(|tensor_data| {
-            // For Qwen2, output weight shape is [embed_dim, vocab_size] (transposed)
-            // Linear layer expects [vocab_size, embed_dim], so we need to transpose
-            // or interpret correctly. Here we set in_features=embed_dim, out_features=vocab_size
-            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                let embed_dim = config.embed_dim;
-                let vocab = vocab_size as usize;
-                Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim, vocab)
-            } else {
-                Linear::from_f32_weight(tensor_data, None)
+        // Derive vocab_size from the embedding tensor shape if available.
+        // HF convention: [vocab_size, embed_dim]; Qwen2/3 GGUF-derived: [embed_dim, vocab_size].
+        let (embedding_name, vocab_size) = match weights.try_tensor_shape(&embedding_refs) {
+            Some((a, b)) if a > 0 && b > 0 => {
+                // The larger dimension is almost always vocab_size for LLMs
+                let actual_name = embedding_candidates
+                    .iter()
+                    .find(|n| weights.metadata.contains_key(n.as_str()))
+                    .cloned()
+                    .unwrap_or_default();
+                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                    // Check which layout: HF uses [vocab, embed], GGUF-derived uses [embed, vocab]
+                    // If a > b and a is close to known vocab sizes (100K+), it's HF layout
+                    if a > 50000 {
+                        (actual_name, a as u32) // HF: [vocab_size, embed_dim]
+                    } else {
+                        (actual_name, b as u32) // GGUF: [embed_dim, vocab_size]
+                    }
+                } else {
+                    (actual_name, a as u32) // [vocab_size, embed_dim] layout
+                }
             }
+            _ => ("token_embd.weight".to_string(), config.embed_dim as u32),
+        };
+
+        // Load token embeddings — try multiple candidate names.
+        let embedding_data = weights.tensors.get(&embedding_name);
+        let token_embeddings = embedding_data.map(|tensor_data| {
+            if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
+                // Determine layout from shape
+                match weights.tensor_shape(&embedding_name) {
+                    (a, b) if a > 50000 => {
+                        // HF layout: [vocab_size, embed_dim] — set in_features=embed_dim for row lookup
+                        Linear::from_f32_weight_with_shape(tensor_data, None, b, a)
+                    }
+                    _ => {
+                        // GGUF layout: [embed_dim, vocab_size]
+                        Linear::from_f32_weight_with_shape(
+                            tensor_data,
+                            None,
+                            config.embed_dim,
+                            vocab_size as usize,
+                        )
+                    }
+                }
+            } else {
+                match weights.tensor_shape(&embedding_name) {
+                    (vocab, emb_dim) if vocab > 0 && emb_dim > 0 => {
+                        Linear::from_f32_weight_with_shape(tensor_data, None, emb_dim, vocab)
+                    }
+                    _ => Linear::from_f32_weight(tensor_data, None),
+                }
+            }
+        });
+
+        // Load output (LM head) — try multiple candidate names.
+        // For models with tied embeddings (like Qwen2.5-Coder), there's no separate lm_head.
+        let output_candidates: Vec<String> = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => vec![
+                "output.weight".to_string(),               // GGUF-derived
+                "lm_head.weight".to_string(),              // HF standard (untied)
+            ],
+            _ => vec!["output.weight".to_string()],
+        };
+        let output_refs: Vec<&str> = output_candidates.iter().map(|s| s.as_str()).collect();
+
+        let output = weights.try_get_tensor(&output_refs).map(|tensor_data| {
+            match weights.try_tensor_shape(&output_refs) {
+                Some((vocab, emb_dim)) if vocab > 0 && emb_dim > 0 => {
+                    Linear::from_f32_weight_with_shape(tensor_data, None, emb_dim, vocab)
+                }
+                _ if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) => {
+                    let embed_dim = config.embed_dim;
+                    let vocab = vocab_size as usize;
+                    Linear::from_f32_weight_with_shape(tensor_data, None, embed_dim, vocab)
+                }
+                _ => Linear::from_f32_weight(tensor_data, None),
+            }
+        });
+
+        // If no separate output head was found (tied embeddings), use the embedding as output.
+        let output = output.or_else(|| {
+            token_embeddings.as_ref().map(|emb| {
+                // For tied embeddings, the same weight buffer works for both:
+                // - Embedding lookup: weight[token_id * embed_dim + dim]
+                // - Output projection: logits[v] = sum_i(x[i] * weight[v * embed_dim + i])
+                Linear::new(
+                    emb.weight.clone(),
+                    None,
+                    config.embed_dim,
+                    vocab_size as usize,
+                )
+            })
         });
 
         // Build transformer layers
@@ -739,12 +928,20 @@ impl LlamaModel {
             layers.push(layer);
         }
 
-        // Load final norm for architectures that have it (qwen2/qwen3)
-        let final_norm = if let Some(norm_name) = config.final_norm_name() {
-            weights
-                .tensors
-                .get(norm_name)
-                .map(|tensor_data| RmsNorm::new(f32_bytes_to_f32(tensor_data), config.rms_norm_eps))
+        // Load final norm — try multiple candidate names.
+        let final_norm_candidates: Vec<String> = match config.arch {
+            ModelArch::Qwen2 | ModelArch::Qwen3 => vec![
+                "output_norm.weight".to_string(),          // GGUF-derived
+                "model.norm.weight".to_string(),           // HF standard
+            ],
+            _ => vec![],
+        };
+        let final_norm_refs: Vec<&str> = final_norm_candidates.iter().map(|s| s.as_str()).collect();
+
+        let final_norm = if !final_norm_refs.is_empty() {
+            weights.try_get_tensor(&final_norm_refs).map(|tensor_data| {
+                RmsNorm::new(f32_bytes_to_f32(tensor_data), config.rms_norm_eps)
+            })
         } else {
             None
         };
@@ -1558,7 +1755,8 @@ impl LlamaModel {
     /// Load a single transformer layer from safetensors weights.
     ///
     /// Mirrors `load_layer` but uses f32 bytes directly (safetensors tensors
-    /// are already in f32 format after loading).
+    /// are already in f32 format after loading). Supports both GGUF-style names
+    /// (`blk.{i}.attn_q.weight`) and HF-standard names (`model.layers.{i}.self_attn.q_proj.weight`).
     fn load_layer_from_safetensors(
         weights: &SafetensorsWeights,
         layer_idx: usize,
@@ -1566,112 +1764,163 @@ impl LlamaModel {
         _rope: &RopeConfig,
     ) -> Result<TransformerLayer> {
         let prefix = config.layer_prefix(layer_idx);
+        // HF-standard layer prefix for direct safetensors loading
+        let hf_prefix = format!("model.layers.{layer_idx}.");
 
-        // RMSNorm weights — architecture-dependent names (with fallbacks)
-        let attention_norm_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}input_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}attn_norm.weight"),
-            _ => format!("{prefix}attention_norm.weight"),
-        };
-
-        // Try primary name first, then fallback for Qwen (which uses attn_norm)
-        let attention_norm_data = weights
-            .tensors
-            .get(&attention_norm_name)
-            .or_else(|| {
-                if matches!(config.arch, ModelArch::Qwen2 | ModelArch::Qwen3) {
-                    weights.tensors.get(&format!("{prefix}attn_norm.weight"))
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                RunnerError::ModelLoad(format!(
-                    "missing attention norm (tried: {})",
-                    attention_norm_name
+        // Helper: get tensor by trying multiple candidate names (GGUF-style first, then HF)
+        let get_tensor = |candidates: &[String]| -> Result<Vec<u8>> {
+            let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+            weights.try_get_tensor(&refs).map(|data| data.clone())
+                .ok_or_else(|| RunnerError::ModelLoad(
+                    format!("Tensor not found. Tried: {}", candidates.join(", "))
                 ))
-            })?;
-        let attention_norm =
-            RmsNorm::new(f32_bytes_to_f32(attention_norm_data), config.rms_norm_eps);
-
-        let ffn_norm_name = match config.arch {
-            ModelArch::Gemma => format!("{prefix}post_attention_layernorm.weight"),
-            ModelArch::Qwen2 | ModelArch::Qwen3 => format!("{prefix}ffn_norm.weight"),
-            ModelArch::Llama => format!("{prefix}ffn_norm.weight"),
-            _ => format!("{prefix}ffn_norm.weight"),
         };
-        let ffn_norm_data = weights
-            .tensors
-            .get(&ffn_norm_name)
-            .ok_or_else(|| RunnerError::ModelLoad(format!("missing {ffn_norm_name}")))?;
-        let ffn_norm = RmsNorm::new(f32_bytes_to_f32(ffn_norm_data), config.rms_norm_eps);
 
-        // Attention weights — architecture-dependent naming
-        let suffix = config.attn_weight_suffix();
-        let wq_data = match config.arch {
-            ModelArch::Gemma => weights
-                .tensors
-                .get(&format!("{prefix}q_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing q_proj weight".to_string())),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => weights
-                .tensors
-                .get(&format!("{prefix}attn_q.weight"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing attn_q.weight".to_string())),
-            _ => weights
-                .tensors
-                .get(&format!("{prefix}attention.wq.weight"))
-                .ok_or_else(|| {
-                    RunnerError::ModelLoad(format!("missing {prefix}attention.wq.weight"))
-                }),
-        }?;
-        let wk_data = match config.arch {
-            ModelArch::Gemma => weights
-                .tensors
-                .get(&format!("{prefix}k_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing k_proj weight".to_string())),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => weights
-                .tensors
-                .get(&format!("{prefix}attn_k.weight"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing attn_k.weight".to_string())),
-            _ => weights
-                .tensors
-                .get(&format!("{prefix}attention.wk.weight"))
-                .ok_or_else(|| {
-                    RunnerError::ModelLoad(format!("missing {prefix}attention.wk.weight"))
-                }),
-        }?;
-        let wv_data = match config.arch {
-            ModelArch::Gemma => weights
-                .tensors
-                .get(&format!("{prefix}v_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing v_proj weight".to_string())),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => weights
-                .tensors
-                .get(&format!("{prefix}attn_v.weight"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing attn_v.weight".to_string())),
-            _ => weights
-                .tensors
-                .get(&format!("{prefix}attention.wv.weight"))
-                .ok_or_else(|| {
-                    RunnerError::ModelLoad(format!("missing {prefix}attention.wv.weight"))
-                }),
-        }?;
-        let wo_data = match config.arch {
-            ModelArch::Gemma => weights
-                .tensors
-                .get(&format!("{prefix}o_proj{suffix}"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing o_proj weight".to_string())),
-            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => weights
-                .tensors
-                .get(&format!("{prefix}attn_output.weight"))
-                .ok_or_else(|| RunnerError::ModelLoad("missing attn_output.weight".to_string())),
-            _ => weights
-                .tensors
-                .get(&format!("{prefix}attention.wo.weight"))
-                .ok_or_else(|| {
-                    RunnerError::ModelLoad(format!("missing {prefix}attention.wo.weight"))
-                }),
-        }?;
+        // Helper: convert f32 bytes to Vec<f32> for norms/biases
+        let parse_f32_vec = |data: &[u8]| -> Vec<f32> {
+            data.chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()
+        };
+
+        // Helper: try to get an optional bias tensor from multiple candidate names
+        let get_optional_bias = |candidates: &[String]| -> Option<Vec<f32>> {
+            let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+            weights.try_get_tensor(&refs).map(|data| parse_f32_vec(data))
+        };
+
+        // RMSNorm weights — try GGUF-style first, then HF-standard names
+        let attention_norm_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}input_layernorm.weight"),
+                format!("{hf_prefix}input_layernorm.weight"),
+            ],
+            ModelArch::Qwen2 | ModelArch::Qwen3 => vec![
+                format!("{prefix}attn_norm.weight"),
+                format!("{hf_prefix}input_layernorm.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}attention_norm.weight"),
+                format!("{hf_prefix}input_layernorm.weight"),
+            ],
+        };
+        let attention_norm_data = get_tensor(&attention_norm_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing attention norm for layer {} (tried: {})",
+                layer_idx,
+                attention_norm_candidates.join(", ")
+            ))
+        })?;
+        let attention_norm =
+            RmsNorm::new(parse_f32_vec(&attention_norm_data), config.rms_norm_eps);
+
+        let ffn_norm_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}post_attention_layernorm.weight"),
+                format!("{hf_prefix}post_attention_layernorm.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}ffn_norm.weight"),
+                format!("{hf_prefix}post_attention_layernorm.weight"),
+            ],
+        };
+        let ffn_norm_data = get_tensor(&ffn_norm_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing ffn norm for layer {} (tried: {})",
+                layer_idx,
+                ffn_norm_candidates.join(", ")
+            ))
+        })?;
+        let ffn_norm = RmsNorm::new(parse_f32_vec(&ffn_norm_data), config.rms_norm_eps);
+
+        // Attention weights — try GGUF-style first, then HF-standard names
+        let wq_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}q_proj.weight"),
+                format!("{hf_prefix}self_attn.q_proj.weight"),
+            ],
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => vec![
+                format!("{prefix}attn_q.weight"),
+                format!("{hf_prefix}self_attn.q_proj.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}attention.wq.weight"),
+                format!("{hf_prefix}self_attn.q_proj.weight"),
+            ],
+        };
+        let wq_data = get_tensor(&wq_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing q_proj weight for layer {} (tried: {})",
+                layer_idx,
+                wq_candidates.join(", ")
+            ))
+        })?;
+
+        let wk_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}k_proj.weight"),
+                format!("{hf_prefix}self_attn.k_proj.weight"),
+            ],
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => vec![
+                format!("{prefix}attn_k.weight"),
+                format!("{hf_prefix}self_attn.k_proj.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}attention.wk.weight"),
+                format!("{hf_prefix}self_attn.k_proj.weight"),
+            ],
+        };
+        let wk_data = get_tensor(&wk_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing k_proj weight for layer {} (tried: {})",
+                layer_idx,
+                wk_candidates.join(", ")
+            ))
+        })?;
+
+        let wv_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}v_proj.weight"),
+                format!("{hf_prefix}self_attn.v_proj.weight"),
+            ],
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => vec![
+                format!("{prefix}attn_v.weight"),
+                format!("{hf_prefix}self_attn.v_proj.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}attention.wv.weight"),
+                format!("{hf_prefix}self_attn.v_proj.weight"),
+            ],
+        };
+        let wv_data = get_tensor(&wv_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing v_proj weight for layer {} (tried: {})",
+                layer_idx,
+                wv_candidates.join(", ")
+            ))
+        })?;
+
+        let wo_candidates: Vec<String> = match config.arch {
+            ModelArch::Gemma => vec![
+                format!("{prefix}o_proj.weight"),
+                format!("{hf_prefix}self_attn.o_proj.weight"),
+            ],
+            ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => vec![
+                format!("{prefix}attn_output.weight"),
+                format!("{hf_prefix}self_attn.o_proj.weight"),
+            ],
+            _ => vec![
+                format!("{prefix}attention.wo.weight"),
+                format!("{hf_prefix}self_attn.o_proj.weight"),
+            ],
+        };
+        let wo_data = get_tensor(&wo_candidates).map_err(|_| {
+            RunnerError::ModelLoad(format!(
+                "missing o_proj weight for layer {} (tried: {})",
+                layer_idx,
+                wo_candidates.join(", ")
+            ))
+        })?;
 
         // Use explicit dimensions from config for Qwen2/Qwen3/Llama to avoid
         // shape-metadata inconsistencies in GGUF K-family quantizations.
@@ -1684,19 +1933,19 @@ impl LlamaModel {
             (hidden, hidden, hidden, kv, hidden, kv, hidden, hidden)
         } else {
             let wq_name = match config.arch {
-                ModelArch::Gemma => format!("{prefix}q_proj{}", config.attn_weight_suffix()),
+                ModelArch::Gemma => format!("{prefix}q_proj.weight"),
                 _ => format!("{prefix}attention.wq.weight"),
             };
             let wk_name = match config.arch {
-                ModelArch::Gemma => format!("{prefix}k_proj{}", config.attn_weight_suffix()),
+                ModelArch::Gemma => format!("{prefix}k_proj.weight"),
                 _ => format!("{prefix}attention.wk.weight"),
             };
             let wv_name = match config.arch {
-                ModelArch::Gemma => format!("{prefix}v_proj{}", config.attn_weight_suffix()),
+                ModelArch::Gemma => format!("{prefix}v_proj.weight"),
                 _ => format!("{prefix}attention.wv.weight"),
             };
             let wo_name = match config.arch {
-                ModelArch::Gemma => format!("{prefix}o_proj{}", config.attn_weight_suffix()),
+                ModelArch::Gemma => format!("{prefix}o_proj.weight"),
                 _ => format!("{prefix}attention.wo.weight"),
             };
             let (wq_out, wq_in) = weights.tensor_shape(&wq_name);
@@ -1705,44 +1954,56 @@ impl LlamaModel {
             let (wo_out, wo_in) = weights.tensor_shape(&wo_name);
             (wq_in, wq_out, wk_in, wk_out, wv_in, wv_out, wo_in, wo_out)
         };
-        // Attention biases. Qwen2/Qwen3 carry `attn_q/k/v.bias`; Llama, Gemma and
-        // the llama-style default do not, so the lookups simply return None there.
-        // Linear::forward adds bias[o] to every output row, which is exactly how
-        // the GGUF QKV bias is applied.
-        let parse_bias = |name: String| -> Option<Vec<f32>> {
-            weights.tensors.get(&name).map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect()
-            })
-        };
-        let q_bias = parse_bias(format!("{prefix}attn_q.bias"));
-        let k_bias = parse_bias(format!("{prefix}attn_k.bias"));
-        let v_bias = parse_bias(format!("{prefix}attn_v.bias"));
 
-        eprintln!(
-            "DEBUG Llama: attn_q weight - in_features={}, out_features={}",
-            wq_in, wq_out
-        );
-        let wq = Linear::from_f32_weight_with_dims(wq_data, q_bias, wq_in, wq_out);
+        // Attention biases — try GGUF-style first, then HF-standard names.
+        // Qwen2.5-Coder has attention biases in HF format; original Qwen2 may not.
+        let q_bias_candidates: Vec<String> = vec![
+            format!("{prefix}attn_q.bias"),
+            format!("{hf_prefix}self_attn.q_proj.bias"),
+        ];
+        let k_bias_candidates: Vec<String> = vec![
+            format!("{prefix}attn_k.bias"),
+            format!("{hf_prefix}self_attn.k_proj.bias"),
+        ];
+        let v_bias_candidates: Vec<String> = vec![
+            format!("{prefix}attn_v.bias"),
+            format!("{hf_prefix}self_attn.v_proj.bias"),
+        ];
+        let q_bias = get_optional_bias(&q_bias_candidates);
+        let k_bias = get_optional_bias(&k_bias_candidates);
+        let v_bias = get_optional_bias(&v_bias_candidates);
 
-        eprintln!(
-            "DEBUG Llama: attn_k weight - in_features={}, out_features={}",
-            wk_in, wk_out
-        );
-        let wk = Linear::from_f32_weight_with_dims(wk_data, k_bias, wk_in, wk_out);
+        if layer_idx == 0 {
+            eprintln!(
+                "DEBUG Llama: attn_q weight - in_features={}, out_features={}",
+                wq_in, wq_out
+            );
+        }
+        let wq = Linear::from_f32_weight_with_dims(&wq_data, q_bias, wq_in, wq_out);
 
-        eprintln!(
-            "DEBUG Llama: attn_v weight - in_features={}, out_features={}",
-            wv_in, wv_out
-        );
-        let wv = Linear::from_f32_weight_with_dims(wv_data, v_bias, wv_in, wv_out);
+        if layer_idx == 0 {
+            eprintln!(
+                "DEBUG Llama: attn_k weight - in_features={}, out_features={}",
+                wk_in, wk_out
+            );
+        }
+        let wk = Linear::from_f32_weight_with_dims(&wk_data, k_bias, wk_in, wk_out);
 
-        eprintln!(
-            "DEBUG Llama: attn_output weight - in_features={}, out_features={}",
-            wo_in, wo_out
-        );
-        let wo = Linear::from_f32_weight_with_dims(wo_data, None, wo_in, wo_out);
+        if layer_idx == 0 {
+            eprintln!(
+                "DEBUG Llama: attn_v weight - in_features={}, out_features={}",
+                wv_in, wv_out
+            );
+        }
+        let wv = Linear::from_f32_weight_with_dims(&wv_data, v_bias, wv_in, wv_out);
+
+        if layer_idx == 0 {
+            eprintln!(
+                "DEBUG Llama: attn_output weight - in_features={}, out_features={}",
+                wo_in, wo_out
+            );
+        }
+        let wo = Linear::from_f32_weight_with_dims(&wo_data, None, wo_in, wo_out);
 
         let attention = Attention::new(
             wq,
@@ -1755,42 +2016,78 @@ impl LlamaModel {
             config.rope_base,
         );
 
-        // FFN weights — architecture-dependent naming
+        // FFN weights — try GGUF-style first, then HF-standard names
         let (w1_data, w2_data, w3_data) = match config.arch {
             ModelArch::Qwen2 | ModelArch::Qwen3 | ModelArch::Llama => {
-                let w1 = weights
-                    .tensors
-                    .get(&format!("{prefix}ffn_gate.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_gate.weight".to_string()))?;
-                let w2 = weights
-                    .tensors
-                    .get(&format!("{prefix}ffn_down.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_down.weight".to_string()))?;
-                let w3 = weights
-                    .tensors
-                    .get(&format!("{prefix}ffn_up.weight"))
-                    .ok_or_else(|| RunnerError::ModelLoad("missing ffn_up.weight".to_string()))?;
+                let w1_candidates: Vec<String> = vec![
+                    format!("{prefix}ffn_gate.weight"),
+                    format!("{hf_prefix}mlp.gate_proj.weight"),
+                ];
+                let w2_candidates: Vec<String> = vec![
+                    format!("{prefix}ffn_down.weight"),
+                    format!("{hf_prefix}mlp.down_proj.weight"),
+                ];
+                let w3_candidates: Vec<String> = vec![
+                    format!("{prefix}ffn_up.weight"),
+                    format!("{hf_prefix}mlp.up_proj.weight"),
+                ];
+                let w1 = get_tensor(&w1_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn_gate weight for layer {} (tried: {})",
+                        layer_idx,
+                        w1_candidates.join(", ")
+                    ))
+                })?;
+                let w2 = get_tensor(&w2_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn_down weight for layer {} (tried: {})",
+                        layer_idx,
+                        w2_candidates.join(", ")
+                    ))
+                })?;
+                let w3 = get_tensor(&w3_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn_up weight for layer {} (tried: {})",
+                        layer_idx,
+                        w3_candidates.join(", ")
+                    ))
+                })?;
                 (w1, w2, w3)
             }
             _ => {
-                let w1 = weights
-                    .tensors
-                    .get(&format!("{prefix}feed_forward.w1.weight"))
-                    .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w1.weight"))
-                    })?;
-                let w2 = weights
-                    .tensors
-                    .get(&format!("{prefix}feed_forward.w2.weight"))
-                    .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w2.weight"))
-                    })?;
-                let w3 = weights
-                    .tensors
-                    .get(&format!("{prefix}feed_forward.w3.weight"))
-                    .ok_or_else(|| {
-                        RunnerError::ModelLoad(format!("missing {prefix}feed_forward.w3.weight"))
-                    })?;
+                let w1_candidates: Vec<String> = vec![
+                    format!("{prefix}feed_forward.w1.weight"),
+                    format!("{hf_prefix}mlp.gate_proj.weight"),
+                ];
+                let w2_candidates: Vec<String> = vec![
+                    format!("{prefix}feed_forward.w2.weight"),
+                    format!("{hf_prefix}mlp.down_proj.weight"),
+                ];
+                let w3_candidates: Vec<String> = vec![
+                    format!("{prefix}feed_forward.w3.weight"),
+                    format!("{hf_prefix}mlp.up_proj.weight"),
+                ];
+                let w1 = get_tensor(&w1_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn gate weight for layer {} (tried: {})",
+                        layer_idx,
+                        w1_candidates.join(", ")
+                    ))
+                })?;
+                let w2 = get_tensor(&w2_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn down weight for layer {} (tried: {})",
+                        layer_idx,
+                        w2_candidates.join(", ")
+                    ))
+                })?;
+                let w3 = get_tensor(&w3_candidates).map_err(|_| {
+                    RunnerError::ModelLoad(format!(
+                        "missing ffn up weight for layer {} (tried: {})",
+                        layer_idx,
+                        w3_candidates.join(", ")
+                    ))
+                })?;
                 (w1, w2, w3)
             }
         };
@@ -1818,14 +2115,21 @@ impl LlamaModel {
                 let (w3_in, w3_out) = weights.tensor_shape(&w3_name);
                 (w1_in, w1_out, w2_in, w2_out, w3_in, w3_out)
             };
-        eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
-        let w1 = Linear::from_f32_weight_with_dims(w1_data, None, w1_in, w1_out);
 
-        eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
-        let w2 = Linear::from_f32_weight_with_dims(w2_data, None, w2_in, w2_out);
+        if layer_idx == 0 {
+            eprintln!("DEBUG Llama: ffn_gate - in={}, out={}", w1_in, w1_out);
+        }
+        let w1 = Linear::from_f32_weight_with_dims(&w1_data, None, w1_in, w1_out);
 
-        eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
-        let w3 = Linear::from_f32_weight_with_dims(w3_data, None, w3_in, w3_out);
+        if layer_idx == 0 {
+            eprintln!("DEBUG Llama: ffn_down - in={}, out={}", w2_in, w2_out);
+        }
+        let w2 = Linear::from_f32_weight_with_dims(&w2_data, None, w2_in, w2_out);
+
+        if layer_idx == 0 {
+            eprintln!("DEBUG Llama: ffn_up - in={}, out={}", w3_in, w3_out);
+        }
+        let w3 = Linear::from_f32_weight_with_dims(&w3_data, None, w3_in, w3_out);
 
         let feed_forward = FeedForward::new(w1, w2, w3, config.intermediate_dim);
 

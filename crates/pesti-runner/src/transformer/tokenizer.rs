@@ -211,6 +211,15 @@ impl PestiTokenizer {
         Ok(tokenizer)
     }
 
+    /// Load a tokenizer directly from an HF-format `tokenizer.json` file.
+    /// This is the primary path for safetensors models (no GGUF involved).
+    pub fn from_hf_file(path: &Path) -> Result<Self, RunnerError> {
+        let tokenizer = tokenizers::Tokenizer::from_file(path)
+            .map_err(|e| RunnerError::Tokenizer(format!("Failed to load HF tokenizer from {}: {}", path.display(), e)))?;
+        debug!(vocab = tokenizer.get_vocab_size(false), "Loaded HF tokenizer from file");
+        Ok(Self::MistralRs(tokenizer))
+    }
+
     /// Encode text into token IDs.
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, RunnerError> {
         match self {
@@ -404,6 +413,31 @@ pub fn load_tokenizer_from_gguf(
 
     // Create tokenizer using selected backend
     let tokenizer = PestiTokenizer::from_gguf(&header, backend)?;
+
+    Ok((config, tokenizer))
+}
+
+/// Load tokenizer from an HF model directory (looks for `tokenizer.json`).
+/// Returns the tokenizer along with vocab size extracted from it.
+pub fn load_tokenizer_from_hf_dir(dir: &Path) -> Result<(GgufTokenizerConfig, PestiTokenizer), RunnerError> {
+    let tok_path = dir.join("tokenizer.json");
+    if !tok_path.exists() {
+        return Err(RunnerError::Tokenizer(format!(
+            "No tokenizer.json found in {}",
+            dir.display()
+        )));
+    }
+
+    let tokenizer = PestiTokenizer::from_hf_file(&tok_path)?;
+    let vocab_size = tokenizer.vocab_size();
+
+    // Try to extract BOS/EOS from the tokenizer's added tokens if available.
+    // For Qwen2 models, these are typically in the special tokens section.
+    let config = GgufTokenizerConfig {
+        vocab_size,
+        bos_token_id: None,
+        eos_token_id: None,
+    };
 
     Ok((config, tokenizer))
 }
