@@ -2587,10 +2587,12 @@ impl LlamaModel {
     {
         let mut generated = Vec::new();
 
+        // Reset KV caches before starting a new generation sequence
+        self.reset_cpu_kv_caches();
+
         // Prefill: run each prompt token through the model at its position so
         // the KV cache contains the full prompt context. The logits from the
-        // LAST prompt token seed the first generated token. (Previously only
-        // `context.last()` was ever fed, at pos=0, so the prompt was never seen.)
+        // LAST prompt token seed the first generated token.
         let mut logits: Vec<f32> = Vec::new();
         let mut pos = 0;
         for (i, &tok) in prompt.iter().enumerate() {
@@ -2600,9 +2602,8 @@ impl LlamaModel {
                 // returns final logits — do NOT apply it again.
                 self.forward_with_dispatch(&hidden, i)?
             } else {
-                // CPU-only fallback (no CUDA): returns hidden states, so apply
-                // the output head to get logits.
-                let hidden_out = self.forward_layers(&hidden, i)?;
+                // CPU-only fallback (no CUDA): use KV cache for autoregressive context
+                let hidden_out = self.forward_layers_with_cache(&hidden, i)?;
                 self.apply_output_head(&hidden_out)?
             };
             pos = i + 1;
@@ -2631,12 +2632,13 @@ impl LlamaModel {
             generated.push(next_token);
 
             // Run the sampled token through the model at its position to get
-            // logits for the next step.
+            // logits for the next step. Use KV cache so the model attends to
+            // all previous tokens (prompt + generated).
             let hidden = self.embed(next_token, pos)?;
             logits = if self.dispatch.is_some() {
                 self.forward_with_dispatch(&hidden, pos)?
             } else {
-                let hidden_out = self.forward_layers(&hidden, pos)?;
+                let hidden_out = self.forward_layers_with_cache(&hidden, pos)?;
                 self.apply_output_head(&hidden_out)?
             };
 

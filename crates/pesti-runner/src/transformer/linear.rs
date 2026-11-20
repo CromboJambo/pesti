@@ -251,7 +251,7 @@ impl Linear {
                         w_t_data.push(w[j * k + i]);
                     }
                 }
-                match candle_bridge::get_or_cache_cpu_weight(&w_t_data, k, n) {
+                match candle_core::Tensor::from_vec(w_t_data, (k, n), &candle_core::Device::Cpu) {
                     Ok(tensor) => self.cpu_weight_tensor.get_or_init(|| tensor.clone()).clone(),
                     Err(e) => {
                         eprintln!("Warning: failed to create CPU weight tensor: {e}; falling back to naive matmul");

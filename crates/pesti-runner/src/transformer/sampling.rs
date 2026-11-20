@@ -62,9 +62,11 @@ pub fn sample(logits: &[f32], config: &SamplingConfig, rng: &mut StdRng) -> u32 
         indexed_probs.truncate(k);
     }
 
-    // Apply top-p filtering
-    if config.top_p > 0.0 && config.top_k == 0 {
-        indexed_probs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Apply top-p filtering (on the remaining tokens after top-k)
+    if config.top_p > 0.0 {
+        if config.top_k == 0 {
+            indexed_probs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
         let mut cumsum = 0.0f32;
         let mut cutoff_idx = indexed_probs.len();
         for (i, &(p, _)) in indexed_probs.iter().enumerate() {

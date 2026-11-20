@@ -11,7 +11,9 @@
 use std::path::Path;
 use std::time::Instant;
 
-use pesti_runner::transformer::{load_tokenizer_from_hf_dir, LlamaConfig, LlamaModel, SamplingConfig};
+use pesti_runner::transformer::{
+    load_tokenizer_from_hf_dir, LlamaConfig, LlamaModel, SamplingConfig,
+};
 use rand::SeedableRng;
 
 const MODEL_DIR: &str = "../../models/qwen2.5-coder-1.5b";
@@ -20,7 +22,11 @@ const MODEL_DIR: &str = "../../models/qwen2.5-coder-1.5b";
 #[ignore] // 1.5B model is slow in debug mode; run with --ignored when needed
 fn test_qwen2_5_coder_safetensors_inference() {
     let model_dir = Path::new(MODEL_DIR);
-    assert!(model_dir.exists(), "Model directory not found: {}", MODEL_DIR);
+    assert!(
+        model_dir.exists(),
+        "Model directory not found: {}",
+        MODEL_DIR
+    );
 
     // 1. Load config from HF config.json
     println!("Loading config from config.json...");
@@ -30,10 +36,7 @@ fn test_qwen2_5_coder_safetensors_inference() {
 
     println!(
         "  embed_dim={}, layers={}, heads={}, kv_heads={}",
-        config.embed_dim,
-        config.num_layers,
-        config.num_heads,
-        config.num_kv_heads
+        config.embed_dim, config.num_layers, config.num_heads, config.num_kv_heads
     );
 
     // 2. Load tokenizer from HF tokenizer.json
@@ -64,14 +67,18 @@ fn test_qwen2_5_coder_safetensors_inference() {
     // Attach tokenizer for generation
     model.tokenizer = Some(tokenizer);
 
-    // 4. Encode a simple prompt
-    let prompt = "What is Rust?";
-    println!("\nEncoding prompt: '{}'", prompt);
+    // 4. Encode a prompt with Qwen2 chat template
+    let user_prompt = "What is Rust?";
+    let chat_prompt = format!(
+        "< |im_start|>user\n{}< |im_end|>\n< |im_start|>assistant\n",
+        user_prompt
+    );
+    println!("\nEncoding prompt with chat template: '{}'", user_prompt);
     let tokens = model
         .tokenizer
         .as_ref()
         .unwrap()
-        .encode(prompt)
+        .encode(&chat_prompt)
         .unwrap_or_else(|e| panic!("Failed to encode prompt: {}", e));
     println!(
         "  Encoded to {} tokens: {:?}",
@@ -102,17 +109,17 @@ fn test_qwen2_5_coder_safetensors_inference() {
 
     assert!(
         finite_count > logits.len() / 2,
-        "Too many non-finite logits — model output is garbage"
+        "Too many non-finite logits - model output is garbage"
     );
     assert!(
         non_zero_count > 1000,
-        "Too many zero logits — model weights may not be loaded correctly"
+        "Too many zero logits - model weights may not be loaded correctly"
     );
 
     // Get top-5 tokens to verify the model produces sensible predictions
     let mut indexed: Vec<(usize, f32)> = logits.iter().enumerate().map(|(i, &v)| (i, v)).collect();
     indexed.sort_by(|a, b| b.1.total_cmp(&a.1));
-    println!("\nTop-5 predicted tokens after first prompt token:");
+    println!("\nTop-5 predicted tokens after prompt:");
     for (rank, (idx, score)) in indexed.iter().take(5).enumerate() {
         let token_str = model
             .tokenizer
@@ -129,12 +136,15 @@ fn test_qwen2_5_coder_safetensors_inference() {
         );
     }
 
-    // 6. Full generation via generate() (greedy)
-    let max_tokens = 32;
-    println!("\nGenerating {} tokens greedily...", max_tokens);
+    // 6. Full generation via generate() with temperature + top-p sampling
+    let max_tokens = 64;
+    println!(
+        "\nGenerating {} tokens (temp=0.7, top_p=0.9)...",
+        max_tokens
+    );
     let sampling = SamplingConfig {
-        temperature: 0.0,
-        top_p: 1.0,
+        temperature: 0.7,
+        top_p: 0.9,
         top_k: 0,
         seed: Some(42),
     };
@@ -162,18 +172,18 @@ fn test_qwen2_5_coder_safetensors_inference() {
         .unwrap()
         .decode(&generated_tokens)
         .unwrap_or_else(|e| panic!("Failed to decode: {}", e));
-    println!("\nFull output:\n  '{}{}'", prompt, generated_text);
+    println!("\nFull output:\n  '{}{}'", user_prompt, generated_text);
 
     // Basic sanity: output should not be empty and should contain some recognizable text
     assert!(
         !generated_tokens.is_empty(),
-        "Generated zero tokens — inference failed"
+        "Generated zero tokens - inference failed"
     );
     assert!(
         generated_text.chars().count() > 5,
-        "Generated text too short ({}) — likely garbage",
+        "Generated text too short ({}) - likely garbage",
         generated_text.chars().count()
     );
 
-    println!("\n✅ Qwen2.5-Coder-1.5B safetensors inference test PASSED");
+    println!("\nQwen2.5-Coder-1.5B safetensors inference test PASSED");
 }
