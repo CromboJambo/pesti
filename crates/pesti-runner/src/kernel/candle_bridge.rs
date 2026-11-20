@@ -49,18 +49,25 @@ impl WeightCache {
 struct CacheKey {
     ptr: usize,
     len: usize,
+    rows: usize,
+    cols: usize,
 }
 
 impl Hash for CacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.ptr.hash(state);
         self.len.hash(state);
+        self.rows.hash(state);
+        self.cols.hash(state);
     }
 }
 
 impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr == other.ptr && self.len == other.len
+        self.ptr == other.ptr
+            && self.len == other.len
+            && self.rows == other.rows
+            && self.cols == other.cols
     }
 }
 
@@ -81,6 +88,8 @@ fn get_or_cache_weight(
     let key = CacheKey {
         ptr: data.as_ptr() as usize,
         len: data.len(),
+        rows: shape_rows,
+        cols: shape_cols,
     };
 
     let cache = weight_cache();
@@ -519,6 +528,8 @@ pub fn get_or_cache_cpu_weight(
     let key = CacheKey {
         ptr: data.as_ptr() as usize,
         len: data.len(),
+        rows,
+        cols,
     };
 
     let cache = weight_cache();
