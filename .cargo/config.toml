@@ -7,3 +7,6 @@
 
 [env]
 CMAKE_CXX_FLAGS = "-fpermissive"
+# cudarc 0.19.10 supports up to CUDA 13.4; system has 13.5 installed.
+# Override version detection to use 13.4 bindings (backward compatible).
+CUDARC_CUDA_VERSION = "13040"
