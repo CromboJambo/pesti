@@ -464,6 +464,78 @@ pub fn rms_norm(x: &Tensor, eps: f64) -> Result<Tensor, candle_core::Error> {
     Ok(normed)
 }
 
+/// CPU-optimized GEMM using candle-core's Tensor operations (f32).
+///
+/// Uses candle-core's internal `gemm` crate (SIMD-optimized with rayon parallelism)
+/// instead of naive triple-loop matmul. Weights are cached as tensors to avoid
+/// re-creation on every forward pass.
+///
+/// # Arguments
+/// * `a` — Input activation [m, k] (f32, row-major)
+/// * `b_t` — Cached weight tensor [k, n] (f32, must be contiguous)
+/// * `bias` — Optional bias [n] added to each output row
+///
+/// Returns: Output [m, n] flattened row-major f32.
+pub fn cpu_gemm_f32(
+    a: &[f32],
+    m: usize,
+    k: usize,
+    b_t: &Tensor,
+    bias: Option<&[f32]>,
+) -> Result<Vec<f32>, candle_core::Error> {
+    // Create input tensor on CPU (contiguous f32)
+    let a_t = Tensor::from_vec(a.to_vec(), (m, k), &Device::Cpu)?;
+
+    // Ensure weight tensor is F32 and contiguous
+    let b_for_matmul = match b_t.dtype() {
+        DType::F32 => b_t.clone(),
+        _ => b_t.to_dtype(DType::F32)?,
+    };
+    let b_contig = b_for_matmul.contiguous()?;
+
+    // A @ B using candle-core's optimized GEMM (uses the `gemm` crate internally)
+    let mut result = a_t.matmul(&b_contig)?;
+
+    // Add bias if present: broadcast [n] to [m, n] and add
+    if let Some(bias_data) = bias {
+        let bias_t = Tensor::from_vec(bias_data.to_vec(), (1, bias_data.len()), &Device::Cpu)?;
+        let bias_broadcast = bias_t.broadcast_as((m, bias_data.len()))?;
+        result = (&result + &bias_broadcast)?;
+    }
+
+    // Return flattened row-major f32
+    result.to_vec2::<f32>().map(|mat| mat.into_iter().flatten().collect())
+}
+
+/// Create or retrieve a cached CPU weight tensor from an f32 slice.
+///
+/// The cache is keyed by (pointer, length) so the same weight buffer
+/// reused across forward passes doesn't get re-created as a tensor each time.
+pub fn get_or_cache_cpu_weight(
+    data: &[f32],
+    rows: usize,
+    cols: usize,
+) -> Result<Tensor, candle_core::Error> {
+    let key = CacheKey {
+        ptr: data.as_ptr() as usize,
+        len: data.len(),
+    };
+
+    let cache = weight_cache();
+    let mut guard = cache.lock().unwrap();
+
+    if let Some(tensor) = guard.tensors.get(&key).cloned() {
+        return Ok(tensor);
+    }
+
+    // Create contiguous F32 tensor on CPU
+    let tensor = Tensor::from_vec(data.to_vec(), (rows, cols), &Device::Cpu)?;
+    guard.tensors.insert(key, tensor.clone());
+    drop(guard);
+
+    Ok(tensor)
+}
+
 /// GELU activation.
 pub fn gelu(x: &Tensor) -> Result<Tensor, candle_core::Error> {
     x.gelu()

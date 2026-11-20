@@ -11,10 +11,11 @@
 
 #![allow(clippy::redundant_closure)]
 
+use crate::kernel::candle_bridge;
 use crate::kernel::GemmKernel;
 use crate::kernel::device_buf::DeviceBuffer;
 use half::f16;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Linear layer with optional device-resident weights.
 pub struct Linear {
@@ -27,6 +28,10 @@ pub struct Linear {
     pub in_features: usize,
     pub out_features: usize,
     gemm_kernel: Option<Arc<dyn GemmKernel + Send + Sync>>,
+    /// Cached candle-core weight tensor for optimized CPU GEMM.
+    /// Lazily initialized on first CPU forward pass to avoid re-creating
+    /// the tensor from the weight buffer every time.
+    cpu_weight_tensor: OnceLock<candle_core::Tensor>,
 }
 
 impl Linear {
@@ -44,6 +49,7 @@ impl Linear {
             in_features,
             out_features,
             gemm_kernel: None,
+            cpu_weight_tensor: OnceLock::new(),
         }
     }
 
@@ -97,6 +103,7 @@ impl Linear {
             in_features,
             out_features,
             gemm_kernel: None,
+            cpu_weight_tensor: OnceLock::new(),
         }
     }
 
@@ -118,6 +125,7 @@ impl Linear {
             in_features,
             out_features,
             gemm_kernel: None,
+            cpu_weight_tensor: OnceLock::new(),
         }
     }
 
@@ -136,6 +144,7 @@ impl Linear {
             in_features,
             out_features,
             gemm_kernel: None,
+            cpu_weight_tensor: OnceLock::new(),
         }
     }
 
@@ -157,6 +166,7 @@ impl Linear {
             in_features,
             out_features,
             gemm_kernel: None,
+            cpu_weight_tensor: OnceLock::new(),
         }
     }
 
@@ -218,8 +228,51 @@ impl Linear {
         output
     }
 
-    /// CPU fallback: hand-written matmul with rayon parallelism.
+    /// CPU fallback: optimized matmul using candle-core's GEMM (SIMD + rayon).
     fn forward_cpu(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
+        let m = batch_size;
+        let k = self.in_features;
+        let n = self.out_features;
+
+        // Fast path for very small matrices where tensor overhead dominates.
+        if m * k * n < 1024 {
+            return self.forward_cpu_naive(x, batch_size);
+        }
+
+        // Get or lazily create the cached weight tensor [k, n] (transposed).
+        let w_t = match self.cpu_weight_tensor.get() {
+            Some(t) => t.clone(),
+            None => {
+                // Transpose weights: W is [out, in] row-major; GEMM needs B as [k, n].
+                let w = &self.weight;
+                let mut w_t_data = Vec::with_capacity(k * n);
+                for i in 0..k {
+                    for j in 0..n {
+                        w_t_data.push(w[j * k + i]);
+                    }
+                }
+                match candle_bridge::get_or_cache_cpu_weight(&w_t_data, k, n) {
+                    Ok(tensor) => self.cpu_weight_tensor.get_or_init(|| tensor.clone()).clone(),
+                    Err(e) => {
+                        eprintln!("Warning: failed to create CPU weight tensor: {e}; falling back to naive matmul");
+                        return self.forward_cpu_naive(x, batch_size);
+                    }
+                }
+            }
+        };
+
+        // Use candle-core's optimized GEMM (SIMD + rayon parallelism).
+        match candle_bridge::cpu_gemm_f32(x, m, k, &w_t, self.bias.as_deref()) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("Warning: candle CPU GEMM failed: {e}; falling back to naive matmul");
+                self.forward_cpu_naive(x, batch_size)
+            }
+        }
+    }
+
+    /// Original naive matmul (kept as fallback for small matrices and error recovery).
+    fn forward_cpu_naive(&self, x: &[f32], batch_size: usize) -> Vec<f32> {
         let mut output = vec![0.0f32; batch_size * self.out_features];
 
         use rayon::prelude::*;
@@ -376,5 +429,90 @@ mod tests {
         // Upload to GPU
         linear.upload_weights_to_gpu();
         assert!(linear.weights_on_gpu());
+    }
+}
+
+#[cfg(test)]
+mod bench_gemm {
+    use super::*;
+    use crate::kernel::candle_bridge;
+    use std::time::Instant;
+
+    #[test]
+    fn bench_gemm_comparison() {
+        // Representative sizes for Qwen2.5-0.5B: dim=896, hidden=14336 (FFN)
+        let k = 896;   // in_features
+        let n = 14336; // out_features (FFN up projection)
+        let m = 1;     // batch size 1 (decode)
+
+        // Create random weights [n, k] and input [m, k]
+        let weight: Vec<f32> = (0..(n * k)).map(|i| ((i as f32 % 97.0) - 48.0) / 100.0).collect();
+        let x: Vec<f32> = (0..k).map(|i| ((i as f32 % 53.0) - 26.0) / 100.0).collect();
+
+        // Transpose weight to [k, n] for GEMM
+        let mut w_t_data = Vec::with_capacity(k * n);
+        for i in 0..k {
+            for j in 0..n {
+                w_t_data.push(weight[j * k + i]);
+            }
+        }
+
+        // Benchmark naive matmul (10 iterations)
+        let t_naive_start = Instant::now();
+        for _ in 0..10 {
+            let mut output = vec![0.0f32; m * n];
+            for o in 0..n {
+                let w_row = &weight[o * k..(o + 1) * k];
+                let mut acc = 0.0f32;
+                for i in 0..k {
+                    acc += x[i] * w_row[i];
+                }
+                output[o] = acc;
+            }
+            std::hint::black_box(&output);
+        }
+        let naive_time = t_naive_start.elapsed().as_secs_f64() / 10.0;
+
+        // Benchmark candle-core GEMM (10 iterations)
+        let w_t = candle_bridge::get_or_cache_cpu_weight(&w_t_data, k, n).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10)); // ensure cache warm
+        
+        let t_candle_start = Instant::now();
+        for _ in 0..10 {
+            let result = candle_bridge::cpu_gemm_f32(&x, m, k, &w_t, None).unwrap();
+            assert_eq!(result.len(), m * n);
+            std::hint::black_box(&result);
+        }
+        let candle_time = t_candle_start.elapsed().as_secs_f64() / 10.0;
+
+        println!("=== GEMM Benchmark (m={}, k={}, n={}) ===", m, k, n);
+        println!("Naive matmul:   {:.3} ms/op ({:.2} GFLOPS)", 
+            naive_time * 1000.0,
+            (2.0 * m as f64 * k as f64 * n as f64) / naive_time / 1e9);
+        println!("Candle GEMM:    {:.3} ms/op ({:.2} GFLOPS)", 
+            candle_time * 1000.0,
+            (2.0 * m as f64 * k as f64 * n as f64) / candle_time / 1e9);
+        println!("Speedup:        {:.2}x", naive_time / candle_time);
+
+        // Verify correctness: both should produce similar results
+        let naive_result = {
+            let mut output = vec![0.0f32; m * n];
+            for o in 0..n {
+                let w_row = &weight[o * k..(o + 1) * k];
+                let mut acc = 0.0f32;
+                for i in 0..k {
+                    acc += x[i] * w_row[i];
+                }
+                output[o] = acc;
+            }
+            output
+        };
+        let candle_result = candle_bridge::cpu_gemm_f32(&x, m, k, &w_t, None).unwrap();
+
+        let max_diff = naive_result.iter().zip(candle_result.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        println!("Max diff between implementations: {:.6e}", max_diff);
+        assert!(max_diff < 1e-4, "Results differ too much: {}", max_diff);
     }
 }
