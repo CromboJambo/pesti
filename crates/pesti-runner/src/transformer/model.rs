@@ -477,7 +477,7 @@ pub struct LlamaModel {
     pub kv_caches: Option<(Vec<Kvcache>, Vec<Kvcache>)>,
     /// Delta-encoded KV caches per layer (Route C incremental deltas).
     #[cfg(feature = "cuda")]
-    pub delta_kv_caches: Option<Vec<DeltaKvCache>>,
+    pub delta_kv_caches: Vec<Option<DeltaKvCache>>,
     /// CPU-side KV caches for the pure-Rust transformer path.
     /// One `LayerKvCache` per transformer layer. Initialized on first
     /// `forward_layers_with_cache()` call.
@@ -640,7 +640,7 @@ impl LlamaModel {
             kv_caches: None,
             cpu_kv_caches: None,
             #[cfg(feature = "cuda")]
-            delta_kv_caches: None,
+            delta_kv_caches: vec![],
             #[cfg(feature = "cuda")]
             q4k_kvcache: None,
             capture_per_layer: None,
@@ -974,7 +974,7 @@ impl LlamaModel {
             kv_caches: None,
             cpu_kv_caches: None,
             #[cfg(feature = "cuda")]
-            delta_kv_caches: None,
+            delta_kv_caches: vec![],
             #[cfg(feature = "cuda")]
             q4k_kvcache: None,
             capture_per_layer: None,
@@ -1155,7 +1155,7 @@ impl LlamaModel {
             kv_caches: None,
             cpu_kv_caches: None,
             #[cfg(feature = "cuda")]
-            delta_kv_caches: None,
+            delta_kv_caches: vec![],
             #[cfg(feature = "cuda")]
             q4k_kvcache: None,
             capture_per_layer: None,
@@ -2321,8 +2321,9 @@ impl LlamaModel {
             );
             
             // Initialize delta-encoded KV caches (Route C) when delta kernel is available.
-            let has_delta_kernel = self.dispatch.as_ref()
-                .map(|d| d.has_delta_decode_kernel())
+            let has_delta_kernel = self.dispatch_layers.as_ref()
+                .and_then(|layers| layers.first())
+                .map(|layer| layer.attention.has_delta_decode_kernel())
                 .unwrap_or(false);
             if has_delta_kernel {
                 let mut delta_caches = Vec::with_capacity(self.config.num_layers);
@@ -2331,12 +2332,12 @@ impl LlamaModel {
                         self.config.num_heads,
                         self.config.head_dim,
                         kv_max_seq,
-                        0.05, // k_step — matches forward_gpu_decode_delta default
-                        0.05, // v_step
+                        0.05,
+                        0.05,
                     );
-                    delta_caches.push(dc);
+                    delta_caches.push(Some(dc));
                 }
-                self.delta_kv_caches = Some(delta_caches);
+                self.delta_kv_caches = delta_caches;
                 println!(
                     "[DEBUG] Delta KV caches initialized: {} layers (Route C)",
                     self.config.num_layers
@@ -2398,11 +2399,7 @@ impl LlamaModel {
             // which shifted RoPE per layer and corrupted attention for layers > 0.)
             let layer_start_pos = start_pos;
             // Pass delta cache for Route C incremental encoding (if available).
-            let delta_cache_ref: &mut Option<DeltaKvCache> = self
-                .delta_kv_caches
-                .as_mut()
-                .map(|d| &mut d[layer_idx])
-                .unwrap_or(&mut None);
+            let delta_cache_ref = &mut self.delta_kv_caches[layer_idx];
             h = layer_dispatch.forward(
                 ctx,
                 &h,
@@ -2643,8 +2640,8 @@ impl LlamaModel {
             }
         }
         #[cfg(feature = "cuda")]
-        if let Some(ref mut delta_caches) = self.delta_kv_caches {
-            for cache in delta_caches.iter_mut() {
+        for cache_opt in self.delta_kv_caches.iter_mut() {
+            if let Some(cache) = cache_opt {
                 cache.clear();
             }
         }

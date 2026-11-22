@@ -1191,7 +1191,7 @@ impl AttentionDispatch {
 
     /// Check if the delta-aware decode kernel is available.
     #[cfg(feature = "cuda")]
-    fn has_delta_decode_kernel(&self) -> bool {
+    pub fn has_delta_decode_kernel(&self) -> bool {
         self.delta_decode_kernel.is_some()
     }
 
@@ -1926,7 +1926,7 @@ impl AttentionDispatch {
         // This is O(d) per head — replaces the O(n*d) rebuild in forward_gpu_decode_delta.
         #[cfg(feature = "cuda")]
         if let Some(dc) = delta_cache.as_mut() {
-            dc.push(&k_rows, &v_rows).map_err(|e| {
+            dc.append(&k_rows, &v_rows).map_err(|e| {
                 DispatchError::Kernel(format!("delta cache push: {e}"))
             })?;
         }
