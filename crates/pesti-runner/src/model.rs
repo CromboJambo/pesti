@@ -202,13 +202,13 @@ impl Model {
                 tokenizer_config: None,
                 dispatch: None,
                 kv_caches: None,
-            #[cfg(feature = "cuda")]
-            delta_kv_caches: vec![],
+                #[cfg(feature = "cuda")]
+                delta_kv_caches: vec![],
                 cpu_kv_caches: None,
-            #[cfg(feature = "cuda")]
                 capture_per_layer: None,
                 dispatch_layers: None,
                 output_weight_t_gpu: None,
+                #[cfg(feature = "cuda")]
                 q4k_kvcache: None,
                 weight_store: None,
             },
@@ -237,9 +237,7 @@ impl Model {
                 tokenizer_config: None,
                 dispatch: None,
                 kv_caches: None,
-            #[cfg(feature = "cuda")]
                 cpu_kv_caches: None,
-            #[cfg(feature = "cuda")]
                 capture_per_layer: None,
                 weight_store: None,
             },
