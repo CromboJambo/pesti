@@ -86,6 +86,8 @@ pub mod fused_attention_conformant;
 #[cfg(feature = "cuda")]
 pub mod fused_decode_attention; // Fused softmax+weighted-sum for autoregressive decode (Phase 1)
 #[cfg(feature = "cuda")]
+pub mod fused_decode_attention_delta; // Route C: delta-encoded KV attention kernel
+#[cfg(feature = "cuda")]
 pub mod gemm;
 #[cfg(not(feature = "cuda"))]
 pub mod gemm_stub;
@@ -102,6 +104,7 @@ pub mod memory_stub;
 pub mod mistralrs_backend;
 #[cfg(feature = "cuda")]
 pub mod q4k_kvcache; // Q4_K quantized KV cache for reduced memory bandwidth
+pub mod delta_kvcache; // Delta-encoded KV cache with provable error bounds E(n) ≤ n·δ/2
 pub mod q4k_quantize; // Q4_K quantization (inverse of dequantization)
 pub mod rope;
 pub mod selector;

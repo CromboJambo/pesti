@@ -365,6 +365,9 @@ impl LlamaRunner {
 
     /// Run a full generation loop: encode prompt, prefill, then decode token by token.
     pub fn generate(&self, prompt: &str, config: &SamplingConfig) -> Result<GenerationResult> {
+        // Clear KV cache from any previous generation to avoid position conflicts
+        self.clear_kv_cache()?;
+
         // Build sampler
         let mut sampler = self.build_sampler(config);
 
@@ -528,6 +531,9 @@ impl LlamaRunner {
     where
         F: FnMut(&TokenInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
     {
+        // Clear KV cache from any previous generation to avoid position conflicts
+        self.clear_kv_cache()?;
+
         let mut sampler = self.build_sampler(config);
 
         // Encode prompt

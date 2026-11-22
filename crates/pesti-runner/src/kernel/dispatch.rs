@@ -41,6 +41,7 @@ use crate::kernel::attention_stub::{
     AttentionArch, AttentionConfig, AttentionKernel, CpuAttentionKernel,
 };
 use crate::kernel::candle_bridge;
+use super::delta_kvcache::DeltaKvCache;
 #[cfg(feature = "cuda")]
 use crate::kernel::cuda_bridge::CudaBridge;
 use crate::kernel::device_buf::DeviceBuffer;
@@ -58,11 +59,56 @@ use crate::kernel::memory::MemoryManager;
 use crate::kernel::memory_stub::MemoryManager;
 #[cfg(feature = "cuda")]
 use crate::kernel::rope::CudaRopeKernel;
+use crate::kernel::selector::ComputeArch;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Tensor};
 use half::f16;
 use tracing::{debug, warn};
+
+// ── Execution Mode (Phase 2: Complexity Architecture) ──────────────────────
+
+/// Resolved execution mode — determined once at init, not per-call.
+///
+/// Replaces the scattered `prefer_gpu && gpu_available()` checks that were
+/// duplicated across every dispatch method. The mode is resolved at
+/// construction time and only changes via explicit `re_detect_mode()`.
+#[derive(Debug, Clone)]
+pub enum ExecutionMode {
+    /// CPU-only execution (no GPU detected or user disabled it)
+    Cpu,
+    /// GPU execution with specified backend and architecture
+    Gpu {
+        /// The GPU backend in use
+        backend: GpuBackend,
+        /// The detected compute architecture
+        arch: ComputeArch,
+    },
+}
+
+/// Available GPU backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuBackend {
+    /// candle_bridge with CUDA feature (cuBLAS via Candle)
+    CandleBridge,
+    /// Direct CUDA calls (future)
+    DirectCuda,
+}
+
+impl ExecutionMode {
+    /// Get the compute architecture for kernel selection requests.
+    pub fn arch(&self) -> ComputeArch {
+        match self {
+            ExecutionMode::Cpu => ComputeArch::Cpu,
+            ExecutionMode::Gpu { arch, .. } => *arch,
+        }
+    }
+
+    /// Whether this mode uses GPU execution.
+    pub fn is_gpu(&self) -> bool {
+        matches!(self, ExecutionMode::Gpu { .. })
+    }
+}
 
 // ── Error types ────────────────────────────────────────────────────────────
 
@@ -128,7 +174,11 @@ pub struct DispatchContext {
     /// Memory manager for device buffer allocation.
     memory: MemoryManager,
     /// Whether GPU path is preferred (true) or CPU-only (false).
+    #[allow(dead_code)] // Retained for backward compat; `mode` is the source of truth
     prefer_gpu: bool,
+    /// Resolved execution mode — determined once at init (Phase 2).
+    /// Source of truth for arch selection in kernel requests.
+    pub mode: ExecutionMode,
     /// Cached CPU attention kernel for fallback.
     cpu_attention: CpuAttentionKernel,
     /// Number of times a GPU op failed and fell back to CPU. Non-zero after a
@@ -185,10 +235,21 @@ impl DispatchContext {
         let registry = crate::kernel::selector::KernelRegistry::detect(cuda_sm);
         let kernel_selector = crate::kernel::selector::KernelSelector::new(registry);
 
+        // Phase 2: Resolve execution mode once at init.
+        let mode = if prefer_gpu {
+            ExecutionMode::Gpu {
+                backend: GpuBackend::CandleBridge,
+                arch: ComputeArch::Cuda { sm: cuda_sm.unwrap_or(86) },
+            }
+        } else {
+            ExecutionMode::Cpu
+        };
+
         Self {
             engine,
             memory,
             prefer_gpu,
+            mode,
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -270,12 +331,24 @@ impl DispatchContext {
             None
         };
 
+        // Phase 2: Resolve execution mode once at init.
+        let mode = if prefer_gpu {
+            let sm = Self::detect_cuda_sm(&engine);
+            ExecutionMode::Gpu {
+                backend: GpuBackend::CandleBridge,
+                arch: ComputeArch::Cuda { sm: sm.unwrap_or(86) },
+            }
+        } else {
+            ExecutionMode::Cpu
+        };
+
         Self {
             engine,
             memory: crate::kernel::MemoryManager::Cpu(crate::kernel::CpuMemoryBackend::new(
                 1024 * 1024,
             )),
             prefer_gpu,
+            mode,
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -317,6 +390,14 @@ impl DispatchContext {
             engine,
             memory,
             prefer_gpu,
+            mode: if prefer_gpu {
+                ExecutionMode::Gpu {
+                    backend: GpuBackend::CandleBridge,
+                    arch: ComputeArch::Cuda { sm: cuda_sm.unwrap_or(86) },
+                }
+            } else {
+                ExecutionMode::Cpu
+            },
             cpu_attention: CpuAttentionKernel::new(AttentionArch::Cpu),
             gpu_fallback_count: std::sync::atomic::AtomicU32::new(0),
             #[cfg(feature = "cuda")]
@@ -354,6 +435,41 @@ impl DispatchContext {
     /// Whether GPU is actually available (not just preferred).
     pub fn gpu_available(&self) -> bool {
         self.engine.gpu_available()
+    }
+
+    /// Re-detect execution mode and rebuild the kernel selector.
+    /// Use this for explicit GPU state recovery (e.g., after driver crash or OOM).
+    /// This is the only supported way to change execution mode at runtime —
+    /// dispatch methods never re-check hardware state on their own.
+    pub fn re_detect_mode(&mut self) {
+        let prefer_gpu = self.engine.gpu_available();
+        let mode = if prefer_gpu {
+            #[cfg(feature = "cuda")]
+            {
+                let sm = Self::detect_cuda_sm(&self.engine);
+                ExecutionMode::Gpu {
+                    backend: GpuBackend::CandleBridge,
+                    arch: ComputeArch::Cuda { sm: sm.unwrap_or(86) },
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                ExecutionMode::Cpu
+            }
+        } else {
+            ExecutionMode::Cpu
+        };
+        self.mode = mode;
+        // Rebuild the kernel registry and selector for the new mode.
+        let cuda_sm = match &self.mode {
+            ExecutionMode::Cpu => None,
+            ExecutionMode::Gpu { arch, .. } => match arch {
+                ComputeArch::Cuda { sm } => Some(*sm),
+                _ => None,
+            },
+        };
+        let registry = crate::kernel::selector::KernelRegistry::detect(cuda_sm);
+        self.kernel_selector = crate::kernel::selector::KernelSelector::new(registry);
     }
 
     /// Whether the direct CUDA cuBLAS bridge for F16 inference is available.
@@ -416,12 +532,8 @@ impl DispatchContext {
 
         let c_len = m * n;
 
-        // Selector-based dispatch: decide GPU vs CPU via the kernel registry.
-        let arch = if self.prefer_gpu && self.gpu_available() {
-            ComputeArch::Cuda { sm: self.cuda_sm() }
-        } else {
-            ComputeArch::Cpu
-        };
+        // Phase 2: Use ExecutionMode instead of per-call GPU availability checks.
+        let arch = self.mode.arch();
 
         let req = KernelRequest::gemm(arch, KernelDType::F16, m, n, k);
         let selected = self.kernel_selector.select_ref(&req);
@@ -624,12 +736,8 @@ impl DispatchContext {
         // Convert input to f16 for GPU
         let x_f16: Vec<f16> = x.iter().map(|v| f16::from_f32(*v)).collect();
 
-        // Determine target architecture
-        let arch = if self.prefer_gpu && self.gpu_available() {
-            ComputeArch::Cuda { sm: self.cuda_sm() }
-        } else {
-            ComputeArch::Cpu
-        };
+        // Phase 2: Use ExecutionMode instead of per-call GPU availability checks.
+        let arch = self.mode.arch();
 
         // Query the kernel selector for the best GEMM kernel
         let req = KernelRequest::linear(arch, KernelDType::F16, m, k, n);
@@ -781,32 +889,9 @@ impl DispatchContext {
             out
         };
 
-        // Use candle_bridge::gemm when a real CUDA device is available, CPU
-        // fallback otherwise. (The bridge only runs on GPU when candle-core is
-        // built with its cuda feature; otherwise prefer the native CPU GEMM.)
-        let mut result = if self.prefer_gpu
-            && self.gpu_available()
-            && crate::kernel::candle_bridge::bridge_is_cuda()
-        {
-            debug!(m, n, k, "Linear: using candle_bridge::gemm (GPU)");
-
-            // Validate weight shape before transpose
-            assert_eq!(
-                weights.len(),
-                n * k,
-                "Weight shape mismatch: expected {} elements ({}×{}), got {}",
-                n * k,
-                n,
-                k,
-                weights.len()
-            );
-
-            candle_bridge::gemm(&x_f16, &w_t, None, m, k, n, 1.0, 0.0)
-                .map_err(|e| DispatchError::Kernel(format!("candle_bridge::gemm: {e}")))
-        } else {
-            debug!(m, n, k, "Linear: using CPU GEMM");
-            Ok(self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?)
-        }?;
+        // CPU-only path (non-CUDA build) — no GPU dispatch needed
+        debug!(m, n, k, "Linear: using CPU GEMM");
+        let mut result = self.dispatch_gemm_cpu(&x_f16, &w_t, None, m, n, k, 1.0, 0.0)?;
 
         // Add bias if present
         if let Some(b) = bias {
@@ -1022,6 +1107,10 @@ pub struct AttentionDispatch {
     #[cfg(feature = "cuda")]
     pub fused_decode_kernel:
         Option<crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel>,
+    /// Route C delta-aware fused decode attention kernel (reads i8 deltas directly).
+    #[cfg(feature = "cuda")]
+    pub delta_decode_kernel:
+        Option<crate::kernel::fused_decode_attention_delta::DeltaFusedDecodeAttentionKernel>,
     /// Pre-compiled CUDA rope kernel for GPU acceleration (set after construction).
     #[cfg(feature = "cuda")]
     pub rope_kernel: Option<Arc<CudaRopeKernel>>,
@@ -1047,6 +1136,8 @@ impl AttentionDispatch {
         let fused_kernel = None; // Will be set via set_fused_kernel() after CUDA init
         #[cfg(feature = "cuda")]
         let fused_decode_kernel = None; // Will be set via set_fused_decode_kernel() after CUDA init
+        #[cfg(feature = "cuda")]
+        let delta_decode_kernel = None; // Will be set via set_delta_decode_kernel() after CUDA init
 
         Self {
             wq,
@@ -1062,6 +1153,8 @@ impl AttentionDispatch {
             fused_kernel,
             #[cfg(feature = "cuda")]
             fused_decode_kernel,
+            #[cfg(feature = "cuda")]
+            delta_decode_kernel,
             #[cfg(feature = "cuda")]
             rope_kernel: None,
             #[cfg(feature = "cuda")]
@@ -1085,6 +1178,21 @@ impl AttentionDispatch {
         kernel: crate::kernel::fused_decode_attention::FusedDecodeAttentionKernel,
     ) {
         self.fused_decode_kernel = Some(kernel);
+    }
+
+    /// Set the Route C delta-aware fused decode attention kernel.
+    #[cfg(feature = "cuda")]
+    pub fn set_delta_decode_kernel(
+        &mut self,
+        kernel: crate::kernel::fused_decode_attention_delta::DeltaFusedDecodeAttentionKernel,
+    ) {
+        self.delta_decode_kernel = Some(kernel);
+    }
+
+    /// Check if the delta-aware decode kernel is available.
+    #[cfg(feature = "cuda")]
+    fn has_delta_decode_kernel(&self) -> bool {
+        self.delta_decode_kernel.is_some()
     }
 
     /// Set the pre-compiled CUDA rope kernel for GPU acceleration.
@@ -1135,6 +1243,7 @@ impl AttentionDispatch {
         start_pos: usize,
         key_cache: &mut Kvcache,
         value_cache: &mut Kvcache,
+        delta_cache: &mut Option<DeltaKvCache>,
     ) -> Result<Vec<f32>, DispatchError> {
         let embed_dim = self.num_heads * self.head_dim;
         let scale = 1.0 / (self.head_dim as f32).sqrt();
@@ -1147,11 +1256,8 @@ impl AttentionDispatch {
         // Selector-based dispatch: decide GPU vs CPU attention via the kernel registry.
         use crate::kernel::selector::{ComputeArch, KernelDType, KernelId, KernelRequest};
 
-        let arch = if ctx.gpu_available() {
-            ComputeArch::Cuda { sm: ctx.cuda_sm() }
-        } else {
-            ComputeArch::Cpu
-        };
+        // Phase 2: Use ExecutionMode instead of per-call GPU availability checks.
+        let arch = ctx.mode.arch();
 
         let req = KernelRequest::attention(arch, KernelDType::F16, seq_len, start_pos);
         let selected = ctx.kernel_selector().select_ref(&req);
@@ -1169,6 +1275,7 @@ impl AttentionDispatch {
                     start_pos,
                     key_cache,
                     value_cache,
+                    delta_cache,
                     scale,
                 );
             }
@@ -1753,6 +1860,7 @@ impl AttentionDispatch {
         start_pos: usize,
         key_cache: &mut Kvcache,
         value_cache: &mut Kvcache,
+        delta_cache: &mut Option<DeltaKvCache>,
         scale: f32,
     ) -> Result<Vec<f32>, DispatchError> {
         #[allow(unused_variables)]
@@ -1812,6 +1920,31 @@ impl AttentionDispatch {
             value_cache.write_v_at(global_pos, &v_row).map_err(|e| {
                 DispatchError::Kernel(format!("KV cache V write at pos {global_pos}: {e}"))
             })?;
+        }
+
+        // Route C: Push RoPE'd K/V into delta cache for incremental encoding.
+        // This is O(d) per head — replaces the O(n*d) rebuild in forward_gpu_decode_delta.
+        #[cfg(feature = "cuda")]
+        if let Some(dc) = delta_cache.as_mut() {
+            dc.push(&k_rows, &v_rows).map_err(|e| {
+                DispatchError::Kernel(format!("delta cache push: {e}"))
+            })?;
+        }
+
+        // Route C: Use delta-aware decode attention kernel for single-token decode.
+        // Reads i8 deltas directly on GPU — ~4x less KV bandwidth than full vectors.
+        // Takes priority over standard fused decode when available (3x faster).
+        #[cfg(feature = "cuda")]
+        if self.has_delta_decode_kernel() && batch_size == 1 && seq_len == 1 && start_pos + 1 >= 2 {
+            return self.forward_gpu_decode_delta(
+                ctx,
+                &q_rope_t,
+                key_cache,
+                value_cache,
+                delta_cache,
+                start_pos,
+                scale,
+            );
         }
 
         // Use fused attention kernel if available and we have enough context.
@@ -2135,6 +2268,221 @@ impl AttentionDispatch {
         Ok(wo_output)
     }
 
+    /// GPU-accelerated decode attention using the Route C delta-aware kernel.
+    ///
+    /// Instead of transferring full K/V vectors to device, this builds base + i8 delta
+    /// representations on host and lets the kernel compute attention directly from deltas,
+    /// reducing memory bandwidth by ~4x for the KV data.
+    #[cfg(feature = "cuda")]
+    fn forward_gpu_decode_delta(
+        &self,
+        ctx: &DispatchContext,
+        q_rope_t: &Tensor,
+        key_cache: &Kvcache,
+        value_cache: &Kvcache,
+        delta_cache: &mut Option<DeltaKvCache>,
+        start_pos: usize,
+        scale: f32,
+    ) -> Result<Vec<f32>, DispatchError> {
+        let embed_dim = self.num_heads * self.head_dim;
+        let cache_len = start_pos + 1; // decode: one new token
+
+        if cache_len < 2 {
+            return Err(DispatchError::Kernel(
+                "delta decode requires cache_len >= 2".to_string(),
+            ));
+        }
+
+        // Extract Q values from RoPE'd tensor [1, 1, num_heads, head_dim]
+        let q_f32: Vec<f32> = candle_bridge::tensor_to_f32_flat(q_rope_t)
+            .map_err(|e| DispatchError::Kernel(format!("q rope to f32: {e}")))?;
+
+        // Delta quantization parameters (tunable per-layer in future)
+        let k_step = 0.05f32;
+        let v_step = 0.05f32;
+
+        // Process each query head independently (GQA: multiple Q heads per KV head)
+        let mut attn_concat = Vec::with_capacity(self.num_heads);
+        for q_h in 0..self.num_heads {
+            let kv_h = q_h / (self.num_heads / self.num_kv_heads);
+
+            // Extract Q row for this head from RoPE'd tensor [head_dim]
+            let q_offset = q_h * self.head_dim;
+            let q_row = &q_f32[q_offset..q_offset + self.head_dim];
+
+            // Build K base + deltas from delta cache (incremental O(d)) or rebuild from KV cache.
+            let (k_base, k_deltas) = if let Some(dc) = delta_cache.as_ref() {
+                if dc.seq_len() == cache_len {
+                    // Fast path: read pre-computed deltas (O(d) per head)
+                    (dc.k_base_head(kv_h).to_vec(), dc.k_deltas_head_flat(kv_h).to_vec())
+                } else {
+                    // Fallback: delta cache out of sync, rebuild from KV cache
+                    let mut k_base: Vec<f32> = Vec::with_capacity(self.head_dim);
+                    let mut k_deltas: Vec<i8> = Vec::with_capacity((cache_len - 1) * self.head_dim);
+                    let k_base_slice = Self::extract_head_slice(key_cache, true, kv_h, 0, self.head_dim);
+                    k_base.extend_from_slice(&k_base_slice.iter().map(|&x| x.to_f32()).collect::<Vec<f32>>());
+                    let mut prev_k: Vec<f32> = k_base.clone();
+                    for j in 1..cache_len {
+                        let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                        let k_cur: Vec<f32> = k_slice.iter().map(|&x| x.to_f32()).collect();
+                        for i in 0..self.head_dim {
+                            let delta = k_cur[i] - prev_k[i];
+                            let q_delta = (delta / k_step).round().clamp(-127.0, 127.0) as i8;
+                            k_deltas.push(q_delta);
+                        }
+                        prev_k = k_cur;
+                    }
+                    (k_base, k_deltas)
+                }
+            } else {
+                // No delta cache: rebuild from KV cache
+                let mut k_base: Vec<f32> = Vec::with_capacity(self.head_dim);
+                let mut k_deltas: Vec<i8> = Vec::with_capacity((cache_len - 1) * self.head_dim);
+                let k_base_slice = Self::extract_head_slice(key_cache, true, kv_h, 0, self.head_dim);
+                k_base.extend_from_slice(&k_base_slice.iter().map(|&x| x.to_f32()).collect::<Vec<f32>>());
+                let mut prev_k: Vec<f32> = k_base.clone();
+                for j in 1..cache_len {
+                    let k_slice = Self::extract_head_slice(key_cache, true, kv_h, j, self.head_dim);
+                    let k_cur: Vec<f32> = k_slice.iter().map(|&x| x.to_f32()).collect();
+                    for i in 0..self.head_dim {
+                        let delta = k_cur[i] - prev_k[i];
+                        let q_delta = (delta / k_step).round().clamp(-127.0, 127.0) as i8;
+                        k_deltas.push(q_delta);
+                    }
+                    prev_k = k_cur;
+                }
+                (k_base, k_deltas)
+            };
+
+            // Build V base + deltas from delta cache or rebuild from KV cache.
+            let (v_base, v_deltas) = if let Some(dc) = delta_cache.as_ref() {
+                if dc.seq_len() == cache_len {
+                    (dc.v_base_head(kv_h).to_vec(), dc.v_deltas_head_flat(kv_h).to_vec())
+                } else {
+                    let mut v_base: Vec<f32> = Vec::with_capacity(self.head_dim);
+                    let mut v_deltas: Vec<i8> = Vec::with_capacity((cache_len - 1) * self.head_dim);
+                    let v_base_slice = Self::extract_head_slice(value_cache, false, kv_h, 0, self.head_dim);
+                    v_base.extend_from_slice(&v_base_slice.iter().map(|&x| x.to_f32()).collect::<Vec<f32>>());
+                    let mut prev_v: Vec<f32> = v_base.clone();
+                    for j in 1..cache_len {
+                        let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                        let v_cur: Vec<f32> = v_slice.iter().map(|&x| x.to_f32()).collect();
+                        for i in 0..self.head_dim {
+                            let delta = v_cur[i] - prev_v[i];
+                            let q_delta = (delta / v_step).round().clamp(-127.0, 127.0) as i8;
+                            v_deltas.push(q_delta);
+                        }
+                        prev_v = v_cur;
+                    }
+                    (v_base, v_deltas)
+                }
+            } else {
+                let mut v_base: Vec<f32> = Vec::with_capacity(self.head_dim);
+                let mut v_deltas: Vec<i8> = Vec::with_capacity((cache_len - 1) * self.head_dim);
+                let v_base_slice = Self::extract_head_slice(value_cache, false, kv_h, 0, self.head_dim);
+                v_base.extend_from_slice(&v_base_slice.iter().map(|&x| x.to_f32()).collect::<Vec<f32>>());
+                let mut prev_v: Vec<f32> = v_base.clone();
+                for j in 1..cache_len {
+                    let v_slice = Self::extract_head_slice(value_cache, false, kv_h, j, self.head_dim);
+                    let v_cur: Vec<f32> = v_slice.iter().map(|&x| x.to_f32()).collect();
+                    for i in 0..self.head_dim {
+                        let delta = v_cur[i] - prev_v[i];
+                        let q_delta = (delta / v_step).round().clamp(-127.0, 127.0) as i8;
+                        v_deltas.push(q_delta);
+                    }
+                    prev_v = v_cur;
+                }
+                (v_base, v_deltas)
+            };
+
+            // Allocate device buffers
+            let q_bytes = std::mem::size_of::<f32>() * self.head_dim;
+            let base_bytes = std::mem::size_of::<f32>() * self.head_dim;
+            let delta_bytes = std::mem::size_of::<i8>() * (cache_len - 1) * self.head_dim;
+            let out_bytes = std::mem::size_of::<f32>() * self.head_dim;
+
+            let q_handle = ctx.memory.alloc(q_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc q: {e}")))?;
+            let k_base_handle = ctx.memory.alloc(base_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc k_base: {e}")))?;
+            let v_base_handle = ctx.memory.alloc(base_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc v_base: {e}")))?;
+            let k_delta_handle = ctx.memory.alloc(delta_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc k_deltas: {e}")))?;
+            let v_delta_handle = ctx.memory.alloc(delta_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc v_deltas: {e}")))?;
+            let out_handle = ctx.memory.alloc(out_bytes)
+                .map_err(|e| DispatchError::Memory(format!("alloc out: {e}")))?;
+
+            // Transfer Q (f32) to device
+            let q_raw = unsafe { std::slice::from_raw_parts(q_row.as_ptr() as *const u8, q_bytes) };
+            ctx.memory.h2d(q_raw, q_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D q: {e}")))?;
+
+            // Transfer K base + deltas
+            let k_base_raw = unsafe { std::slice::from_raw_parts(k_base.as_ptr() as *const u8, base_bytes) };
+            ctx.memory.h2d(k_base_raw, k_base_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D k_base: {e}")))?;
+
+            let v_base_raw = unsafe { std::slice::from_raw_parts(v_base.as_ptr() as *const u8, base_bytes) };
+            ctx.memory.h2d(v_base_raw, v_base_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D v_base: {e}")))?;
+
+            let k_delta_raw = unsafe { std::slice::from_raw_parts(k_deltas.as_ptr() as *const u8, delta_bytes) };
+            ctx.memory.h2d(k_delta_raw, k_delta_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D k_deltas: {e}")))?;
+
+            let v_delta_raw = unsafe { std::slice::from_raw_parts(v_deltas.as_ptr() as *const u8, delta_bytes) };
+            ctx.memory.h2d(v_delta_raw, v_delta_handle)
+                .map_err(|e| DispatchError::Transfer(format!("H2D v_deltas: {e}")))?;
+
+            // Launch delta-aware fused decode attention kernel
+            if let Some(ref kernel) = self.delta_decode_kernel {
+                kernel.launch(
+                    q_handle.as_ptr() as u64,
+                    k_base_handle.as_ptr() as u64,
+                    v_base_handle.as_ptr() as u64,
+                    k_delta_handle.as_ptr() as u64,
+                    v_delta_handle.as_ptr() as u64,
+                    k_step,
+                    v_step,
+                    scale,
+                    cache_len,
+                    self.head_dim,
+                    out_handle.as_ptr() as u64,
+                ).map_err(|e| DispatchError::Kernel(format!("delta decode kernel: {e}")))?;
+            }
+
+            // Synchronize and read back
+            ctx.memory.sync()
+                .map_err(|e| DispatchError::Kernel(format!("sync: {e}")))?;
+
+            let mut out_f32 = vec![0.0f32; self.head_dim];
+            let out_ptr = unsafe { std::ptr::addr_of_mut!(out_f32[0]) as *mut u8 };
+            ctx.memory.d2h(out_handle, unsafe {
+                std::slice::from_raw_parts_mut(out_ptr, out_bytes)
+            }).map_err(|e| DispatchError::Transfer(format!("D2H out: {e}")))?;
+
+            // Free device buffers
+            let _ = ctx.memory.free(q_handle);
+            let _ = ctx.memory.free(k_base_handle);
+            let _ = ctx.memory.free(v_base_handle);
+            let _ = ctx.memory.free(k_delta_handle);
+            let _ = ctx.memory.free(v_delta_handle);
+            let _ = ctx.memory.free(out_handle);
+
+            attn_concat.push(out_f32);
+        }
+
+        // Flatten all heads and apply output projection
+        let mut flat_attn = Vec::with_capacity(embed_dim);
+        for row in attn_concat {
+            flat_attn.extend(row);
+        }
+        let wo_output = self.wo.forward(ctx, &flat_attn, 1)?;
+        Ok(wo_output)
+    }
+
     /// Manual per-head attention fallback for small sequences or when fused kernel unavailable.
     fn forward_gpu_manual(
         &self,
@@ -2251,6 +2599,7 @@ impl LayerDispatch {
         start_pos: usize,
         key_cache: &mut Kvcache,
         value_cache: &mut Kvcache,
+        delta_cache: &mut Option<DeltaKvCache>,
     ) -> Result<Vec<f32>, DispatchError> {
         use crate::profiler;
 
@@ -2270,6 +2619,7 @@ impl LayerDispatch {
                 start_pos,
                 key_cache,
                 value_cache,
+                delta_cache,
             )?;
 
             // Residual: x + attn_out

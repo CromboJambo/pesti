@@ -1,0 +1,330 @@
+// Fused decode attention with delta-encoded KV cache (Route C).
+// Reads i8 delta codes directly, exploits prefix-sum structure for O(n) score computation.
+//
+// Mathematical basis:
+//   K[pos] = base + sum_{j=1}^{pos} delta_k[j]
+//   score[pos] = q . K[pos] * scale
+//   output[i] = v_base[i]*total_w + sum_j delta_v[j][i]*v_step*suffix_w[j]
+//
+// Block size must equal head_dim (64 for LLaMA). One thread per dimension.
+
+.version 9.4
+.target sm_89
+.address_size 64
+
+.visible .entry fused_attention_delta(
+    .param .u64 q_ptr,
+    .param .u64 k_base_ptr,
+    .param .u64 v_base_ptr,
+    .param .u64 k_deltas,
+    .param .u64 v_deltas,
+    .param .f32 k_step,
+    .param .f32 v_step,
+    .param .f32 scale,
+    .param .u32 seq_len,
+    .param .u32 head_dim,
+    .param .u64 output
+)
+{
+    // Shared memory: 1600 f32 = 6400 bytes
+    //   [0, 512)      : scores[512]
+    //   [512, 1024)   : weights[512]
+    //   [1024, 1536)  : suffix_w[512]
+    //   [1536, 1600)  : reduce_buf[64]
+    .shared .align 4 .b8 _delta_shared[6400];
+
+    .reg .pred %p<20>;
+    .reg .f32 %f<50>;
+    .reg .b32 %r<80>;
+    .reg .b64 %rd<55>;
+
+    // Load parameters
+    ld.param.u64 %rd1, [q_ptr];
+    ld.param.u64 %rd2, [k_base_ptr];
+    ld.param.u64 %rd3, [v_base_ptr];
+    ld.param.u64 %rd4, [k_deltas];
+    ld.param.u64 %rd5, [v_deltas];
+    ld.param.f32 %f1, [k_step];
+    ld.param.f32 %f2, [v_step];
+    ld.param.f32 %f3, [scale];
+    ld.param.u32 %r1, [seq_len];
+    ld.param.u32 %r2, [head_dim];
+    ld.param.u64 %rd6, [output];
+
+    mov.u32 %r10, %tid.x;             // thread id = dimension index
+    mov.u32 %r11, %ntid.x;            // block size (= head_dim)
+
+    // Shared memory base addresses (32-bit shared space)
+    mov.u32 %r40, _delta_shared;          // scores base (offset 0)
+    add.s32 %r41, %r40, 2048;             // weights base (512*4)
+    add.s32 %r42, %r41, 2048;             // suffix_w base (1024*4)
+    add.s32 %r43, %r42, 2048;             // reduce_buf base (1536*4)
+
+    // Guard: head_dim must match block size
+    setp.ne.u32 %p1, %r2, %r11;
+    @%p1 bra $L__exit;
+
+    // === PHASE 1: Load base values, compute base_score via block reduction ===
+    mul.wide.s32 %rd17, %r10, 4;
+    add.s64 %rd18, %rd2, %rd17;
+    ld.global.f32 %f5, [%rd18];            // k_base[tid]
+
+    add.s64 %rd19, %rd3, %rd17;
+    ld.global.f32 %f6, [%rd19];            // v_base[tid]
+
+    add.s64 %rd20, %rd1, %rd17;
+    ld.global.f32 %f7, [%rd20];            // q[tid]
+
+    mul.f32 %f8, %f7, %f5;                 // partial base score: q[i]*k_base[i]
+
+    // Write partial to reduction buffer at reduce_buf[tid]
+    shl.b32 %r50, %r10, 2;
+    add.s32 %r51, %r43, %r50;
+    st.shared.f32 [%r51], %f8;
+
+    bar.sync 0;
+
+    // All threads sum all partials (simple O(n) reduction for 64 threads)
+    mov.f32 %f9, 0f00000000;
+    mov.u32 %r30, 0;
+
+$L__reduce_base:
+    setp.ge.u32 %p2, %r30, %r11;
+    @%p2 bra $L__base_done;
+
+    shl.b32 %r52, %r30, 2;
+    add.s32 %r53, %r43, %r52;
+    ld.shared.f32 %f10, [%r53];
+    add.f32 %f9, %f9, %f10;
+
+    add.s32 %r30, %r30, 1;
+    bra $L__reduce_base;
+
+$L__base_done:
+    bar.sync 0;
+
+    // f9 = base_score (same in all threads)
+    mul.f32 %f11, %f9, %f3;                // score[0] = base * scale
+    st.shared.f32 [%r40], %f11;            // scores[0]
+    mov.f32 %f12, %f11;                    // running_max
+
+    // Init cumulative delta tracker at reduce_buf[64]
+    add.s32 %r44, %r43, 256;               // address of reduce_buf[64]
+    st.shared.f32 [%r44], 0f00000000;
+
+    // === PHASE 2: Prefix sum scores ===
+    mov.u32 %r30, 1;                        // position counter
+
+$L__score_loop:
+    setp.ge.u32 %p3, %r30, %r1;             // done with all positions?
+    @%p3 bra $L__softmax_start;
+
+    // Load delta_k[pos-1][tid] as signed 8-bit
+    sub.s32 %r31, %r30, 1;                  // delta row index
+    mul.lo.s32 %r32, %r31, %r2;             // row byte offset
+    add.s32 %r33, %r32, %r10;               // element byte offset
+    mul.wide.s32 %rd25, %r33, 1;
+    add.s64 %rd26, %rd4, %rd25;
+
+    ld.global.s8 %r34, [%rd26];             // sign-extended i8 -> b32
+    cvt.rn.f32.s32 %f14, %r34;              // delta code as f32
+    mul.f32 %f14, %f14, %f1;                // * k_step = actual delta value
+
+    add.f32 %f5, %f5, %f14;                 // update running K reconstruction
+
+    mul.f32 %f15, %f7, %f14;                // partial delta score: q[i]*delta_val
+
+    // Write to reduction buffer
+    shl.b32 %r54, %r10, 2;
+    add.s32 %r55, %r43, %r54;
+    st.shared.f32 [%r55], %f15;
+
+    bar.sync 0;
+
+    // All threads sum all partials -> delta_score
+    mov.f32 %f16, 0f00000000;
+    mov.u32 %r56, 0;                        // initialize loop counter
+
+$L__reduce_delta:
+    setp.ge.u32 %p4, %r56, %r11;
+    @%p4 bra $L__delta_done;
+
+    shl.b32 %r57, %r56, 2;
+    add.s32 %r58, %r43, %r57;
+    ld.shared.f32 %f17, [%r58];
+    add.f32 %f16, %f16, %f17;
+
+    add.s32 %r56, %r56, 1;
+    bra $L__reduce_delta;
+
+$L__delta_done:
+    bar.sync 0;
+
+    // Accumulate scaled delta in shared memory
+    mul.f32 %f18, %f16, %f3;                // scaled delta score
+    ld.shared.f32 %f19, [%r44];             // current cumulative
+    add.f32 %f19, %f19, %f18;
+    st.shared.f32 [%r44], %f19;
+
+    bar.sync 0;
+
+    // Compute score = base_scaled + cumulative
+    mul.f32 %f20, %f9, %f3;                 // base_score * scale
+    ld.shared.f32 %f21, [%r44];             // cumulative scaled delta
+    add.f32 %f22, %f20, %f21;               // score[pos]
+
+    // Update running max
+    setp.gt.f32 %p5, %f22, %f12;
+    @%p5 mov.f32 %f12, %f22;
+
+    // Store score in shared memory
+    shl.b32 %r59, %r30, 2;
+    add.s32 %r60, %r40, %r59;
+    st.shared.f32 [%r60], %f22;
+
+    add.s32 %r30, %r30, 1;
+    bra $L__score_loop;
+
+$L__softmax_start:
+    // === PHASE 3: Softmax ===
+    // Each thread processes positions with stride = block_size
+    mov.u32 %r61, %r10;
+    mov.f32 %f23, 0f00000000;               // partial exp sum
+
+$L__softmax_exp:
+    setp.ge.u32 %p6, %r61, %r1;
+    @%p6 bra $L__softmax_reduce_start;
+
+    shl.b32 %r62, %r61, 2;
+    add.s32 %r63, %r40, %r62;               // scores[pos]
+    ld.shared.f32 %f24, [%r63];
+
+    sub.f32 %f25, %f24, %f12;               // score - max
+    mul.f32 %f26, %f25, 0f3F317218;         // * log2(e)
+    ex2.approx.f32 %f27, %f26;              // e^(score-max)
+
+    add.s32 %r64, %r41, %r62;               // weights[pos]
+    st.shared.f32 [%r64], %f27;
+    fma.rn.f32 %f23, 0f3F800000, %f27, %f23;  // sum += w
+
+    add.s32 %r61, %r61, %r11;
+    bra $L__softmax_exp;
+
+$L__softmax_reduce_start:
+    // Block reduction of exp sum via shared memory
+    shl.b32 %r65, %r10, 2;
+    add.s32 %r66, %r43, %r65;
+    st.shared.f32 [%r66], %f23;
+
+    bar.sync 0;
+
+    mov.f32 %f28, 0f00000000;
+    mov.u32 %r67, 0;
+
+$L__reduce_exp:
+    setp.ge.u32 %p7, %r67, %r11;
+    @%p7 bra $L__exp_done;
+
+    shl.b32 %r68, %r67, 2;
+    add.s32 %r69, %r43, %r68;
+    ld.shared.f32 %f29, [%r69];
+    add.f32 %f28, %f28, %f29;
+
+    add.s32 %r67, %r67, 1;
+    bra $L__reduce_exp;
+
+$L__exp_done:
+    bar.sync 0;
+
+    // Normalize weights (each thread handles its stride positions)
+    mov.u32 %r70, %r10;
+
+$L__normalize:
+    setp.ge.u32 %p8, %r70, %r1;
+    @%p8 bra $L__suffix_start;
+
+    shl.b32 %r71, %r70, 2;
+    add.s32 %r72, %r41, %r71;               // weights[pos]
+    ld.shared.f32 %f30, [%r72];
+    div.rn.f32 %f30, %f30, %f28;            // w /= total
+    st.shared.f32 [%r72], %f30;
+
+    add.s32 %r70, %r70, %r11;
+    bra $L__normalize;
+
+$L__suffix_start:
+    bar.sync 0;
+
+    // === PHASE 4: Suffix sums of weights (thread 0 only) ===
+    // suffix_w[j] = sum_{pos=j}^{N-1} w[pos]; suffix_w[0] = 1.0
+    setp.eq.u32 %p9, %r10, 0;
+    @%p9 bra $L__do_suffix;
+    bra $L__suffix_done;
+
+$L__do_suffix:
+    st.shared.f32 [%r42], 0f3F800000;       // suffix_w[0] = 1.0
+    mov.u32 %r73, 1;
+
+$L__suffix_loop:
+    setp.ge.u32 %p10, %r73, %r1;
+    @%p10 bra $L__suffix_done;
+
+    shl.b32 %r74, %r73, 2;
+    add.s32 %r75, %r42, %r74;               // suffix_w[j]
+    sub.s32 %r76, %r73, 1;
+    shl.b32 %r77, %r76, 2;
+    add.s32 %r78, %r42, %r77;               // suffix_w[j-1]
+    add.s32 %r79, %r41, %r77;               // weights[j-1]
+
+    ld.shared.f32 %f31, [%r78];
+    ld.shared.f32 %f32, [%r79];
+    sub.f32 %f33, %f31, %f32;
+    st.shared.f32 [%r75], %f33;
+
+    add.s32 %r73, %r73, 1;
+    bra $L__suffix_loop;
+
+$L__suffix_done:
+    bar.sync 0;
+
+    // === PHASE 5: Weighted V accumulation (each thread independent) ===
+    // output[i] = v_base[i]*1.0 + sum_{j=1}^{N-1} delta_v[j][i]*v_step*suffix_w[j]
+    mov.f32 %f34, 0f3F800000;                // 1.0
+    mul.f32 %f35, %f6, %f34;                 // output = v_base[i]
+
+    mov.u32 %r73, 1;
+
+$L__v_loop:
+    setp.ge.u32 %p11, %r73, %r1;
+    @%p11 bra $L__store_output;
+
+    // Load delta_v[pos-1][tid]
+    sub.s32 %r76, %r73, 1;
+    mul.lo.s32 %r77, %r76, %r2;
+    add.s32 %r78, %r77, %r10;
+    mul.wide.s32 %rd47, %r78, 1;
+    add.s64 %rd48, %rd5, %rd47;
+
+    ld.global.s8 %r79, [%rd48];              // sign-extended i8
+    cvt.rn.f32.s32 %f36, %r79;               // to f32
+    mul.f32 %f36, %f36, %f2;                 // * v_step
+
+    // Load suffix_w[pos]
+    shl.b32 %r56, %r73, 2;
+    add.s32 %r57, %r42, %r56;
+    ld.shared.f32 %f37, [%r57];
+
+    // Accumulate: output += delta_val * suffix_w[pos]
+    fma.rn.f32 %f35, %f36, %f37, %f35;
+
+    add.s32 %r73, %r73, 1;
+    bra $L__v_loop;
+
+$L__store_output:
+    mul.wide.s32 %rd49, %r10, 4;
+    add.s64 %rd50, %rd6, %rd49;
+    st.global.f32 [%rd50], %f35;
+
+$L__exit:
+    ret;
+}

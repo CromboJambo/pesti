@@ -294,7 +294,7 @@ impl Runtime {
 
                                 // Also attach fused decode attention kernel if available
                                 match crate::kernel::fused_decode_attention::build_fused_decode_attention_kernel(
-                                    context, stream
+                                    context.clone(), stream.clone()
                                 ) {
                                     Ok(fused_kernel) => {
                                         info!("Attaching CUDA fused decode attention kernel");
@@ -307,6 +307,23 @@ impl Runtime {
                                     }
                                     Err(e) => {
                                         warn!("Failed to create fused decode kernel, falling back: {}", e);
+                                    }
+                                }
+
+                                // Attach Route C delta-aware decode attention kernel if available
+                                match crate::kernel::fused_decode_attention_delta::build_delta_fused_decode_attention_kernel(
+                                    context, stream
+                                ) {
+                                    Ok(delta_kernel) => {
+                                        info!("Attaching CUDA delta-aware decode attention kernel (Route C)");
+                                        if let Some(ref mut dispatch_layers) = llama_model.dispatch_layers {
+                                            for layer_dispatch in dispatch_layers.iter_mut() {
+                                                layer_dispatch.attention.delta_decode_kernel = Some(delta_kernel.clone());
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to create delta decode kernel, falling back: {}", e);
                                     }
                                 }
                             }
