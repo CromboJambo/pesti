@@ -363,3 +363,6 @@ known gaps), see [`docs/ROADMAP.md`](docs/ROADMAP.md). For the current 5-phase G
 
 *Last updated: October 14, 2026 (Week 29 — persistent weight caching + GQA optimization; architecture simplification complete)*
 *This README will change as I learn more. If it looks perfect, it's lying.*
+---
+
+**Contact**: [projects@crombo.dev](mailto:projects@crombo.dev) · **Security**: [Private vulnerability reporting](https://github.com/CromboJambo/pesti/security/advisories/new)
