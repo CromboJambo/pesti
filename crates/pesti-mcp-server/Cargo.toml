@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 pesti-structural-tokenizer = { path = "../pesti-structural-tokenizer", version = "0.1.2" }
+pesti-runner = { path = "../pesti-runner", default-features = false }
+ndarray.workspace = true
 rmcp = { version = "3.5", features = ["server"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

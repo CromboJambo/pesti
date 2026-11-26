@@ -1,9 +1,16 @@
+use pesti_runner::diagnostics::spectral::SpectralProfiler;
 use pesti_structural_tokenizer::StructuralTokenizer;
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FileRequest {
     pub path: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SpectralAnalysisRequest {
+    /// 2D attention matrix as [query_positions][key_positions]
+    pub matrix: Vec<Vec<f64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +104,34 @@ impl PestiMcpServer {
             }
             Err(e) => format!("Error reading {}: {}", path, e),
         }
+    }
+
+    #[tool(description = "Analyze attention matrix for spectral degeneracy using RMT bounds. Takes a square 2D attention matrix (query x key) and returns effective rank, participation ratio, Marchenko-Pastur bounds, and severity assessment.")]
+    fn spectral_analyze(&self, params: Parameters<SpectralAnalysisRequest>) -> String {
+        let request = &params.0;
+        let n = request.matrix.len();
+        if n == 0 {
+            return "Error: empty attention matrix".to_string();
+        }
+        let m = request.matrix[0].len();
+        if m != n {
+            return format!("Error: attention matrix must be square (got {}x{})", n, m);
+        }
+
+        // Convert to ndarray Array2<f32>
+        use ndarray::Array2;
+        let mut data = vec![0.0f32; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                data[i * n + j] = request.matrix[i][j] as f32;
+            }
+        }
+        let attention = Array2::from_shape_vec((n, n), data).unwrap();
+
+        // Analyze using RMT-based spectral profiler
+        let profiler = SpectralProfiler::new();
+        let spectrum = profiler.analyze_attention(0, 0, &attention);
+        serde_json::to_string_pretty(&spectrum).unwrap_or_else(|e| format!("Serialization error: {}", e))
     }
 }
 
