@@ -250,3 +250,34 @@ This spec applies the same RMT machinery we used to verify GUE statistics for ze
 - Deviation from RMT prediction → structural anomaly
 
 The RH proof itself doesn't directly help here, but the *verification work* we did (computing GUE statistics in Rust, comparing to theoretical predictions) is exactly the pattern this spec implements for attention matrices.
+
+## §6 Implementation Status
+
+### Phase 1: Offline Spectral Profiling ✅
+- `SpectralProfiler` with randomized SVD eigenvalue estimation
+- Marchenko-Pastur bounds and KL divergence scoring
+- Degeneracy score formula (rank collapse + eigenvalue dominance + RMT deviation)
+- Severity classification (healthy/suspect/degenerate)
+- CLI: `pesti --diagnose` for end-to-end analysis
+
+### Phase 2: Online Head Health Monitoring ✅
+- `HeadHealthTracker` with EMA-based effective rank tracking
+- Decode-time attention capture via profiler hooks in transformer layers
+- Per-head health scores updated every decode step
+- Configurable sampling rate to limit overhead
+
+### Spectral Drift Detection ✅
+- `SpectralDriftDetector` tracks baseline ranks during initial steps
+- Periodic comparison of current vs baseline effective ranks
+- Detects repetition loops (rank → 1), topic shifts (rank ↑), degradation (rank unstable)
+- Integrated with collector via `update_drift()` method
+
+### MCP Server Integration ✅
+- `spectral_analyze` tool accepts square attention matrices remotely
+- Returns full RMT analysis as JSON (effective rank, PR, MP distance, severity)
+- Enables agent-driven diagnostics without local model loading
+
+### Remaining Work
+- **Quantization validation**: Compare spectral properties pre/post Q4 quantization to detect when compression degrades attention quality. Would use the existing `--diagnose` infrastructure with paired model runs.
+- **CLI drift monitoring**: Add `--monitor-drift N` flag to generate N tokens while tracking spectral drift (builds on existing drift detector).
+- **Performance overhead measurement**: Validate Phase 2 adds <2% decode latency per validation plan.
