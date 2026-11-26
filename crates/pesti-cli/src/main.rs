@@ -214,7 +214,6 @@ fn main() -> Result<()> {
 /// Run attention spectral diagnostics using the native transformer.
 fn run_diagnostics(args: &Args, prompt_text: &str) -> Result<()> {
     use pesti_runner::transformer::LlamaModel;
-    use pesti_runner::diagnostics::spectral::DegeneracySeverity;
 
     eprintln!("Loading model for spectral diagnostics...");
     let t_load = Instant::now();
@@ -222,16 +221,16 @@ fn run_diagnostics(args: &Args, prompt_text: &str) -> Result<()> {
     let load_ms = t_load.elapsed().as_secs_f64() * 1000.0;
 
     eprintln!(
-        "Model loaded in {:.2}ms: {} params, {} layers, {} heads/layer",
+        "Model loaded in {:.2}ms: {} layers, {} heads/layer, embed_dim={}",
         load_ms,
-        model.config.n_embd as u64 * model.config.n_layer as u64, // rough estimate
-        model.config.n_layer,
-        model.config.n_head,
+        model.config.num_layers,
+        model.config.num_heads,
+        model.config.embed_dim,
     );
 
     // Tokenize the prompt
     let tokens = match &model.tokenizer {
-        Some(tz) => tz.encode(prompt_text, true),
+        Some(tz) => tz.encode(prompt_text).map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?,
         None => {
             eprintln!("ERROR: Model has no tokenizer. Cannot run diagnostics without tokenization.");
             std::process::exit(1);
@@ -247,7 +246,7 @@ fn run_diagnostics(args: &Args, prompt_text: &str) -> Result<()> {
 
     // Get input embeddings from the model's embedding layer
     let embeddings = match &model.token_embeddings {
-        Some(emb) => emb.forward(&tokens.iter().map(|&t| t as f32).collect::<Vec<f32>>()),
+        Some(emb) => emb.forward(&tokens.iter().map(|&t| t as f32).collect::<Vec<f32>>(), 1),
         None => {
             eprintln!("ERROR: Model has no token embeddings.");
             std::process::exit(1);
@@ -264,44 +263,44 @@ fn run_diagnostics(args: &Args, prompt_text: &str) -> Result<()> {
         Some(report) => {
             eprintln!("\n=== Spectral Diagnostics Report ===");
             eprintln!("Model: {}", report.model);
-            eprintln!("Layers profiled: {}", report.summary.total_layers);
-            eprintln!("Heads profiled: {} / {}", report.summary.total_heads, model.config.n_layer * model.config.n_head);
-            eprintln!("Degenerate heads: {} ({:.1}%)",
-                report.summary.degenerate_heads,
-                report.summary.degeneracy_rate * 100.0);
+            eprintln!("Run ID: {}", report.run_id);
+            eprintln!("Layers profiled: {}", report.num_layers);
+            let total_possible = model.config.num_layers * model.config.num_heads;
+            eprintln!("Heads profiled: {} / {}", report.summary.total_heads, total_possible);
+            let degeneracy_pct = if report.summary.total_heads > 0 {
+                report.summary.degenerate_heads as f64 / report.summary.total_heads as f64 * 100.0
+            } else {
+                0.0
+            };
+            eprintln!("Degenerate heads: {} ({:.1}%)", report.summary.degenerate_heads, degeneracy_pct);
+            eprintln!("Avg effective rank: {:.2}", report.summary.avg_effective_rank);
+            eprintln!("Min effective rank: {:.2}", report.summary.min_effective_rank);
+            eprintln!("Max degeneracy score: {:.3}", report.summary.max_degeneracy);
             eprintln!("Analysis time: {:.2}ms", diag_ms);
             eprintln!();
 
-            // Per-layer summary
-            for layer in &report.layers {
-                let degenerate_count = layer.heads.iter()
-                    .filter(|h| h.severity != DegeneracySeverity::Healthy)
-                    .count();
-                if degenerate_count > 0 {
-                    eprintln!("Layer {:>2}: {} degenerate head(s)", layer.layer_id, degenerate_count);
-                    for head in &layer.heads {
-                        if head.severity != DegeneracySeverity::Healthy {
-                            let sev = match head.severity {
-                                DegeneracySeverity::ModerateDegeneration => "MOD",
-                                DegeneracySeverity::SevereDegeneration => "SEV",
-                                _ => "???",
-                            };
-                            eprintln!("  Head {:>2}: λ_max={:.3} eff_rank={:.1} PR={:.3} [{}]",
-                                head.head_id,
-                                head.spectrum.largest_eigenvalue,
-                                head.effective_rank,
-                                head.participation_ratio,
-                                sev);
-                        }
+            // Per-layer summary (group flat heads vec by layer)
+            let mut current_layer: Option<usize> = None;
+            for head in &report.heads {
+                if Some(head.layer) != current_layer {
+                    current_layer = Some(head.layer);
+                    // Count degenerate heads in this layer
+                    let layer_heads: Vec<&_> = report.heads.iter()
+                        .filter(|h| h.layer == head.layer && h.degeneracy_score >= 0.3)
+                        .collect();
+                    if !layer_heads.is_empty() {
+                        eprintln!("Layer {:>2}: {} suspect/degenerate head(s)", head.layer, layer_heads.len());
                     }
                 }
-            }
-
-            // Recommendations
-            if !report.recommendations.is_empty() {
-                eprintln!("\nRecommendations:");
-                for rec in &report.recommendations {
-                    eprintln!("  - [{}] {}", rec.severity, rec.message);
+                if head.degeneracy_score >= 0.3 {
+                    let sev = if head.degeneracy_score >= 0.7 { "SEV" } else { "MOD" };
+                    eprintln!("  Head {:>2}: λ_max={:.3} eff_rank={:.1} MP_dist={:.4} deg={:.3} [{}]",
+                        head.head,
+                        head.spectral_norm,
+                        head.effective_rank,
+                        head.mp_distance,
+                        head.degeneracy_score,
+                        sev);
                 }
             }
         }
