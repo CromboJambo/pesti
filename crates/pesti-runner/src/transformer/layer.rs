@@ -312,6 +312,15 @@ impl Attention {
             let mask = Softmask::all_active(cache_len);
             let weights = segmented_softmax(&scores, &mask);
 
+            // Decode-time spectral profiling: update head health tracker
+            // with this attention vector. Zero overhead when disabled.
+            if let Some(profiler) = &self.profiler {
+                if profiler.lock().unwrap().is_enabled() {
+                    let layer_idx = profiler.lock().unwrap().current_layer();
+                    profiler.lock().unwrap().update_decode_head(layer_idx, h, &weights);
+                }
+            }
+
             // Weighted sum of V
             let out_head = &mut attn_output[h * self.head_dim..(h + 1) * self.head_dim];
             for t in 0..cache_len {
@@ -376,6 +385,18 @@ impl TransformerLayer {
             feed_forward,
             attention_norm,
             ffn_norm,
+        }
+    }
+
+    /// Set the layer index on this layer's attention profiler (if attached).
+    ///
+    /// Call this before forward/forward_with_cache so that spectral profiling
+    /// can attribute heads to the correct layer in multi-layer models.
+    pub fn set_layer_index(&self, idx: usize) {
+        if let Some(ref profiler) = self.attention.profiler {
+            if let Ok(mut collector) = profiler.lock() {
+                collector.set_current_layer(idx);
+            }
         }
     }
 

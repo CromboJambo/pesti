@@ -2199,7 +2199,9 @@ impl LlamaModel {
         let _embed_dim = hidden.len();
         let mut h = hidden.to_vec();
 
-        for layer in self.layers.iter() {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            // Set layer index on profiler if attached (for spectral profiling attribution)
+            layer.set_layer_index(layer_idx);
             h = layer.forward(&h, 1, 1, start_pos); // Fixed: was start_pos + layer_idx
         }
 
@@ -2246,6 +2248,8 @@ impl LlamaModel {
         let mut h = hidden.to_vec();
 
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            // Set layer index on profiler if attached (for spectral profiling attribution)
+            layer.set_layer_index(layer_idx);
             h = layer.forward_with_cache(&h, &mut caches[layer_idx], start_pos);
         }
 

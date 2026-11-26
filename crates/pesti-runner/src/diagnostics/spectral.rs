@@ -451,6 +451,80 @@ impl Default for SpectralProfiler {
     }
 }
 
+/// Tracks spectral health of a single attention head over time.
+///
+/// Used during decode to detect gradual attention collapse (e.g., model
+/// starting to repeat itself). Maintains exponential moving averages of
+/// effective rank and flags heads that show sustained degeneration.
+#[derive(Debug, Clone)]
+pub struct HeadHealthTracker {
+    /// Exponential moving average of effective rank
+    pub ema_effective_rank: f64,
+    /// Standard deviation of recent effective ranks
+    pub rank_stddev: f64,
+    /// Count of consecutive steps where degeneracy > threshold
+    pub consecutive_degenerate: usize,
+    /// Total number of updates
+    pub update_count: usize,
+    /// EMA decay factor (0.95 = slow, 0.5 = fast)
+    alpha: f64,
+}
+
+impl HeadHealthTracker {
+    /// Create a new tracker with the given EMA decay.
+    pub fn new(alpha: f64) -> Self {
+        Self {
+            ema_effective_rank: 0.0,
+            rank_stddev: 0.0,
+            consecutive_degenerate: 0,
+            update_count: 0,
+            alpha,
+        }
+    }
+
+    /// Update with a new effective rank observation.
+    pub fn update(&mut self, effective_rank: f64, degeneracy: f64) {
+        self.update_count += 1;
+        if self.update_count == 1 {
+            self.ema_effective_rank = effective_rank;
+            self.rank_stddev = 0.0;
+        } else {
+            // EMA update
+            let prev_ema = self.ema_effective_rank;
+            self.ema_effective_rank =
+                self.alpha * self.ema_effective_rank + (1.0 - self.alpha) * effective_rank;
+            // Update stddev approximation
+            let diff = (effective_rank - prev_ema).abs();
+            self.rank_stddev = self.alpha * self.rank_stddev + (1.0 - self.alpha) * diff;
+        }
+
+        if degeneracy > 0.5 {
+            self.consecutive_degenerate += 1;
+        } else {
+            self.consecutive_degenerate = 0;
+        }
+    }
+
+    /// Returns true if this head shows signs of collapse.
+    /// Collapse = sustained high degeneracy + low rank variance (stuck in one mode).
+    pub fn is_collapsing(&self) -> bool {
+        self.consecutive_degenerate >= 5
+            && self.ema_effective_rank > 0.0
+            && (self.rank_stddev / self.ema_effective_rank) < 0.1
+    }
+
+    /// Returns true if this head appears dead (near-zero effective rank).
+    pub fn is_dead(&self) -> bool {
+        self.update_count >= 3 && self.ema_effective_rank < 1.5
+    }
+}
+
+impl Default for HeadHealthTracker {
+    fn default() -> Self {
+        Self::new(0.95)
+    }
+}
+
 /// Collects spectral profiles across layers and heads during inference.
 ///
 /// Enabled via `PESTI_SPECTRAL_PROFILE=1` environment variable.
@@ -465,6 +539,8 @@ pub struct SpectralProfilerCollector {
     spectra: Vec<AttentionSpectrum>,
     enabled: bool,
     current_layer_idx: usize,
+    /// Per-head health trackers for online monitoring (decode-time)
+    head_trackers: Vec<Vec<HeadHealthTracker>>,  // [layer][head]
 }
 
 impl SpectralProfilerCollector {
@@ -500,6 +576,7 @@ impl SpectralProfilerCollector {
             spectra: Vec::with_capacity(num_layers * num_heads),
             enabled,
             current_layer_idx: 0,
+            head_trackers: vec![vec![HeadHealthTracker::default(); num_heads]; num_layers],
         }
     }
 
@@ -589,6 +666,65 @@ impl SpectralProfilerCollector {
                 max_degeneracy,
             },
         })
+    }
+
+    /// Update a head's health tracker with a decode-time attention vector.
+    ///
+    /// During decode, attention is a single row (1 × seq_len) — the new query
+    /// attending to all cached keys. We compute effective rank from this vector
+    /// and update the EMA-based health tracker.
+    pub fn update_decode_head(
+        &mut self,
+        layer: usize,
+        head: usize,
+        attention_vector: &[f32],
+    ) {
+        if !self.enabled || attention_vector.is_empty() {
+            return;
+        }
+
+        let n = attention_vector.len();
+        // Compute effective rank from the attention vector (entropy-based)
+        let total: f64 = attention_vector.iter().map(|&x| x as f64).sum();
+        if total < 1e-15 {
+            return;
+        }
+
+        let probs: Vec<f64> = attention_vector.iter().map(|&x| (x as f64) / total).collect();
+        let entropy: f64 = probs
+            .iter()
+            .filter(|&&p| p > 1e-15)
+            .map(|&p| -p * p.ln())
+            .sum();
+        let effective_rank = entropy.exp();
+
+        // Degeneracy for a single vector: how concentrated is it?
+        // A one-hot vector (rank 1) is maximally degenerate.
+        let degeneracy = 1.0 - (effective_rank / n as f64).clamp(0.0, 1.0);
+
+        if layer < self.head_trackers.len() && head < self.head_trackers[layer].len() {
+            self.head_trackers[layer][head].update(effective_rank, degeneracy);
+        }
+    }
+
+    /// Get health status for all heads.
+    pub fn head_health(&self) -> Vec<Vec<&HeadHealthTracker>> {
+        self.head_trackers.iter().map(|l| l.iter().collect()).collect()
+    }
+
+    /// Find heads that are collapsing or dead.
+    pub fn unhealthy_heads(&self) -> Vec<(usize, usize, &'static str)> {
+        let mut result = Vec::new();
+        for (layer, heads) in self.head_trackers.iter().enumerate() {
+            for (head, tracker) in heads.iter().enumerate() {
+                if tracker.is_collapsing() {
+                    result.push((layer, head, "collapsing"));
+                } else if tracker.is_dead() {
+                    result.push((layer, head, "dead"));
+                }
+            }
+        }
+        result
     }
 
     /// Export report as JSON string.
