@@ -6,6 +6,7 @@
 //! Migrated from cuda-oxide to cudarc for stable Rust compatibility.
 
 pub mod cpu_optimized; // Optimized CPU attention with parallelism and cache blocking
+pub mod diagnostics; // Runtime observability: spectral analysis, head health monitoring
 #[cfg(feature = "cuda")]
 pub mod cuda_runtime;
 #[cfg(feature = "cuda")]
