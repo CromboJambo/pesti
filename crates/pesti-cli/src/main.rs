@@ -82,9 +82,12 @@ struct Args {
     #[arg(long = "q4k-kv-cache", action = clap::ArgAction::SetTrue)]
     q4k_kv_cache: bool,
 
-    /// Run attention spectral diagnostics (head health analysis) instead of generation
-    #[arg(long = "diagnose", action = clap::ArgAction::SetTrue)]
-    diagnose: bool,
+    /// Run attention spectral diagnostics (head health analysis) instead of generation.
+    /// Accepts an optional second model path for quantization comparison:
+    ///   --diagnose                     single-model diagnostics
+    ///   --diagnose /path/to/model.gguf compare against this model
+    #[arg(long = "diagnose", num_args = 0..=1, default_missing_value = "", require_equals = true)]
+    diagnose: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -131,8 +134,14 @@ fn main() -> Result<()> {
     let t_load = Instant::now();
 
     // Diagnostic mode: use native transformer with spectral profiler
-    if args.diagnose {
-        run_diagnostics(&args, &prompt_text)?;
+    if let Some(compare_model) = &args.diagnose {
+        if compare_model.is_empty() {
+            // Single-model diagnostics
+            run_diagnostics(&args, &prompt_text)?;
+        } else {
+            // Comparison mode: diagnose both models and compare
+            run_diagnostics_compare(&args, &prompt_text, compare_model)?;
+        }
         return Ok(());
     }
 
@@ -209,6 +218,163 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Load a model and run spectral diagnostics, returning the report.
+fn load_and_diagnose(model_path: &str, prompt_text: &str) -> Result<Option<pesti_runner::diagnostics::spectral::SpectralProfileReport>> {
+    use pesti_runner::transformer::LlamaModel;
+    use pesti_runner::diagnostics::spectral::SpectralProfileReport;
+
+    eprintln!("Loading model for diagnostics: {}", model_path);
+    let t_load = Instant::now();
+    let mut model = LlamaModel::load_gguf(std::path::Path::new(model_path))?;
+    let load_ms = t_load.elapsed().as_secs_f64() * 1000.0;
+
+    eprintln!("  Loaded in {:.2}ms: {} layers, {} heads/layer", load_ms, model.config.num_layers, model.config.num_heads);
+
+    let tokens = match &model.tokenizer {
+        Some(tz) => tz.encode(prompt_text).map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?,
+        None => {
+            eprintln!("  ERROR: No tokenizer available.");
+            return Ok(None);
+        }
+    };
+
+    let seq_len = tokens.len();
+    if seq_len == 0 {
+        eprintln!("  ERROR: Prompt tokenized to 0 tokens.");
+        return Ok(None);
+    }
+    eprintln!("  Tokenized to {} tokens", seq_len);
+
+    let embeddings = match &model.token_embeddings {
+        Some(emb) => emb.forward(&tokens.iter().map(|&t| t as f32).collect::<Vec<f32>>(), 1),
+        None => {
+            eprintln!("  ERROR: No token embeddings.");
+            return Ok(None);
+        }
+    };
+
+    eprintln!("  Running spectral analysis...");
+    let t_diag = Instant::now();
+    let report = model.diagnose_attention(&embeddings, seq_len)?;
+    let diag_ms = t_diag.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("  Analysis complete in {:.2}ms", diag_ms);
+
+    Ok(report)
+}
+
+/// Compare spectral diagnostics between two models (e.g., full-precision vs quantized).
+fn run_diagnostics_compare(args: &Args, prompt_text: &str, compare_model_path: &str) -> Result<()> {
+    use pesti_runner::diagnostics::spectral::{SpectralProfileReport, ProfileSummary};
+
+    eprintln!("=== Quantization Comparison Mode ===");
+    eprintln!("Model A (primary):   {}", args.model);
+    eprintln!("Model B (compare):   {}", compare_model_path);
+    eprintln!();
+
+    let report_a = load_and_diagnose(&args.model, prompt_text)?;
+    let report_b = load_and_diagnose(compare_model_path, prompt_text)?;
+
+    match (report_a, report_b) {
+        (Some(a), Some(b)) => {
+            print_comparison_report(&a, &b);
+        }
+        (Some(_), None) => {
+            eprintln!("Model B diagnostics failed. Cannot compare.");
+        }
+        (None, Some(_)) => {
+            eprintln!("Model A diagnostics failed. Cannot compare.");
+        }
+        (None, None) => {
+            eprintln!("Both models failed diagnostics. Cannot compare.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Print a side-by-side comparison of two spectral reports.
+fn print_comparison_report(a: &pesti_runner::diagnostics::spectral::SpectralProfileReport, b: &pesti_runner::diagnostics::spectral::SpectralProfileReport) {
+    eprintln!("\n=== Spectral Comparison Report ===");
+    eprintln!("Model A: {}", a.model);
+    eprintln!("Model B: {}", b.model);
+    eprintln!();
+
+    // Summary comparison
+    eprintln!("{:<25} {:>12} {:>12} {:>12}", "Metric", "Model A", "Model B", "Δ (B-A)");
+    eprintln!("{}", "-".repeat(65));
+
+    let heads_a = a.summary.total_heads;
+    let heads_b = b.summary.total_heads;
+    eprintln!("{:<25} {:>12} {:>12} {:>12}", "Heads profiled", heads_a, heads_b, heads_b as i64 - heads_a as i64);
+
+    let deg_a = a.summary.degenerate_heads;
+    let deg_b = b.summary.degenerate_heads;
+    eprintln!("{:<25} {:>12} {:>12} {:>12}", "Degenerate heads", deg_a, deg_b, deg_b as i64 - deg_a as i64);
+
+    let deg_rate_a = if heads_a > 0 { a.summary.degenerate_heads as f64 / heads_a as f64 * 100.0 } else { 0.0 };
+    let deg_rate_b = if heads_b > 0 { b.summary.degenerate_heads as f64 / heads_b as f64 * 100.0 } else { 0.0 };
+    eprintln!("{:<25} {:>11.1}%  {:>11.1}%  {:>+11.1}%", "Degeneracy rate", deg_rate_a, deg_rate_b, deg_rate_b - deg_rate_a);
+
+    let avg_rank_a = a.summary.avg_effective_rank;
+    let avg_rank_b = b.summary.avg_effective_rank;
+    eprintln!("{:<25} {:>12.2} {:>12.2} {:>+12.2}", "Avg effective rank", avg_rank_a, avg_rank_b, avg_rank_b - avg_rank_a);
+
+    let min_rank_a = a.summary.min_effective_rank;
+    let min_rank_b = b.summary.min_effective_rank;
+    eprintln!("{:<25} {:>12.2} {:>12.2} {:>+12.2}", "Min effective rank", min_rank_a, min_rank_b, min_rank_b - min_rank_a);
+
+    let max_deg_a = a.summary.max_degeneracy;
+    let max_deg_b = b.summary.max_degeneracy;
+    eprintln!("{:<25} {:>12.3} {:>12.3} {:>+12.3}", "Max degeneracy", max_deg_a, max_deg_b, max_deg_b - max_deg_a);
+
+    // Verdict
+    eprintln!();
+    let rank_delta = avg_rank_b - avg_rank_a;
+    let deg_delta = deg_rate_b - deg_rate_a;
+
+    if deg_delta > 5.0 {
+        eprintln!("⚠️  WARNING: Model B shows {:.1}% more degenerate heads than Model A.", deg_delta);
+        eprintln!("   Quantization may be degrading attention quality significantly.");
+    } else if deg_delta > 2.0 {
+        eprintln!("ℹ️  NOTICE: Model B shows {:.1}% more degenerate heads — minor degradation.", deg_delta);
+    } else if deg_delta < -2.0 {
+        eprintln!("✅ Model B shows fewer degenerate heads than Model A (improvement).", );
+    } else {
+        eprintln!("✅ Spectral properties are comparable between models.");
+    }
+
+    if rank_delta.abs() > 1.0 {
+        eprintln!("   Effective rank delta: {:+.2} — {}", rank_delta,
+            if rank_delta < 0.0 { "Model B uses fewer attention dimensions" } else { "Model B uses more attention dimensions" });
+    }
+
+    // Per-layer comparison for significantly different layers
+    eprintln!();
+    eprintln!("=== Layer-by-Layer Degeneracy (only layers with Δ > 1 degenerate head) ===");
+    let mut current_layer_a: Option<usize> = None;
+    let mut layer_diffs: Vec<(usize, usize, usize)> = Vec::new(); // (layer, deg_a, deg_b)
+
+    for head in &a.heads {
+        if Some(head.layer) != current_layer_a {
+            current_layer_a = Some(head.layer);
+            let deg_in_layer_a = a.heads.iter().filter(|h| h.layer == head.layer && h.degeneracy_score >= 0.3).count();
+            let deg_in_layer_b = b.heads.iter().filter(|h| h.layer == head.layer && h.degeneracy_score >= 0.3).count();
+            if (deg_in_layer_a as i64 - deg_in_layer_b as i64).abs() > 1 {
+                layer_diffs.push((head.layer, deg_in_layer_a, deg_in_layer_b));
+            }
+        }
+    }
+
+    if layer_diffs.is_empty() {
+        eprintln!("  No layers with significant differences.");
+    } else {
+        for (layer, deg_a_count, deg_b_count) in &layer_diffs {
+            let delta = *deg_b_count as i64 - *deg_a_count as i64;
+            eprintln!("  Layer {:>2}: {} → {} ({:+})", layer, deg_a_count, deg_b_count, delta);
+        }
+    }
 }
 
 /// Run attention spectral diagnostics using the native transformer.
