@@ -727,6 +727,12 @@ impl SpectralProfilerCollector {
         self.enabled
     }
 
+    /// Force-enable profiling regardless of the PESTI_SPECTRAL_PROFILE env var.
+    /// Used by diagnose_attention() which explicitly requests spectral analysis.
+    pub fn force_enable(&mut self) {
+        self.enabled = true;
+    }
+
     /// Get the current layer being profiled (for integration with attention dispatch).
     /// Returns 0 by default; use set_current_layer() to track progress.
     pub fn current_layer(&self) -> usize {

@@ -682,6 +682,9 @@ impl LlamaModel {
             SpectralProfilerCollector::new(model_name, seq_len, num_layers, num_heads),
         ));
 
+        // Force-enable profiling for explicit diagnostics (bypasses PESTI_SPECTRAL_PROFILE env var)
+        collector.lock().unwrap().force_enable();
+
         for layer in &mut self.layers {
             layer.set_profiler(Arc::clone(&collector));
         }
