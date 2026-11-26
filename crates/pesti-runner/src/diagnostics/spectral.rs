@@ -14,7 +14,7 @@
 
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 
@@ -201,8 +201,8 @@ impl SpectralProfiler {
         let mut rng = StdRng::seed_from_u64(42);  // Deterministic for reproducibility
         let omega: Array2<f64> = Array2::from_shape_fn((n, l), |(_, _)| {
             // Box-Muller transform for standard normal distribution
-            let u1: f64 = rng.gen_range(0.0_f64..1.0_f64).max(1e-10);
-            let u2: f64 = rng.gen_range(0.0_f64..1.0_f64);
+            let u1: f64 = rng.random::<f64>().max(1e-10);
+            let u2: f64 = rng.random::<f64>();
             (-2.0_f64 * u1.ln()).sqrt() * (2.0_f64 * std::f64::consts::PI * u2).cos()
         });
 
@@ -578,11 +578,11 @@ impl SpectralDriftDetector {
 
     /// Update with current effective ranks from all heads.
     /// Returns true if drift was detected this step.
-    pub fn update(&mut self, current_ranks: &[[[f64]]]) -> bool {
+    pub fn update(&mut self, current_ranks: &[Vec<f64>]) -> bool {
         // Update current ranks (EMA with fast decay for responsiveness)
         for layer in 0..self.current_ranks.len() {
             for head in 0..self.current_ranks[layer].len() {
-                if let Some(&rank) = current_ranks.get(layer).and_then(|h| h.get(head)) {
+                if let Some(rank) = current_ranks[layer].get(head).copied() {
                     self.current_ranks[layer][head] =
                         0.7 * self.current_ranks[layer][head] + 0.3 * rank;
                 }
@@ -704,20 +704,6 @@ impl SpectralProfilerCollector {
                 .unwrap_or(0)
         );
 
-        Self {
-            profiler: SpectralProfiler::new(),
-            run_id,
-            model,
-            seq_len,
-            num_layers,
-            num_heads,
-            spectra: Vec::with_capacity(num_layers * num_heads),
-            enabled,
-            current_layer_idx: 0,
-            head_trackers: vec![vec![HeadHealthTracker::default(); num_heads]; num_layers],
-            drift_detector: SpectralDriftDetector::new(5, 10),
-        }
-
         // Initialize drift detector structure
         let mut collector = Self {
             profiler: SpectralProfiler::new(),
@@ -774,7 +760,7 @@ impl SpectralProfilerCollector {
     }
 
     /// Generate the final profiling report.
-    pub fn finish(self) -> Option<SpectralProfileReport> {
+    pub fn finish(&mut self) -> Option<SpectralProfileReport> {
         if !self.enabled || self.spectra.is_empty() {
             return None;
         }
@@ -806,12 +792,12 @@ impl SpectralProfilerCollector {
             .fold(0.0f64, f64::max);
 
         Some(SpectralProfileReport {
-            run_id: self.run_id,
-            model: self.model,
+            run_id: std::mem::take(&mut self.run_id),
+            model: std::mem::take(&mut self.model),
             seq_len: self.seq_len,
             num_layers: self.num_layers,
             num_heads: self.num_heads,
-            heads: self.spectra,
+            heads: std::mem::take(&mut self.spectra),
             summary: ProfileSummary {
                 total_heads,
                 healthy_heads: healthy,
@@ -882,8 +868,7 @@ impl SpectralProfilerCollector {
             .iter()
             .map(|layer| layer.iter().map(|t| t.ema_effective_rank).collect())
             .collect();
-        // Wrap in batch dimension for the detector's API
-        self.drift_detector.update(&[&current_ranks[..]])
+        self.drift_detector.update(&current_ranks)
     }
 
     /// Get the drift detector for direct access.

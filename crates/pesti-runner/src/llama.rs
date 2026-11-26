@@ -273,7 +273,7 @@ impl LlamaRunner {
             rope_type: format!("{:?}", rope),
             is_hybrid: self.model.is_hybrid(),
             is_recurrent: self.model.is_recurrent(),
-            vocab_type: format!("{:?}", self.model.vocab_type()),
+            vocab_type: format!("{:?}", self.model.vocab().vocab_type()),
         }
     }
 
@@ -284,38 +284,31 @@ impl LlamaRunner {
 
     /// Get the model's BOS, EOS, and NL token IDs.
     pub fn special_tokens(&self) -> (LlamaToken, LlamaToken, LlamaToken) {
+        let vocab = self.model.vocab();
         (
-            self.model.token_bos(),
-            self.model.token_eos(),
-            self.model.token_nl(),
+            vocab.bos(),
+            vocab.eos(),
+            vocab.nl(),
         )
     }
 
     /// Encode text to tokens using the model's built-in tokenizer.
     pub fn encode(&self, text: &str, add_bos: bool) -> Result<Vec<LlamaToken>> {
-        let add_bos = if add_bos {
-            llama_cpp_2::model::AddBos::Always
-        } else {
-            llama_cpp_2::model::AddBos::Never
-        };
-        self.model
-            .str_to_token(text, add_bos)
-            .map_err(|e| anyhow::anyhow!(e))
+        let vocab = self.model.vocab();
+        let tokens = vocab.tokenize(text.as_bytes(), add_bos, true);
+        Ok(tokens)
     }
 
     /// Decode a single token to a string piece.
     pub fn token_to_piece(&self, token: LlamaToken) -> Result<String> {
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let piece = self.model.token_to_piece(token, &mut decoder, true, None)?;
-        Ok(piece)
+        let bytes = self.model.vocab().token_to_piece(token, true, None);
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// Decode a token to string.
     #[deprecated(since = "0.1.1", note = "Use `token_to_piece` instead")]
     pub fn token_to_str(&self, token: LlamaToken) -> Result<String> {
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
-        let s = self.model.token_to_piece(token, &mut decoder, true, None)?;
-        Ok(s)
+        self.token_to_piece(token)
     }
 
     /// Apply a chat template to a list of messages.
@@ -451,7 +444,7 @@ impl LlamaRunner {
             total_decode_time += step_time;
 
             // Check for EOS
-            if self.model.is_eog_token(token) {
+            if self.model.vocab().is_eog(token) {
                 info!(
                     "EOS at position {}, generated {} tokens",
                     pos + 1,
@@ -471,9 +464,9 @@ impl LlamaRunner {
         // Decode tokens to text
         let text: String = tokens
             .iter()
-            .filter_map(|t| {
-                let mut decoder = encoding_rs::UTF_8.new_decoder();
-                self.model.token_to_piece(*t, &mut decoder, true, None).ok()
+            .map(|t| {
+                let bytes = self.model.vocab().token_to_piece(*t, true, None);
+                String::from_utf8_lossy(&bytes).into_owned()
             })
             .collect();
 
@@ -611,7 +604,7 @@ impl LlamaRunner {
             let next_token = sampler.sample(&ctx, 0);
             drop(ctx);
 
-            let is_eos = self.model.is_eog_token(next_token);
+            let is_eos = self.model.vocab().is_eog(next_token);
 
             token = next_token;
             tokens.push(token);
@@ -801,7 +794,9 @@ impl LlamaRunner {
 
         // Repetition penalty (API changed between llama-cpp-2 versions)
         if config.repetition_penalty != 1.0 {
+            let n_vocab = self.model.n_vocab();
             samplers.push(LlamaSampler::penalties(
+                n_vocab,
                 config.repeat_last_n,
                 config.repetition_penalty as f32,
                 0.0, // frequency penalty (unused)

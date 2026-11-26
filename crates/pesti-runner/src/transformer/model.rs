@@ -5,7 +5,6 @@
 
 use std::borrow::Cow;
 use std::path::Path;
-use std::sync::Arc;
 
 use candle_core::Tensor;
 use pesti_gguf::types::GgufHeader;
@@ -675,7 +674,7 @@ impl LlamaModel {
         }
 
         let num_layers = self.layers.len();
-        let num_heads = self.config.n_head;
+        let num_heads = self.config.num_heads;
         let model_name = format!("pesti-native-{}L", num_layers);
 
         // Create shared profiler and attach to all layers
