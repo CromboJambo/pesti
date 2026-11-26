@@ -270,6 +270,13 @@ impl Linear {
         let m = batch_size;
         let k = self.in_features;
         let n = self.out_features;
+
+        // Safety check: input must be [batch_size * in_features] for standard matmul.
+        // Embedding lookups pass token IDs (length=batch_size), so fall back to f32 path.
+        if x.len() < m * k {
+            return self.forward_cpu(x, batch_size);
+        }
+
         let mut output = vec![0.0f32; m * n];
 
         // Fused dequantize+GEMM: for each output feature, dequantize weight row
