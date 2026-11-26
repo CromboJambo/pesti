@@ -203,7 +203,7 @@ impl SpectralProfiler {
             // Box-Muller transform for standard normal distribution
             let u1: f64 = rng.gen_range(0.0_f64..1.0_f64).max(1e-10);
             let u2: f64 = rng.gen_range(0.0_f64..1.0_f64);
-            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+            (-2.0_f64 * u1.ln()).sqrt() * (2.0_f64 * std::f64::consts::PI * u2).cos()
         });
 
         // Y = A · Ω
@@ -464,9 +464,17 @@ pub struct SpectralProfilerCollector {
     num_heads: usize,
     spectra: Vec<AttentionSpectrum>,
     enabled: bool,
+    current_layer_idx: usize,
 }
 
 impl SpectralProfilerCollector {
+    /// Check if profiling is enabled (without creating a collector).
+    pub fn is_profiling_enabled() -> bool {
+        std::env::var("PESTI_SPECTRAL_PROFILE")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false)
+    }
+
     /// Create a new collector. Checks `PESTI_SPECTRAL_PROFILE` env var.
     pub fn new(model: String, seq_len: usize, num_layers: usize, num_heads: usize) -> Self {
         let enabled = std::env::var("PESTI_SPECTRAL_PROFILE")
@@ -491,7 +499,24 @@ impl SpectralProfilerCollector {
             num_heads,
             spectra: Vec::with_capacity(num_layers * num_heads),
             enabled,
+            current_layer_idx: 0,
         }
+    }
+
+    /// Check if this collector is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Get the current layer being profiled (for integration with attention dispatch).
+    /// Returns 0 by default; use set_current_layer() to track progress.
+    pub fn current_layer(&self) -> usize {
+        self.current_layer_idx
+    }
+
+    /// Set the current layer index for profiling.
+    pub fn set_current_layer(&mut self, layer: usize) {
+        self.current_layer_idx = layer;
     }
 
     /// Record spectral statistics for one attention head.

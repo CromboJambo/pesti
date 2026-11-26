@@ -9,12 +9,14 @@
 
 #[cfg(feature = "cuda")]
 use crate::kernel::rope::RopeKernel;
+use crate::diagnostics::spectral::SpectralProfilerCollector;
 use crate::softmask::{Softmask, segmented_softmax};
 use crate::transformer::kv_cache::LayerKvCache;
 use crate::transformer::linear::Linear;
 use crate::transformer::rms_norm::RmsNorm;
 use crate::transformer::rope::RopeConfig;
-use std::sync::Arc;
+use ndarray::Array2;
+use std::sync::{Arc, Mutex};
 
 /// SwiGLU activation: silu(x) * y (CPU reference)
 fn swiglu_cpu(gate: &[f32], up: &[f32], size: usize) -> Vec<f32> {
@@ -59,6 +61,9 @@ pub struct Attention {
     /// Optional GPU RoPE kernel for accelerated rotary embeddings.
     #[cfg(feature = "cuda")]
     rope_kernel: Option<Arc<dyn RopeKernel>>,
+    /// Optional spectral profiler for attention degeneracy detection.
+    /// Only active when PESTI_SPECTRAL_PROFILE=1 (zero overhead otherwise).
+    pub profiler: Option<Arc<Mutex<SpectralProfilerCollector>>>,
 }
 
 impl Attention {
@@ -85,7 +90,15 @@ impl Attention {
             kv_dim,
             #[cfg(feature = "cuda")]
             rope_kernel: None,
+            profiler: None,
         }
+    }
+
+    /// Attach a spectral profiler for attention degeneracy detection.
+    /// The collector must be created with matching model dimensions.
+    pub fn with_profiler(mut self, profiler: Arc<Mutex<SpectralProfilerCollector>>) -> Self {
+        self.profiler = Some(profiler);
+        self
     }
 
     /// Set a GPU RoPE kernel for this attention layer.
@@ -132,8 +145,29 @@ impl Attention {
 
         let mut output = vec![0.0f32; batch_size * seq_len * embed_dim];
 
+        // Profiling: allocate attention matrices per head (only when enabled).
+        // Each matrix is seq_len x seq_len — row `pos` holds the attention
+        // weights from position `pos` to all other positions for that head.
+        let profiling_enabled = self
+            .profiler
+            .as_ref()
+            .map_or(false, |p| p.lock().unwrap().is_enabled());
+        // Note: is_enabled() here is the instance method on SpectralProfilerCollector
+        let mut attn_matrices: Option<Vec<Array2<f32>>> = if profiling_enabled {
+            Some(vec![Array2::zeros((seq_len, seq_len)); self.num_heads])
+        } else {
+            None
+        };
+
         let heads_per_group = self.num_heads / self.num_kv_heads;
         for b in 0..batch_size {
+            // Reset profiling matrices for this batch element
+            if let Some(ref mut mats) = attn_matrices {
+                for m in mats.iter_mut() {
+                    m.fill(0.0);
+                }
+            }
+
             for pos in 0..seq_len {
                 let q_idx = (b * seq_len + pos) * embed_dim;
                 let mut attn_output = vec![0.0f32; self.num_heads * self.head_dim];
@@ -164,6 +198,13 @@ impl Attention {
                     let mask = Softmask::causal(pos, seq_len);
                     let weights = segmented_softmax(&scores, &mask);
 
+                    // Record attention weights for profiling (row `pos` of head `h`'s matrix)
+                    if let Some(ref mut mats) = attn_matrices {
+                        for j in 0..seq_len {
+                            mats[h][[pos, j]] = weights[j];
+                        }
+                    }
+
                     // V-weighted sum for this head.
                     for d in 0..self.head_dim {
                         let mut sum = 0.0f32;
@@ -180,6 +221,17 @@ impl Attention {
                 let wo_output = self.wo.forward(&attn_output, 1);
                 for i in 0..embed_dim {
                     output[(b * seq_len + pos) * embed_dim + i] = wo_output[i];
+                }
+            }
+
+            // Profile attention matrices for this batch element (only first batch)
+            if b == 0 {
+                if let (Some(mats), Some(profiler)) = (&attn_matrices, &self.profiler) {
+                    let mut collector = profiler.lock().unwrap();
+                    let layer_idx = collector.current_layer();
+                    for h in 0..self.num_heads {
+                        collector.analyze_head(layer_idx, h, &mats[h]);
+                    }
                 }
             }
         }
