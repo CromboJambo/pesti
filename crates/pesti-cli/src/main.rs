@@ -81,6 +81,10 @@ struct Args {
     /// Enable Q4_K KV cache for reduced memory and faster attention
     #[arg(long = "q4k-kv-cache", action = clap::ArgAction::SetTrue)]
     q4k_kv_cache: bool,
+
+    /// Run attention spectral diagnostics (head health analysis) instead of generation
+    #[arg(long = "diagnose", action = clap::ArgAction::SetTrue)]
+    diagnose: bool,
 }
 
 fn main() -> Result<()> {
@@ -125,6 +129,13 @@ fn main() -> Result<()> {
 
     // Build the runner
     let t_load = Instant::now();
+
+    // Diagnostic mode: use native transformer with spectral profiler
+    if args.diagnose {
+        run_diagnostics(&args, &prompt_text)?;
+        return Ok(());
+    }
+
     let runner = LlamaRunner::builder(&args.model)
         .n_ctx(args.ctx_size)
         .n_threads(args.threads)
@@ -195,6 +206,108 @@ fn main() -> Result<()> {
             }
         );
         eprintln!("Total: {:.2}ms", gen_time_ms);
+    }
+
+    Ok(())
+}
+
+/// Run attention spectral diagnostics using the native transformer.
+fn run_diagnostics(args: &Args, prompt_text: &str) -> Result<()> {
+    use pesti_runner::transformer::LlamaModel;
+    use pesti_runner::diagnostics::spectral::DegeneracySeverity;
+
+    eprintln!("Loading model for spectral diagnostics...");
+    let t_load = Instant::now();
+    let mut model = LlamaModel::load_gguf(std::path::Path::new(&args.model))?;
+    let load_ms = t_load.elapsed().as_secs_f64() * 1000.0;
+
+    eprintln!(
+        "Model loaded in {:.2}ms: {} params, {} layers, {} heads/layer",
+        load_ms,
+        model.config.n_embd as u64 * model.config.n_layer as u64, // rough estimate
+        model.config.n_layer,
+        model.config.n_head,
+    );
+
+    // Tokenize the prompt
+    let tokens = match &model.tokenizer {
+        Some(tz) => tz.encode(prompt_text, true),
+        None => {
+            eprintln!("ERROR: Model has no tokenizer. Cannot run diagnostics without tokenization.");
+            std::process::exit(1);
+        }
+    };
+
+    let seq_len = tokens.len();
+    if seq_len == 0 {
+        eprintln!("ERROR: Prompt tokenized to 0 tokens.");
+        std::process::exit(1);
+    }
+    eprintln!("Prompt tokenized to {} tokens", seq_len);
+
+    // Get input embeddings from the model's embedding layer
+    let embeddings = match &model.token_embeddings {
+        Some(emb) => emb.forward(&tokens.iter().map(|&t| t as f32).collect::<Vec<f32>>()),
+        None => {
+            eprintln!("ERROR: Model has no token embeddings.");
+            std::process::exit(1);
+        }
+    };
+
+    // Run spectral diagnostics
+    eprintln!("Running attention spectral analysis...");
+    let t_diag = Instant::now();
+    let report = model.diagnose_attention(&embeddings, seq_len)?;
+    let diag_ms = t_diag.elapsed().as_secs_f64() * 1000.0;
+
+    match report {
+        Some(report) => {
+            eprintln!("\n=== Spectral Diagnostics Report ===");
+            eprintln!("Model: {}", report.model);
+            eprintln!("Layers profiled: {}", report.summary.total_layers);
+            eprintln!("Heads profiled: {} / {}", report.summary.total_heads, model.config.n_layer * model.config.n_head);
+            eprintln!("Degenerate heads: {} ({:.1}%)",
+                report.summary.degenerate_heads,
+                report.summary.degeneracy_rate * 100.0);
+            eprintln!("Analysis time: {:.2}ms", diag_ms);
+            eprintln!();
+
+            // Per-layer summary
+            for layer in &report.layers {
+                let degenerate_count = layer.heads.iter()
+                    .filter(|h| h.severity != DegeneracySeverity::Healthy)
+                    .count();
+                if degenerate_count > 0 {
+                    eprintln!("Layer {:>2}: {} degenerate head(s)", layer.layer_id, degenerate_count);
+                    for head in &layer.heads {
+                        if head.severity != DegeneracySeverity::Healthy {
+                            let sev = match head.severity {
+                                DegeneracySeverity::ModerateDegeneration => "MOD",
+                                DegeneracySeverity::SevereDegeneration => "SEV",
+                                _ => "???",
+                            };
+                            eprintln!("  Head {:>2}: λ_max={:.3} eff_rank={:.1} PR={:.3} [{}]",
+                                head.head_id,
+                                head.spectrum.largest_eigenvalue,
+                                head.effective_rank,
+                                head.participation_ratio,
+                                sev);
+                        }
+                    }
+                }
+            }
+
+            // Recommendations
+            if !report.recommendations.is_empty() {
+                eprintln!("\nRecommendations:");
+                for rec in &report.recommendations {
+                    eprintln!("  - [{}] {}", rec.severity, rec.message);
+                }
+            }
+        }
+        None => {
+            eprintln!("No spectral data collected. Diagnostics may be disabled.");
+        }
     }
 
     Ok(())

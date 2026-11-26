@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use candle_core::Tensor;
 use pesti_gguf::types::GgufHeader;
+use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 use crate::error::{Result, RunnerError};
@@ -650,6 +651,59 @@ impl LlamaModel {
             output_weight_t_gpu,
             weight_store: None,
         })
+    }
+
+    /// Run attention spectral diagnostics on this model.
+    ///
+    /// Attaches a profiler to all layers, runs a forward pass with the given
+    /// input embeddings (one per token), and returns the spectral report.
+    ///
+    /// `input_embeddings` should be shape [seq_len * n_embd] — pre-computed
+    /// token embeddings (e.g., from the model's own embedding layer).
+    ///
+    /// This is a CPU-only diagnostic pass. Use for offline analysis of
+    /// attention head health, not during normal inference.
+    pub fn diagnose_attention(
+        &mut self,
+        input_embeddings: &[f32],
+        seq_len: usize,
+    ) -> Result<Option<crate::diagnostics::spectral::SpectralProfileReport>> {
+        use crate::diagnostics::spectral::SpectralProfilerCollector;
+
+        if self.layers.is_empty() {
+            return Ok(None);
+        }
+
+        let num_layers = self.layers.len();
+        let num_heads = self.config.n_head;
+        let model_name = format!("pesti-native-{}L", num_layers);
+
+        // Create shared profiler and attach to all layers
+        let collector = Arc::new(Mutex::new(
+            SpectralProfilerCollector::new(model_name, seq_len, num_layers, num_heads),
+        ));
+
+        for layer in &mut self.layers {
+            layer.set_profiler(Arc::clone(&collector));
+        }
+
+        // Run forward pass through all layers with profiling
+        let mut hidden = input_embeddings.to_vec();
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            layer.set_layer_index(layer_idx);
+            hidden = layer.forward(&hidden, 1, seq_len, 0);
+        }
+
+        // Collect report
+        let mut collector = collector.lock().unwrap();
+        let report = collector.finish();
+
+        // Detach profilers to restore normal operation
+        for layer in &mut self.layers {
+            layer.attention.profiler = None;
+        }
+
+        Ok(report)
     }
 
     /// Build the per-layer `LayerDispatch` structs ONCE at construction.

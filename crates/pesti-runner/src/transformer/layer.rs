@@ -101,6 +101,14 @@ impl Attention {
         self
     }
 
+    /// Set the spectral profiler on an already-built attention layer.
+    ///
+    /// Unlike `with_profiler()` (builder), this works on existing instances,
+    /// allowing diagnostics to be attached after model load.
+    pub fn set_profiler(&mut self, profiler: Arc<Mutex<SpectralProfilerCollector>>) {
+        self.profiler = Some(profiler);
+    }
+
     /// Set a GPU RoPE kernel for this attention layer.
     #[cfg(feature = "cuda")]
     pub fn set_rope_kernel(&mut self, kernel: Arc<dyn RopeKernel>) {
@@ -398,6 +406,13 @@ impl TransformerLayer {
                 collector.set_current_layer(idx);
             }
         }
+    }
+
+    /// Attach a spectral profiler to this layer's attention head.
+    ///
+    /// Convenience method for attaching diagnostics after model construction.
+    pub fn set_profiler(&mut self, profiler: Arc<Mutex<SpectralProfilerCollector>>) {
+        self.attention.set_profiler(profiler);
     }
 
     /// Forward pass without KV cache (original path, used for prefill or non-cached inference).
