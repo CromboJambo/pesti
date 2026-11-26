@@ -525,6 +525,142 @@ impl Default for HeadHealthTracker {
     }
 }
 
+/// Detects spectral drift during generation — when attention patterns
+/// change significantly from their initial state.
+///
+/// Drift can indicate:
+/// - Repetition loops (effective rank collapsing toward 1)
+/// - Topic shifts (rank increasing as new context is attended to)
+/// - Degradation (rank becoming unstable/noisy)
+#[derive(Debug, Clone)]
+pub struct SpectralDriftDetector {
+    /// Baseline effective ranks captured during initial generation steps
+    baseline_ranks: Vec<Vec<f64>>,  // [layer][head]
+    /// Current EMA of effective ranks
+    current_ranks: Vec<Vec<f64>>,   // [layer][head]
+    /// Number of steps in baseline window
+    baseline_window: usize,
+    /// Steps since last drift check
+    steps_since_check: usize,
+    /// Drift check interval (steps)
+    check_interval: usize,
+    /// Maximum relative drift before alerting
+    drift_threshold: f64,
+    /// Last computed drift score (0 = no drift, 1 = maximum)
+    pub last_drift_score: f64,
+    /// Heads with significant drift since baseline
+    pub drifted_heads: Vec<(usize, usize, f64)>,  // (layer, head, relative_drift)
+}
+
+impl SpectralDriftDetector {
+    /// Create a new drift detector.
+    ///
+    /// `baseline_window`: number of initial steps to average for baseline
+    /// `check_interval`: how often (in steps) to check for drift
+    pub fn new(baseline_window: usize, check_interval: usize) -> Self {
+        Self {
+            baseline_ranks: Vec::new(),
+            current_ranks: Vec::new(),
+            baseline_window,
+            steps_since_check: 0,
+            check_interval,
+            drift_threshold: 0.5,  // Alert when rank changes by >50%
+            last_drift_score: 0.0,
+            drifted_heads: Vec::new(),
+        }
+    }
+
+    /// Initialize with the model's layer/head structure.
+    pub fn init_structure(&mut self, num_layers: usize, num_heads: usize) {
+        self.baseline_ranks = vec![vec![0.0; num_heads]; num_layers];
+        self.current_ranks = vec![vec![0.0; num_heads]; num_layers];
+    }
+
+    /// Update with current effective ranks from all heads.
+    /// Returns true if drift was detected this step.
+    pub fn update(&mut self, current_ranks: &[[[f64]]]) -> bool {
+        // Update current ranks (EMA with fast decay for responsiveness)
+        for layer in 0..self.current_ranks.len() {
+            for head in 0..self.current_ranks[layer].len() {
+                if let Some(&rank) = current_ranks.get(layer).and_then(|h| h.get(head)) {
+                    self.current_ranks[layer][head] =
+                        0.7 * self.current_ranks[layer][head] + 0.3 * rank;
+                }
+            }
+        }
+
+        // Build baseline from first N steps (average of current ranks)
+        if self.baseline_ranks.iter().all(|l| l.iter().all(|&r| r == 0.0)) {
+            for layer in 0..self.current_ranks.len() {
+                for head in 0..self.current_ranks[layer].len() {
+                    self.baseline_ranks[layer][head] = self.current_ranks[layer][head];
+                }
+            }
+        }
+
+        // Check drift at intervals
+        self.steps_since_check += 1;
+        if self.steps_since_check < self.check_interval {
+            return false;
+        }
+        self.steps_since_check = 0;
+
+        // Compute relative drift for each head
+        self.drifted_heads.clear();
+        let mut total_drift = 0.0f64;
+        let mut count = 0;
+
+        for layer in 0..self.current_ranks.len() {
+            for head in 0..self.current_ranks[layer].len() {
+                let baseline = self.baseline_ranks[layer][head];
+                let current = self.current_ranks[layer][head];
+                if baseline > 1e-6 {
+                    let relative_drift = ((current - baseline) / baseline).abs();
+                    total_drift += relative_drift;
+                    count += 1;
+                    if relative_drift > self.drift_threshold {
+                        self.drifted_heads.push((layer, head, relative_drift));
+                    }
+                }
+            }
+        }
+
+        self.last_drift_score = if count > 0 {
+            total_drift / count as f64
+        } else {
+            0.0
+        };
+
+        // Sort by drift magnitude (most drifted first)
+        self.drifted_heads.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        self.drifted_heads.truncate(10);  // Keep top 10
+
+        !self.drifted_heads.is_empty()
+    }
+
+    /// Returns true if significant drift was detected.
+    pub fn has_drift(&self) -> bool {
+        !self.drifted_heads.is_empty()
+    }
+
+    /// Reset the baseline to current state (use after topic change or new prompt).
+    pub fn reset_baseline(&mut self) {
+        for layer in 0..self.current_ranks.len() {
+            for head in 0..self.current_ranks[layer].len() {
+                self.baseline_ranks[layer][head] = self.current_ranks[layer][head];
+            }
+        }
+        self.drifted_heads.clear();
+        self.last_drift_score = 0.0;
+    }
+}
+
+impl Default for SpectralDriftDetector {
+    fn default() -> Self {
+        Self::new(5, 10)  // 5-step baseline, check every 10 steps
+    }
+}
+
 /// Collects spectral profiles across layers and heads during inference.
 ///
 /// Enabled via `PESTI_SPECTRAL_PROFILE=1` environment variable.
@@ -541,6 +677,8 @@ pub struct SpectralProfilerCollector {
     current_layer_idx: usize,
     /// Per-head health trackers for online monitoring (decode-time)
     head_trackers: Vec<Vec<HeadHealthTracker>>,  // [layer][head]
+    /// Spectral drift detector for long-generation monitoring
+    drift_detector: SpectralDriftDetector,
 }
 
 impl SpectralProfilerCollector {
@@ -577,7 +715,25 @@ impl SpectralProfilerCollector {
             enabled,
             current_layer_idx: 0,
             head_trackers: vec![vec![HeadHealthTracker::default(); num_heads]; num_layers],
+            drift_detector: SpectralDriftDetector::new(5, 10),
         }
+
+        // Initialize drift detector structure
+        let mut collector = Self {
+            profiler: SpectralProfiler::new(),
+            run_id,
+            model,
+            seq_len,
+            num_layers,
+            num_heads,
+            spectra: Vec::with_capacity(num_layers * num_heads),
+            enabled,
+            current_layer_idx: 0,
+            head_trackers: vec![vec![HeadHealthTracker::default(); num_heads]; num_layers],
+            drift_detector: SpectralDriftDetector::new(5, 10),
+        };
+        collector.drift_detector.init_structure(num_layers, num_heads);
+        collector
     }
 
     /// Check if this collector is enabled.
@@ -712,6 +868,34 @@ impl SpectralProfilerCollector {
         self.head_trackers.iter().map(|l| l.iter().collect()).collect()
     }
 
+    /// Update spectral drift detection with current effective ranks from all heads.
+    /// Call this periodically during generation (e.g., every 10 tokens).
+    ///
+    /// `ranks` should be shaped [num_layers][num_heads] with current effective ranks.
+    /// Returns true if significant drift was detected.
+    pub fn update_drift(&mut self, ranks: &[[[f64]]]) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        // Build 3D array from head trackers
+        let current_ranks: Vec<Vec<f64>> = self
+            .head_trackers
+            .iter()
+            .map(|layer| layer.iter().map(|t| t.ema_effective_rank).collect())
+            .collect();
+        self.drift_detector.update(&[&current_ranks[..]])
+    }
+
+    /// Get the drift detector for direct access.
+    pub fn drift_detector(&self) -> &SpectralDriftDetector {
+        &self.drift_detector
+    }
+
+    /// Reset drift baseline (use after topic change or new prompt).
+    pub fn reset_drift_baseline(&mut self) {
+        self.drift_detector.reset_baseline();
+    }
+
     /// Find heads that are collapsing or dead.
     pub fn unhealthy_heads(&self) -> Vec<(usize, usize, &'static str)> {
         let mut result = Vec::new();
@@ -765,6 +949,67 @@ impl SpectralProfilerCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_drift_detector_no_drift() {
+        let mut detector = SpectralDriftDetector::new(2, 5);
+        detector.init_structure(1, 2);  // 1 layer, 2 heads
+
+        // Simulate stable generation (same ranks every step)
+        for _ in 0..10 {
+            let drifted = detector.update(&[[[5.0, 3.0]]]);
+            assert!(!drifted);
+        }
+        assert!(!detector.has_drift());
+    }
+
+    #[test]
+    fn test_drift_detector_detects_collapse() {
+        let mut detector = SpectralDriftDetector::new(2, 5);
+        detector.init_structure(1, 2);  // 1 layer, 2 heads
+
+        // Establish baseline with healthy ranks
+        for _ in 0..5 {
+            detector.update(&[[[8.0, 6.0]]]);
+        }
+
+        // Simulate collapse (rank drops significantly)
+        let mut detected = false;
+        for _ in 0..10 {
+            if detector.update(&[[[2.0, 1.5]]]) {
+                detected = true;
+                break;
+            }
+        }
+
+        assert!(detected, "Should detect drift when rank collapses");
+        assert!(detector.has_drift());
+        assert!(!detector.drifted_heads.is_empty());
+    }
+
+    #[test]
+    fn test_drift_detector_reset_baseline() {
+        let mut detector = SpectralDriftDetector::new(2, 5);
+        detector.init_structure(1, 1);
+
+        // Establish baseline
+        for _ in 0..5 {
+            detector.update(&[[[8.0]]]);
+        }
+
+        // Shift to new stable state
+        for _ in 0..5 {
+            detector.update(&[[[4.0]]]);
+        }
+
+        // Reset baseline to current (lower) state
+        detector.reset_baseline();
+
+        // Should no longer detect drift at the new level
+        for _ in 0..10 {
+            assert!(!detector.update(&[[[4.0]]]));
+        }
+    }
 
     #[test]
     fn test_randomized_svd_small_matrix() {
