@@ -11,7 +11,6 @@ pesti-runner = { path = "../pesti-runner" }
 pesti-gguf = "0.2.4"
 pesti-structural-tokenizer = { path = "../pesti-structural-tokenizer" }
 pesti-structural = { path = "../pesti-structural" }
-universal-structure = { path = "../../../crabjar/crates/universal-structure" }
 tokenizers = { version = "0.22.0", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
