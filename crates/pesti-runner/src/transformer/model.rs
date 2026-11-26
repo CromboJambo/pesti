@@ -532,6 +532,83 @@ impl LlamaModel {
     }
 
     /// Build a model from already-loaded GGUF weights.
+    /// Apply quantized weight data to all Linear layers in the model.
+    /// This enables fused dequant+GEMM on CPU, reducing memory bandwidth by 4-8x.
+    fn apply_quantized_weights(&mut self, weights: &GgufWeights) {
+        use crate::tile_dequant::QuantDtype;
+
+        let dtype_from_gguf = |name: &str| -> Option<QuantDtype> {
+            let dtype_str = weights.tensor_dtype(name)?;
+            match dtype_str.to_uppercase().as_str() {
+                s if s.contains("Q4_K") || s.contains("Q4K") => Some(QuantDtype::Q4_K),
+                s if s.contains("Q8_0") || s.contains("Q80") => Some(QuantDtype::Q8_0),
+                s if s.contains("Q5_K") || s.contains("Q5K") => Some(QuantDtype::Q5_K),
+                s if s.contains("Q6_K") || s.contains("Q6K") => Some(QuantDtype::Q6_K),
+                _ => None,
+            }
+        };
+
+        let apply_to_linear = |linear: &mut Linear, tensor_name: &str| {
+            if let (Some(raw_bytes), Some(dtype)) = (
+                weights.raw_tensors.get(tensor_name),
+                dtype_from_gguf(tensor_name),
+            ) {
+                linear.set_quantized_data(raw_bytes.clone(), dtype);
+            }
+        };
+
+        // Apply to all transformer layers
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            let prefix = self.config.layer_prefix(layer_idx);
+            
+            // Attention weights
+            apply_to_linear(&mut layer.attention.wq, &format!("{prefix}attn_q.weight"));
+            apply_to_linear(&mut layer.attention.wk, &format!("{prefix}attn_k.weight"));
+            apply_to_linear(&mut layer.attention.wv, &format!("{prefix}attn_v.weight"));
+            apply_to_linear(&mut layer.attention.wo, &format!("{prefix}attn_output.weight"));
+            
+            // Also try alternative naming conventions
+            for name in [
+                format!("{prefix}attention.wq.weight"),
+                format!("{prefix}q_proj.weight"),
+            ] {
+                if let Some(raw) = weights.raw_tensors.get(&name) {
+                    if let Some(dtype) = dtype_from_gguf(&name) {
+                        layer.attention.wq.set_quantized_data(raw.clone(), dtype);
+                        break;
+                    }
+                }
+            }
+
+            // FFN weights
+            apply_to_linear(&mut layer.feed_forward.w1, &format!("{prefix}ffn_gate.weight"));
+            apply_to_linear(&mut layer.feed_forward.w2, &format!("{prefix}ffn_down.weight"));
+            apply_to_linear(&mut layer.feed_forward.w3, &format!("{prefix}ffn_up.weight"));
+        }
+
+        // Apply to embedding and output if they're Linear layers
+        if let Some(ref mut emb) = self.token_embeddings {
+            let emb_name = self.config.embedding_name();
+            apply_to_linear(emb, emb_name);
+        }
+        if let Some(ref mut out) = self.output {
+            let out_name = self.config.output_name();
+            apply_to_linear(out, out_name);
+        }
+
+        // Log how many layers got quantized
+        let quant_count = self.layers.iter()
+            .filter(|l| l.attention.wq.is_quantized())
+            .count();
+        if quant_count > 0 {
+            tracing::info!(
+                "Quantized GEMM enabled for {}/{} layers",
+                quant_count,
+                self.layers.len()
+            );
+        }
+    }
+
     pub fn from_gguf_weights(weights: GgufWeights) -> Result<Self> {
         let header = &weights.header;
         let config = LlamaConfig::from_gguf_header(header)?;
@@ -627,7 +704,7 @@ impl LlamaModel {
         #[cfg(feature = "cuda")]
         let output_weight_t_gpu = Self::build_output_weight_t_gpu(&output, &config, vocab_size);
 
-        Ok(Self {
+        let mut model = Self {
             config,
             token_embeddings,
             output,
@@ -649,7 +726,13 @@ impl LlamaModel {
             #[cfg(feature = "cuda")]
             output_weight_t_gpu,
             weight_store: None,
-        })
+        };
+
+        // Enable quantized GEMM on CPU for layers with raw quantized weights.
+        // This reduces memory bandwidth by 4-8x vs f32 for Q4_K/Q8_0 models.
+        model.apply_quantized_weights(&weights);
+
+        Ok(model)
     }
 
     /// Run attention spectral diagnostics on this model.
