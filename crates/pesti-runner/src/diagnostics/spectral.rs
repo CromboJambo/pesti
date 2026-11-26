@@ -868,21 +868,21 @@ impl SpectralProfilerCollector {
         self.head_trackers.iter().map(|l| l.iter().collect()).collect()
     }
 
-    /// Update spectral drift detection with current effective ranks from all heads.
+    /// Update spectral drift detection using current head tracker state.
     /// Call this periodically during generation (e.g., every 10 tokens).
     ///
-    /// `ranks` should be shaped [num_layers][num_heads] with current effective ranks.
-    /// Returns true if significant drift was detected.
-    pub fn update_drift(&mut self, ranks: &[[[f64]]]) -> bool {
+    /// Returns true if significant drift was detected since baseline.
+    pub fn update_drift(&mut self) -> bool {
         if !self.enabled {
             return false;
         }
-        // Build 3D array from head trackers
+        // Build [layer][head] array from head trackers
         let current_ranks: Vec<Vec<f64>> = self
             .head_trackers
             .iter()
             .map(|layer| layer.iter().map(|t| t.ema_effective_rank).collect())
             .collect();
+        // Wrap in batch dimension for the detector's API
         self.drift_detector.update(&[&current_ranks[..]])
     }
 
