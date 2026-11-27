@@ -550,6 +550,8 @@ pub struct SpectralDriftDetector {
     steps_since_check: usize,
     /// Drift check interval (steps)
     check_interval: usize,
+    /// Number of updates accumulated for baseline (for moving average)
+    baseline_updates: usize,
     /// Maximum relative drift before alerting
     drift_threshold: f64,
     /// Last computed drift score (0 = no drift, 1 = maximum)
@@ -568,6 +570,7 @@ impl SpectralDriftDetector {
             baseline_ranks: Vec::new(),
             current_ranks: Vec::new(),
             baseline_window,
+            baseline_updates: 0,
             steps_since_check: 0,
             check_interval,
             drift_threshold: 0.5,  // Alert when rank changes by >50%
@@ -595,13 +598,32 @@ impl SpectralDriftDetector {
             }
         }
 
-        // Build baseline from first N steps (average of current ranks)
-        if self.baseline_ranks.iter().all(|l| l.iter().all(|&r| r == 0.0)) {
+        // Accumulate baseline from RAW INPUT values over baseline_window steps.
+        // Using raw inputs (not EMA-smoothed current_ranks) ensures the baseline
+        // reflects actual observations without lag. Once established, frozen.
+        self.baseline_updates += 1;
+        if self.baseline_updates <= self.baseline_window {
+            let n = self.baseline_updates as f64;
             for layer in 0..self.current_ranks.len() {
                 for head in 0..self.current_ranks[layer].len() {
-                    self.baseline_ranks[layer][head] = self.current_ranks[layer][head];
+                    if let Some(rank) = current_ranks[layer].get(head).copied() {
+                        if self.baseline_ranks[layer][head] == 0.0 && rank > 0.0 {
+                            // First observation
+                            self.baseline_ranks[layer][head] = rank;
+                        } else if n > 1.0 {
+                            // Running average of raw inputs
+                            let old_avg = self.baseline_ranks[layer][head];
+                            self.baseline_ranks[layer][head] =
+                                old_avg + (rank - old_avg) / n;
+                        }
+                    }
                 }
             }
+        }
+
+        // Don't check drift until we've accumulated enough baseline data
+        if self.baseline_updates < self.baseline_window {
+            return false;
         }
 
         // Check drift at intervals
