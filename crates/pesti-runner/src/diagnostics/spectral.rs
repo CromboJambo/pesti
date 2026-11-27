@@ -460,6 +460,8 @@ impl Default for SpectralProfiler {
 pub struct HeadHealthTracker {
     /// Exponential moving average of effective rank
     pub ema_effective_rank: f64,
+    /// Exponential moving average of degeneracy score
+    pub ema_degeneracy: f64,
     /// Standard deviation of recent effective ranks
     pub rank_stddev: f64,
     /// Count of consecutive steps where degeneracy > threshold
@@ -475,6 +477,7 @@ impl HeadHealthTracker {
     pub fn new(alpha: f64) -> Self {
         Self {
             ema_effective_rank: 0.0,
+            ema_degeneracy: 0.0,
             rank_stddev: 0.0,
             consecutive_degenerate: 0,
             update_count: 0,
@@ -487,12 +490,15 @@ impl HeadHealthTracker {
         self.update_count += 1;
         if self.update_count == 1 {
             self.ema_effective_rank = effective_rank;
+            self.ema_degeneracy = degeneracy;
             self.rank_stddev = 0.0;
         } else {
-            // EMA update
+            // EMA update for rank and degeneracy
             let prev_ema = self.ema_effective_rank;
             self.ema_effective_rank =
                 self.alpha * self.ema_effective_rank + (1.0 - self.alpha) * effective_rank;
+            self.ema_degeneracy =
+                self.alpha * self.ema_degeneracy + (1.0 - self.alpha) * degeneracy;
             // Update stddev approximation
             let diff = (effective_rank - prev_ema).abs();
             self.rank_stddev = self.alpha * self.rank_stddev + (1.0 - self.alpha) * diff;
@@ -937,6 +943,239 @@ impl SpectralProfilerCollector {
     }
 }
 
+
+// ============================================================================
+// Phase 3: Adaptive Response
+// ============================================================================
+
+/// Response actions when attention degeneracy is detected.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DegeneracyResponse {
+    /// No action needed — continue normally.
+    None,
+    /// Log the event but don't change behavior (default).
+    LogOnly {
+        layer: usize,
+        head: usize,
+        degeneracy: f64,
+        message: String,
+    },
+    /// Increase sampling temperature to encourage exploration when attention
+    /// is collapsing (model too confident / repetitive).
+    AdjustTemperature {
+        delta: f32,
+        reason: String,
+    },
+    /// Suggest truncating old context when long-context drift is detected.
+    SuggestTruncate {
+        keep_last_n: usize,
+        reason: String,
+    },
+}
+
+/// Configuration for the adaptive response controller.
+#[derive(Debug, Clone)]
+pub struct AdaptiveResponseConfig {
+    /// Fraction of degenerate heads that triggers a warning (default 0.1).
+    pub warning_threshold: f64,
+    /// Fraction of degenerate heads that triggers critical action (default 0.3).
+    pub critical_threshold: f64,
+    /// Maximum temperature increase to apply (default 0.3).
+    pub max_temperature_delta: f32,
+    /// Base temperature delta per 10% of degenerate heads above warning (default 0.05).
+    pub temperature_delta_per_percent: f32,
+    /// Minimum context length before suggesting truncation (default 512).
+    pub min_context_for_truncation: usize,
+    /// Fraction of context to keep when suggesting truncation (default 0.75).
+    pub truncation_keep_fraction: f64,
+}
+
+impl Default for AdaptiveResponseConfig {
+    fn default() -> Self {
+        Self {
+            warning_threshold: 0.1,
+            critical_threshold: 0.3,
+            max_temperature_delta: 0.3,
+            temperature_delta_per_percent: 0.05,
+            min_context_for_truncation: 512,
+            truncation_keep_fraction: 0.75,
+        }
+    }
+}
+
+/// Controls adaptive behavior in response to attention degeneracy.
+///
+/// This is the Phase 3 component that turns detection into action. It queries
+/// the spectral profiler's health data and produces responses that can be
+/// applied to the generation loop (temperature adjustment) or logged for
+/// post-hoc analysis (truncation suggestions).
+///
+/// Design principles:
+/// - Default is conservative: LogOnly unless explicitly configured otherwise
+/// - Temperature adjustments are bounded to avoid destabilizing generation
+/// - Truncation is a suggestion, not automatic — the caller decides
+pub struct AdaptiveResponseController {
+    config: AdaptiveResponseConfig,
+    /// Track how many consecutive steps we've been in warning/critical state
+    consecutive_warnings: usize,
+    consecutive_criticals: usize,
+    /// Log of all responses for post-hoc analysis
+    response_log: Vec<(usize, DegeneracyResponse)>,  // (step, response)
+}
+
+impl AdaptiveResponseController {
+    pub fn new(config: AdaptiveResponseConfig) -> Self {
+        Self {
+            config,
+            consecutive_warnings: 0,
+            consecutive_criticals: 0,
+            response_log: Vec::new(),
+        }
+    }
+
+    /// Evaluate current spectral health and produce a response.
+    ///
+    /// `degenerate_fraction` — fraction of heads currently degenerate (score ≥ 0.7)
+    /// `suspect_fraction` — fraction of heads currently suspect (0.3 ≤ score < 0.7)
+    /// `context_length` — current sequence length (for truncation decisions)
+    /// `step` — current generation step (for logging)
+    pub fn evaluate(
+        &mut self,
+        degenerate_fraction: f64,
+        suspect_fraction: f64,
+        context_length: usize,
+        step: usize,
+    ) -> DegeneracyResponse {
+        // Critical: many heads degenerate
+        if degenerate_fraction >= self.config.critical_threshold {
+            self.consecutive_criticals += 1;
+            self.consecutive_warnings = 0;
+
+            // If context is long enough and drift is detected, suggest truncation
+            if context_length >= self.config.min_context_for_truncation
+                && self.consecutive_criticals >= 3
+            {
+                let keep_n = ((context_length as f64 * self.config.truncation_keep_fraction)
+                    as usize)
+                    .max(128);
+                let response = DegeneracyResponse::SuggestTruncate {
+                    keep_last_n: keep_n,
+                    reason: format!(
+                        "{:.0}% of heads degenerate for {} consecutive steps at context length {}",
+                        degenerate_fraction * 100.0,
+                        self.consecutive_criticals,
+                        context_length
+                    ),
+                };
+                self.response_log.push((step, response.clone()));
+                return response;
+            }
+
+            // Otherwise boost temperature to encourage exploration
+            let excess = degenerate_fraction - self.config.critical_threshold;
+            let delta = (self.config.max_temperature_delta).min(
+                (excess * 10.0) as f32 * self.config.temperature_delta_per_percent,
+            );
+            if delta > 0.01 {
+                let response = DegeneracyResponse::AdjustTemperature {
+                    delta: delta.max(self.config.temperature_delta_per_percent),
+                    reason: format!(
+                        "{:.0}% of heads degenerate (critical threshold {:.0}%)",
+                        degenerate_fraction * 100.0,
+                        self.config.critical_threshold * 100.0
+                    ),
+                };
+                self.response_log.push((step, response.clone()));
+                return response;
+            }
+        } else if degenerate_fraction >= self.config.warning_threshold
+            || suspect_fraction >= 0.3
+        {
+            // Warning: some heads degenerate or many suspect
+            self.consecutive_warnings += 1;
+            self.consecutive_criticals = 0;
+
+            if self.consecutive_warnings >= 5 {
+                let response = DegeneracyResponse::LogOnly {
+                    layer: 0,
+                    head: 0,
+                    degeneracy: degenerate_fraction,
+                    message: format!(
+                        "Warning: {:.0}% heads degenerate, {:.0}% suspect for {} consecutive steps",
+                        degenerate_fraction * 100.0,
+                        suspect_fraction * 100.0,
+                        self.consecutive_warnings
+                    ),
+                };
+                self.response_log.push((step, response.clone()));
+                return response;
+            }
+        } else {
+            // Healthy — reset counters
+            self.consecutive_warnings = 0;
+            self.consecutive_criticals = 0;
+        }
+
+        DegeneracyResponse::None
+    }
+
+    /// Get the full response log for post-hoc analysis.
+    pub fn response_log(&self) -> &[(usize, DegeneracyResponse)] {
+        &self.response_log
+    }
+
+    /// Reset the controller state (e.g., between generations).
+    pub fn reset(&mut self) {
+        self.consecutive_warnings = 0;
+        self.consecutive_criticals = 0;
+        self.response_log.clear();
+    }
+}
+
+impl Default for AdaptiveResponseController {
+    fn default() -> Self {
+        Self::new(AdaptiveResponseConfig::default())
+    }
+}
+
+// Extension methods on SpectralProfilerCollector for Phase 3 integration
+
+impl SpectralProfilerCollector {
+    /// Get current health fractions from head trackers.
+    /// Returns (degenerate_fraction, suspect_fraction) based on EMA health scores.
+    pub fn health_fractions(&self) -> (f64, f64) {
+        let total = self.num_layers * self.num_heads;
+        if total == 0 {
+            return (0.0, 0.0);
+        }
+        let mut degenerate = 0;
+        let mut suspect = 0;
+        for layer in &self.head_trackers {
+            for head in layer {
+                // Use the EMA degeneracy score from the tracker
+                if head.ema_degeneracy >= 0.7 {
+                    degenerate += 1;
+                } else if head.ema_degeneracy >= 0.3 {
+                    suspect += 1;
+                }
+            }
+        }
+        (degenerate as f64 / total as f64, suspect as f64 / total as f64)
+    }
+
+    /// Evaluate adaptive response using current health state.
+    pub fn evaluate_response(
+        &self,
+        controller: &mut AdaptiveResponseController,
+        context_length: usize,
+        step: usize,
+    ) -> DegeneracyResponse {
+        let (degenerate_frac, suspect_frac) = self.health_fractions();
+        controller.evaluate(degenerate_frac, suspect_frac, context_length, step)
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,7 +1187,7 @@ mod tests {
 
         // Simulate stable generation (same ranks every step)
         for _ in 0..10 {
-            let drifted = detector.update(&[[[5.0, 3.0]]]);
+            let drifted = detector.update(&vec![vec![5.0, 3.0]]);
             assert!(!drifted);
         }
         assert!(!detector.has_drift());
@@ -961,13 +1200,13 @@ mod tests {
 
         // Establish baseline with healthy ranks
         for _ in 0..5 {
-            detector.update(&[[[8.0, 6.0]]]);
+            detector.update(&vec![vec![8.0, 6.0]]);
         }
 
         // Simulate collapse (rank drops significantly)
         let mut detected = false;
         for _ in 0..10 {
-            if detector.update(&[[[2.0, 1.5]]]) {
+            if detector.update(&vec![vec![2.0, 1.5]]) {
                 detected = true;
                 break;
             }
@@ -985,12 +1224,12 @@ mod tests {
 
         // Establish baseline
         for _ in 0..5 {
-            detector.update(&[[[8.0]]]);
+            detector.update(&vec![vec![8.0]]);
         }
 
         // Shift to new stable state
         for _ in 0..5 {
-            detector.update(&[[[4.0]]]);
+            detector.update(&vec![vec![4.0]]);
         }
 
         // Reset baseline to current (lower) state
@@ -998,7 +1237,7 @@ mod tests {
 
         // Should no longer detect drift at the new level
         for _ in 0..10 {
-            assert!(!detector.update(&[[[4.0]]]));
+            assert!(!detector.update(&vec![vec![4.0]]));
         }
     }
 
