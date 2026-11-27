@@ -2855,6 +2855,145 @@ impl LlamaModel {
         Ok(generated)
     }
 
+    /// Generate tokens with adaptive response to attention degeneracy.
+    ///
+    /// Extends `generate` with Phase 3 spectral diagnostics: periodically evaluates
+    /// attention health during generation and adjusts sampling temperature or suggests
+    /// context truncation when degeneration is detected.
+    ///
+    /// - `collector` — shared spectral profiler collector (must be attached to model layers)
+    /// - `controller` — adaptive response controller with configured thresholds
+    /// - `eval_interval` — how many tokens between health evaluations (default 5)
+    ///
+    /// Returns `(generated_tokens, response_log)` where the log contains all adaptive
+    /// actions taken during generation.
+    pub fn generate_with_adaptive_response(
+        &mut self,
+        prompt: &[u32],
+        max_tokens: usize,
+        sampling_config: &crate::transformer::SamplingConfig,
+        rng: &mut rand::rngs::StdRng,
+        stop_tokens: &[u32],
+        collector: &std::sync::Arc<std::sync::Mutex<crate::diagnostics::spectral::SpectralProfilerCollector>>,
+        controller: &mut crate::diagnostics::spectral::AdaptiveResponseController,
+        eval_interval: usize,
+    ) -> Result<(Vec<u32>, Vec<(usize, crate::diagnostics::spectral::DegeneracyResponse)>)> {
+        use crate::diagnostics::spectral::DegeneracyResponse;
+
+        let mut generated = Vec::new();
+
+        // Reset KV caches before starting a new generation sequence.
+        self.reset_cpu_kv_caches();
+        #[cfg(feature = "cuda")]
+        if let Some((ref mut key_caches, ref mut value_caches)) = self.kv_caches {
+            for cache in key_caches.iter_mut() {
+                cache.clear();
+            }
+            for cache in value_caches.iter_mut() {
+                cache.clear();
+            }
+        }
+
+        // Prefill
+        let mut logits: Vec<f32> = Vec::new();
+        let mut pos = 0;
+        for (i, &tok) in prompt.iter().enumerate() {
+            let hidden = self.embed(tok, i)?;
+            logits = if self.dispatch.is_some() {
+                self.forward_with_dispatch(&hidden, i)?
+            } else {
+                let hidden_out = self.forward_layers_with_cache(&hidden, i)?;
+                self.apply_output_head(&hidden_out)?
+            };
+            pos = i + 1;
+        }
+
+        if prompt.is_empty() {
+            return Ok((generated, Vec::new()));
+        }
+
+        // Local mutable sampling config for adaptive temperature adjustment
+        let mut current_config = sampling_config.clone();
+        let base_temperature = current_config.temperature;
+        let mut steps_since_eval = 0;
+
+        // Autoregressive decode with adaptive response
+        for _ in 0..max_tokens {
+            let next_token = if current_config.temperature == 0.0 {
+                Self::argmax_from_logits(&logits)
+            } else {
+                Self::sample_from_logits(&logits, &current_config, rng)
+            };
+
+            // Check for stop tokens
+            if stop_tokens.contains(&next_token) {
+                break;
+            }
+
+            generated.push(next_token);
+
+            // Run the sampled token through the model
+            let hidden = self.embed(next_token, pos)?;
+            logits = if self.dispatch.is_some() {
+                self.forward_with_dispatch(&hidden, pos)?
+            } else {
+                let hidden_out = self.forward_layers_with_cache(&hidden, pos)?;
+                self.apply_output_head(&hidden_out)?
+            };
+
+            // Periodic adaptive response evaluation
+            steps_since_eval += 1;
+            if steps_since_eval >= eval_interval {
+                steps_since_eval = 0;
+                let context_length = pos + generated.len();
+                let response = {
+                    let collector_guard = collector.lock().unwrap();
+                    controller.evaluate(
+                        collector_guard.health_fractions().0,
+                        collector_guard.health_fractions().1,
+                        context_length,
+                        pos,
+                    )
+                };
+
+                match response {
+                    DegeneracyResponse::AdjustTemperature { delta, .. } => {
+                        // Apply bounded temperature increase
+                        current_config.temperature = (base_temperature + delta).min(2.0);
+                    }
+                    DegeneracyResponse::SuggestTruncate { keep_last_n, reason } => {
+                        // Log the suggestion — actual truncation is handled by caller
+                        tracing::warn!(
+                            context_length,
+                            keep_last_n,
+                            reason = %reason,
+                            "Adaptive response: suggesting context truncation"
+                        );
+                    }
+                    DegeneracyResponse::LogOnly { message, .. } => {
+                        tracing::info!(message = %message, "Adaptive response: attention health warning");
+                    }
+                    DegeneracyResponse::None => {}
+                }
+
+                // Decay temperature back toward base over time (avoid permanent shift)
+                if current_config.temperature > base_temperature {
+                    current_config.temperature = base_temperature
+                        + (current_config.temperature - base_temperature) * 0.8;
+                }
+            }
+
+            pos += 1;
+
+            if pos >= self.config.max_seq_len {
+                break;
+            }
+        }
+
+        let response_log = controller.response_log().to_vec();
+        Ok((generated, response_log))
+    }
+
     /// CPU-only fallback for forward_with_dispatch.
     #[cfg(not(feature = "cuda"))]
     pub fn forward_with_dispatch(&mut self, hidden: &[f32], start_pos: usize) -> Result<Vec<f32>> {
